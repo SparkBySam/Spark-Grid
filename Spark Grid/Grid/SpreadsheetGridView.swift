@@ -9,27 +9,27 @@ struct SpreadsheetGridView: NSViewRepresentable {
   func makeNSView(context: Context) -> SpreadsheetGridNSView {
     let view = SpreadsheetGridNSView()
     view.viewModel = viewModel
-    context.coordinator.lastSignature = context.coordinator.signature(for: viewModel)
+    context.coordinator.lastSheetKey = context.coordinator.sheetKey(for: viewModel)
     return view
   }
 
   func updateNSView(_ nsView: SpreadsheetGridNSView, context: Context) {
     nsView.viewModel = viewModel
-    let signature = context.coordinator.signature(for: viewModel)
-    if signature != context.coordinator.lastSignature {
-      context.coordinator.lastSignature = signature
-      nsView.reloadContent()
+    let sheetKey = context.coordinator.sheetKey(for: viewModel)
+    if sheetKey != context.coordinator.lastSheetKey {
+      context.coordinator.lastSheetKey = sheetKey
+      nsView.reloadContent(resetScrollPosition: true)
     } else {
       nsView.syncDisplay()
     }
   }
 
   final class Coordinator {
-    var lastSignature = ""
+    var lastSheetKey = ""
 
-    func signature(for viewModel: SpreadsheetViewModel) -> String {
+    func sheetKey(for viewModel: SpreadsheetViewModel) -> String {
       let sheet = viewModel.activeSheet
-      return "\(sheet.id.uuidString)-\(sheet.cells.count)-\(sheet.maxPopulatedRow)-\(sheet.maxPopulatedColumn)-\(sheet.columnWidths.count)-\(sheet.rowHeights.count)-\(viewModel.selectionAnchor)-\(viewModel.selectionEnd)"
+      return "\(viewModel.workbook.activeSheetIndex)-\(sheet.id.uuidString)-\(sheet.effectiveRowCount)-\(sheet.effectiveColumnCount)"
     }
   }
 }

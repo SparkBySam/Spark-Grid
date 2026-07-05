@@ -14,6 +14,8 @@ struct Spark_GridApp: App {
     WindowGroup(id: "main") {
       SpreadsheetRootView(store: store)
         .onAppear {
+          appDelegate.documentStore = store
+          store.restartAutosave()
           appDelegate.onOpenFile = { url in
             Task { @MainActor in
               try? store.load(from: url)
@@ -30,6 +32,10 @@ struct Spark_GridApp: App {
     .commands {
       SpreadsheetCommands()
       SpreadsheetFileCommands(store: store)
+    }
+
+    Settings {
+      SettingsView()
     }
   }
 }

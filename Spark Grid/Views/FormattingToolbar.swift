@@ -3,10 +3,17 @@ import SwiftUI
 
 struct FormattingToolbar: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  @Bindable private var settings = AppSettings.shared
   let undoManager: UndoManager?
 
   @State private var textColor: Color = .primary
   @State private var fillColor: Color = .clear
+  @State private var fontSizeText = "12"
+
+  private var showLabels: Bool { settings.showToolbarLabels }
+  private var toolbarHeight: CGFloat { 58 }
+  private var dividerHeight: CGFloat { showLabels ? 36 : 30 }
+  private var iconAreaHeight: CGFloat { 24 }
 
   var body: some View {
     ScrollView(.horizontal, showsIndicators: false) {
@@ -14,11 +21,17 @@ struct FormattingToolbar: View {
         .fixedSize(horizontal: true, vertical: false)
     }
     .frame(maxWidth: .infinity)
-    .frame(height: 44)
+    .frame(height: toolbarHeight)
     .background(toolbarBackground)
     .overlay(alignment: .bottom) { Divider() }
-    .onChange(of: viewModel.selection) { _, _ in syncColorsFromSelection() }
-    .onAppear { syncColorsFromSelection() }
+    .onChange(of: viewModel.selection) { _, _ in
+      syncColorsFromSelection()
+      syncFontSizeFromSelection()
+    }
+    .onAppear {
+      syncColorsFromSelection()
+      syncFontSizeFromSelection()
+    }
   }
 
   private var toolbarContent: some View {
@@ -48,12 +61,12 @@ struct FormattingToolbar: View {
 
   private var historyGroup: some View {
     HStack(spacing: 4) {
-      ToolbarIconButton(systemName: "arrow.uturn.backward", tooltip: "Undo", active: false) {
+      ToolbarIconButton(systemName: "arrow.uturn.backward", title: "Undo", showLabel: showLabels, active: false) {
         undoManager?.undo()
       }
       .disabled(!(undoManager?.canUndo ?? false))
 
-      ToolbarIconButton(systemName: "arrow.uturn.forward", tooltip: "Redo", active: false) {
+      ToolbarIconButton(systemName: "arrow.uturn.forward", title: "Redo", showLabel: showLabels, active: false) {
         undoManager?.redo()
       }
       .disabled(!(undoManager?.canRedo ?? false))
@@ -64,7 +77,8 @@ struct FormattingToolbar: View {
     HStack(spacing: 4) {
       ToolbarIconButton(
         systemName: "dollarsign",
-        tooltip: "Currency",
+        title: "Currency",
+        showLabel: showLabels,
         active: viewModel.selectedFormat.numberFormat == .currency
       ) {
         viewModel.setNumberFormat(.currency)
@@ -72,21 +86,22 @@ struct FormattingToolbar: View {
 
       ToolbarIconButton(
         systemName: "percent",
-        tooltip: "Percent",
+        title: "Percent",
+        showLabel: showLabels,
         active: viewModel.selectedFormat.numberFormat == .percent
       ) {
         viewModel.setNumberFormat(.percent)
       }
 
-      ToolbarIconButton(systemName: "decrease.decimal", tooltip: "Decrease decimals", active: false) {
+      ToolbarDecimalButton(decrease: true, title: "Decimals", showLabel: showLabels) {
         viewModel.decreaseDecimalPlaces()
       }
 
-      ToolbarIconButton(systemName: "increase.decimal", tooltip: "Increase decimals", active: false) {
+      ToolbarDecimalButton(decrease: false, title: "Decimals", showLabel: showLabels) {
         viewModel.increaseDecimalPlaces()
       }
 
-      Menu {
+      ToolbarMenuButton(title: "Format", showLabel: showLabels, width: showLabels ? 44 : 32) {
         Button("General") { viewModel.setNumberFormat(.general) }
         Button("Number") { viewModel.setNumberFormat(.number) }
         Button("Currency") { viewModel.setNumberFormat(.currency) }
@@ -95,12 +110,7 @@ struct FormattingToolbar: View {
       } label: {
         Text("123")
           .font(.system(size: 13, weight: .medium, design: .monospaced))
-          .frame(width: 32, height: 32)
-          .contentShape(RoundedRectangle(cornerRadius: 4))
       }
-      .menuStyle(.button)
-      .buttonStyle(.plain)
-      .help("Number format")
     }
   }
 
@@ -115,14 +125,23 @@ struct FormattingToolbar: View {
       .frame(width: 130)
 
       HStack(spacing: 4) {
-        ToolbarIconButton(systemName: "minus", tooltip: "Smaller", active: false) {
+        ToolbarIconButton(systemName: "minus", title: "Smaller", showLabel: showLabels, active: false) {
           viewModel.adjustFontSize(by: -1)
+          syncFontSizeFromSelection()
         }
-        Text("\(Int(viewModel.selectedFormat.fontSize ?? CellFormatRenderer.defaultFontSize))")
+        TextField("", text: $fontSizeText)
           .font(.system(size: 12, design: .monospaced))
-          .frame(width: 24)
-        ToolbarIconButton(systemName: "plus", tooltip: "Larger", active: false) {
+          .multilineTextAlignment(.center)
+          .frame(width: 32)
+          .textFieldStyle(.plain)
+          .onSubmit(applyFontSizeFromField)
+          .onChange(of: fontSizeText) { _, newValue in
+            let filtered = newValue.filter(\.isNumber)
+            if filtered != newValue { fontSizeText = filtered }
+          }
+        ToolbarIconButton(systemName: "plus", title: "Larger", showLabel: showLabels, active: false) {
           viewModel.adjustFontSize(by: 1)
+          syncFontSizeFromSelection()
         }
       }
     }
@@ -130,19 +149,19 @@ struct FormattingToolbar: View {
 
   private var styleGroup: some View {
     HStack(spacing: 4) {
-      ToolbarIconButton(systemName: "bold", tooltip: "Bold", active: viewModel.selectedFormat.bold) {
+      ToolbarIconButton(systemName: "bold", title: "Bold", showLabel: showLabels, active: viewModel.selectedFormat.bold) {
         viewModel.toggleBold()
       }
 
-      ToolbarIconButton(systemName: "italic", tooltip: "Italic", active: viewModel.selectedFormat.italic) {
+      ToolbarIconButton(systemName: "italic", title: "Italic", showLabel: showLabels, active: viewModel.selectedFormat.italic) {
         viewModel.toggleItalic()
       }
 
-      ToolbarIconButton(systemName: "strikethrough", tooltip: "Strikethrough", active: viewModel.selectedFormat.strikethrough) {
+      ToolbarIconButton(systemName: "strikethrough", title: "Strike", showLabel: showLabels, active: viewModel.selectedFormat.strikethrough) {
         viewModel.toggleStrikethrough()
       }
 
-      ToolbarIconButton(systemName: "underline", tooltip: "Underline", active: viewModel.selectedFormat.underline) {
+      ToolbarIconButton(systemName: "underline", title: "Underline", showLabel: showLabels, active: viewModel.selectedFormat.underline) {
         viewModel.toggleUnderline()
       }
     }
@@ -151,7 +170,8 @@ struct FormattingToolbar: View {
   private var colorGroup: some View {
     HStack(spacing: 0) {
       ToolbarColorPicker(
-        tooltip: "Text color",
+        title: "Text",
+        showLabel: showLabels,
         label: {
           Text("A")
             .font(.system(size: 15, weight: .semibold))
@@ -166,7 +186,8 @@ struct FormattingToolbar: View {
         .padding(.horizontal, 6)
 
       ToolbarColorPicker(
-        tooltip: "Fill color",
+        title: "Fill",
+        showLabel: showLabels,
         label: {
           Image(systemName: "paintbrush.fill")
             .font(.system(size: 14))
@@ -181,7 +202,7 @@ struct FormattingToolbar: View {
 
   private var alignGroup: some View {
     HStack(spacing: 4) {
-      ToolbarMenuButton(tooltip: "Horizontal align", width: 32) {
+      ToolbarMenuButton(title: "Align", showLabel: showLabels, width: 32) {
         Button { viewModel.setHorizontalAlign(.left) } label: {
           Label("Align left", systemImage: "text.alignleft")
         }
@@ -193,9 +214,10 @@ struct FormattingToolbar: View {
         }
       } label: {
         Image(systemName: horizontalAlignIcon)
+          .font(.system(size: 13))
       }
 
-      ToolbarMenuButton(tooltip: "Vertical align", width: 32) {
+      ToolbarMenuButton(title: "Vertical", showLabel: showLabels, width: 32) {
         Button { viewModel.setVerticalAlign(.top) } label: {
           Label("Align top", systemImage: "arrow.up.to.line")
         }
@@ -207,16 +229,22 @@ struct FormattingToolbar: View {
         }
       } label: {
         Image(systemName: "arrow.up.and.down.text.horizontal")
+          .font(.system(size: 13))
       }
 
-      ToolbarIconButton(systemName: "text.word.spacing", tooltip: "Wrap text", active: viewModel.selectedFormat.wrapText) {
+      ToolbarIconButton(systemName: "text.word.spacing", title: "Wrap", showLabel: showLabels, active: viewModel.selectedFormat.wrapText) {
         viewModel.toggleWrapText()
       }
+
+      RotateToolbarMenu(
+        viewModel: viewModel,
+        iconHeight: iconAreaHeight
+      )
     }
   }
 
   private var toolbarDivider: some View {
-    Divider().frame(height: 24)
+    Divider().frame(height: dividerHeight)
   }
 
   private var fontFamilyBinding: Binding<String> {
@@ -247,31 +275,170 @@ struct FormattingToolbar: View {
       fillColor = .clear
     }
   }
+
+  private func syncFontSizeFromSelection() {
+    let size = Int(viewModel.selectedFormat.fontSize ?? CellFormatRenderer.defaultFontSize)
+    fontSizeText = "\(size)"
+  }
+
+  private func applyFontSizeFromField() {
+    guard let size = Double(fontSizeText) else {
+      syncFontSizeFromSelection()
+      return
+    }
+    viewModel.setFontSize(CGFloat(size))
+    syncFontSizeFromSelection()
+  }
 }
 
 // MARK: - Toolbar controls
 
+private struct RotateToolbarMenu: View {
+  @Bindable var viewModel: SpreadsheetViewModel
+  var iconHeight: CGFloat
+
+  private let labelHeight: CGFloat = 46
+
+  var body: some View {
+    ZStack {
+      VStack(spacing: 2) {
+        TiltTextToolbarIcon(active: viewModel.selectedFormat.textRotation != 0, embedded: true)
+          .frame(width: 32, height: iconHeight)
+        Text("Rotate")
+          .font(.system(size: 9))
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+          .foregroundStyle(Color(nsColor: .labelColor))
+      }
+      .frame(minWidth: 40)
+      .allowsHitTesting(false)
+
+      Menu {
+        Button("None") { viewModel.setTextRotation(0) }
+        Divider()
+        Button("Tilt up") { viewModel.setTextRotation(-45) }
+        Button("Tilt down") { viewModel.setTextRotation(45) }
+        Button("Stack vertically") { viewModel.setTextRotation(90) }
+        Button("Rotate up") { viewModel.setTextRotation(-90) }
+        Button("Rotate down") { viewModel.setTextRotation(90) }
+      } label: {
+        Color.clear
+          .frame(width: 44, height: labelHeight)
+          .contentShape(Rectangle())
+      }
+      .menuStyle(.borderlessButton)
+      .buttonStyle(.plain)
+    }
+    .frame(width: 44, height: labelHeight)
+    .help("Text rotation")
+  }
+}
+
+private struct TiltTextToolbarIcon: View {
+  var active: Bool
+  var embedded = false
+
+  var body: some View {
+    HStack(spacing: 1) {
+      tiltedDashWithArrows
+      Text("A")
+        .font(.system(size: 12, weight: .semibold))
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(backgroundColor, in: RoundedRectangle(cornerRadius: 4))
+    .contentShape(Rectangle())
+  }
+
+  private var backgroundColor: Color {
+    guard !embedded, active else { return .clear }
+    return Color.accentColor.opacity(0.22)
+  }
+
+  private var tiltedDashWithArrows: some View {
+    HStack(spacing: 0) {
+      Image(systemName: "arrowtriangle.left.fill")
+        .font(.system(size: 4.5))
+      Rectangle()
+        .frame(width: 7, height: 1.2)
+      Image(systemName: "arrowtriangle.right.fill")
+        .font(.system(size: 4.5))
+    }
+    .rotationEffect(.degrees(-50))
+    .offset(y: 1)
+  }
+}
+
+private struct ToolbarDecimalButton: View {
+  let decrease: Bool
+  let title: String
+  var showLabel = false
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      VStack(spacing: 2) {
+        HStack(spacing: 1) {
+          if decrease {
+            Image(systemName: "chevron.left")
+              .font(.system(size: 7, weight: .bold))
+          }
+          Text(".0")
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+          if !decrease {
+            Image(systemName: "chevron.right")
+              .font(.system(size: 7, weight: .bold))
+          }
+        }
+        .frame(width: 32, height: showLabel ? 24 : 32)
+
+        if showLabel {
+          Text(title)
+            .font(.system(size: 9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        }
+      }
+      .frame(minWidth: 40)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(decrease ? "Decrease decimals" : "Increase decimals")
+  }
+}
+
 private struct ToolbarIconButton: View {
   let systemName: String
-  let tooltip: String
+  let title: String
+  var showLabel = false
   var active = false
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      Image(systemName: systemName)
-        .font(.system(size: 13, weight: active ? .semibold : .regular))
-        .frame(width: 32, height: 32)
-        .background(active ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(RoundedRectangle(cornerRadius: 4))
+      VStack(spacing: 2) {
+        Image(systemName: systemName)
+          .font(.system(size: 13, weight: active ? .semibold : .regular))
+          .frame(width: 32, height: showLabel ? 24 : 32)
+          .background(active ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+
+        if showLabel {
+          Text(title)
+            .font(.system(size: 9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        }
+      }
+      .frame(minWidth: 40)
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .help(tooltip)
+    .help(title)
   }
 }
 
 private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
-  let tooltip: String
+  let title: String
+  var showLabel = false
   var width: CGFloat = 32
   @ViewBuilder var menuContent: () -> MenuContent
   @ViewBuilder var label: () -> Label
@@ -280,36 +447,58 @@ private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
     Menu {
       menuContent()
     } label: {
-      label()
-        .frame(width: width, height: 32)
-        .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(RoundedRectangle(cornerRadius: 4))
+      VStack(spacing: 2) {
+        label()
+          .frame(width: width, height: showLabel ? 24 : 32)
+
+        if showLabel {
+          Text(title)
+            .font(.system(size: 9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(width: max(width, 40))
+        }
+      }
+      .frame(minWidth: 40)
+      .contentShape(Rectangle())
     }
-    .menuStyle(.button)
+    .menuStyle(.borderlessButton)
     .buttonStyle(.plain)
-    .help(tooltip)
+    .fixedSize(horizontal: true, vertical: false)
+    .help(title)
   }
 }
 
 private struct ToolbarColorPicker<Label: View>: View {
-  let tooltip: String
+  let title: String
+  var showLabel = false
   @ViewBuilder var label: () -> Label
   @Binding var selection: Color
   let onChange: (Color) -> Void
 
   var body: some View {
-    ColorPicker("", selection: $selection, supportsOpacity: false)
-      .labelsHidden()
-      .frame(width: 32, height: 32)
-      .overlay {
-        label()
+  VStack(spacing: 2) {
+      ColorPicker("", selection: $selection, supportsOpacity: false)
+        .labelsHidden()
+        .frame(width: 32, height: showLabel ? 24 : 32)
+        .overlay {
+          label()
+            .allowsHitTesting(false)
+        }
+        .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(RoundedRectangle(cornerRadius: 4))
+        .onChange(of: selection) { _, color in
+          onChange(color)
+        }
+
+      if showLabel {
+        Text(title)
+          .font(.system(size: 9))
+          .lineLimit(1)
           .allowsHitTesting(false)
       }
-      .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
-      .contentShape(RoundedRectangle(cornerRadius: 4))
-      .help(tooltip)
-      .onChange(of: selection) { _, color in
-        onChange(color)
-      }
+    }
+    .frame(minWidth: 40)
+    .help(title)
   }
 }

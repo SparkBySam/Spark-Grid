@@ -20,6 +20,14 @@ final class SpreadsheetGridNSView: NSView {
   private let editor = NSTextField()
   private var isEditorActive = false
   private var isDraggingSelection = false
+  private let resizeHandleThickness: CGFloat = 6
+
+  private enum ResizeTarget {
+    case column(Int, startWidth: CGFloat, startX: CGFloat)
+    case row(Int, startHeight: CGFloat, startY: CGFloat)
+  }
+
+  private var activeResize: ResizeTarget?
 
   private enum HeaderHit {
     case corner
@@ -70,10 +78,24 @@ final class SpreadsheetGridNSView: NSView {
     configureEditor()
   }
 
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    for area in trackingAreas {
+      removeTrackingArea(area)
+    }
+    let options: NSTrackingArea.Options = [.activeInKeyWindow, .mouseMoved, .inVisibleRect, .enabledDuringMouseDrag]
+    addTrackingArea(NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil))
+  }
+
+  override func resetCursorRects() {
+    super.resetCursorRects()
+    updateCursorRects()
+  }
+
   @available(*, unavailable)
   required init?(coder: NSCoder) { nil }
 
-  func resetScroll() {
+  func resetScrollPosition() {
     scrollOrigin = .zero
     needsDisplay = true
   }
@@ -112,30 +134,38 @@ final class SpreadsheetGridNSView: NSView {
     return y
   }
 
+  private func rowCount() -> Int {
+    viewModel?.activeSheet.effectiveRowCount ?? Workbook.defaultRowCount
+  }
+
+  private func columnCount() -> Int {
+    viewModel?.activeSheet.effectiveColumnCount ?? Workbook.defaultColumnCount
+  }
+
   private func columnAtContent(x: CGFloat) -> Int {
     var remaining = x - Self.headerSize + scrollOrigin.x
     guard remaining >= 0 else { return 0 }
     var col = 0
-    while col < Workbook.defaultColumnCount {
+    while col < columnCount() {
       let width = columnWidth(at: col)
       if remaining < width { return col }
       remaining -= width
       col += 1
     }
-    return Workbook.defaultColumnCount - 1
+    return columnCount() - 1
   }
 
   private func rowAtContent(y: CGFloat) -> Int {
     var remaining = y - Self.headerSize + scrollOrigin.y
     guard remaining >= 0 else { return 0 }
     var row = 0
-    while row < Workbook.defaultRowCount {
+    while row < rowCount() {
       let height = rowHeight(at: row)
       if remaining < height { return row }
       remaining -= height
       row += 1
     }
-    return Workbook.defaultRowCount - 1
+    return rowCount() - 1
   }
 
   private func rectForCell(row: Int, col: Int) -> NSRect {
@@ -157,22 +187,22 @@ final class SpreadsheetGridNSView: NSView {
   private func visibleColumnRange() -> ClosedRange<Int> {
     let content = contentRect
     let first = max(0, columnAtContent(x: content.minX))
-    let last = min(Workbook.defaultColumnCount - 1, columnAtContent(x: content.maxX))
+    let last = min(columnCount() - 1, columnAtContent(x: content.maxX))
     return first...last
   }
 
   private func visibleRowRange() -> ClosedRange<Int> {
     let content = contentRect
     let first = max(0, rowAtContent(y: content.minY))
-    let last = min(Workbook.defaultRowCount - 1, rowAtContent(y: content.maxY))
+    let last = min(rowCount() - 1, rowAtContent(y: content.maxY))
     return first...last
   }
 
   private func totalContentSize() -> NSSize {
     var width = Self.headerSize
-    for col in 0..<Workbook.defaultColumnCount { width += columnWidth(at: col) }
+    for col in 0..<columnCount() { width += columnWidth(at: col) }
     var height = Self.headerSize
-    for row in 0..<Workbook.defaultRowCount { height += rowHeight(at: row) }
+    for row in 0..<rowCount() { height += rowHeight(at: row) }
     return NSSize(width: width, height: height)
   }
 
@@ -186,25 +216,17 @@ final class SpreadsheetGridNSView: NSView {
 
   private func ensureSelectionVisible() {
     guard let viewModel else { return }
-    let range = viewModel.selectionRange.normalized
-    let topLeft = rectForCell(row: range.minRow, col: range.minCol)
-    let bottomRight = rectForCell(row: range.maxRow, col: range.maxCol)
-    let selectionRect = NSRect(
-      x: topLeft.minX,
-      y: topLeft.minY,
-      width: bottomRight.maxX - topLeft.minX,
-      height: bottomRight.maxY - topLeft.minY
-    )
+    let anchor = rectForCell(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
     let visible = contentRect
-    if selectionRect.minX < visible.minX {
-      scrollOrigin.x -= visible.minX - selectionRect.minX
-    } else if selectionRect.maxX > visible.maxX {
-      scrollOrigin.x += selectionRect.maxX - visible.maxX
+    if anchor.minX < visible.minX {
+      scrollOrigin.x -= visible.minX - anchor.minX
+    } else if anchor.maxX > visible.maxX {
+      scrollOrigin.x += anchor.maxX - visible.maxX
     }
-    if selectionRect.minY < visible.minY {
-      scrollOrigin.y -= visible.minY - selectionRect.minY
-    } else if selectionRect.maxY > visible.maxY {
-      scrollOrigin.y += selectionRect.maxY - visible.maxY
+    if anchor.minY < visible.minY {
+      scrollOrigin.y -= visible.minY - anchor.minY
+    } else if anchor.maxY > visible.maxY {
+      scrollOrigin.y += anchor.maxY - visible.maxY
     }
     clampScrollOrigin()
   }
@@ -226,6 +248,129 @@ final class SpreadsheetGridNSView: NSView {
       row: rowAtContent(y: point.y),
       col: columnAtContent(x: point.x)
     )
+  }
+
+  private func columnHeaderRect(for col: Int) -> NSRect {
+    NSRect(
+      x: xForColumn(col) - scrollOrigin.x,
+      y: 0,
+      width: columnWidth(at: col),
+      height: Self.headerSize
+    )
+  }
+
+  private func rowHeaderRect(for row: Int) -> NSRect {
+    NSRect(
+      x: 0,
+      y: yForRow(row) - scrollOrigin.y,
+      width: Self.headerSize,
+      height: rowHeight(at: row)
+    )
+  }
+
+  private func resizeTarget(at point: NSPoint) -> ResizeTarget? {
+    if point.y < Self.headerSize, point.x >= Self.headerSize {
+      let col = columnAtContent(x: point.x)
+      let rect = columnHeaderRect(for: col)
+
+      if col > 0 {
+        let leftBorder = rect.minX
+        if abs(point.x - leftBorder) <= resizeHandleThickness {
+          let previous = col - 1
+          return .column(previous, startWidth: columnWidth(at: previous), startX: point.x)
+        }
+      }
+
+      if abs(point.x - rect.maxX) <= resizeHandleThickness {
+        return .column(col, startWidth: rect.width, startX: point.x)
+      }
+    }
+
+    if point.x < Self.headerSize, point.y >= Self.headerSize {
+      let row = rowAtContent(y: point.y)
+      let rect = rowHeaderRect(for: row)
+
+      if row > 0 {
+        let topBorder = rect.minY
+        if abs(point.y - topBorder) <= resizeHandleThickness {
+          let previous = row - 1
+          return .row(previous, startHeight: rowHeight(at: previous), startY: point.y)
+        }
+      }
+
+      if abs(point.y - rect.maxY) <= resizeHandleThickness {
+        return .row(row, startHeight: rect.height, startY: point.y)
+      }
+    }
+
+    return nil
+  }
+
+  private func updateCursor(for point: NSPoint) {
+    guard activeResize == nil else { return }
+    switch resizeTarget(at: point) {
+    case .column:
+      NSCursor.resizeLeftRight.set()
+    case .row:
+      NSCursor.resizeUpDown.set()
+    default:
+      NSCursor.arrow.set()
+    }
+  }
+
+  private func updateCursorRects() {
+    discardCursorRects()
+    let colRange = visibleColumnRange()
+    for col in colRange {
+      let rect = columnHeaderRect(for: col)
+      let rightHandle = NSRect(
+        x: rect.maxX - resizeHandleThickness / 2,
+        y: rect.minY,
+        width: resizeHandleThickness,
+        height: rect.height
+      )
+      if rightHandle.maxX > Self.headerSize {
+        addCursorRect(rightHandle, cursor: .resizeLeftRight)
+      }
+
+      if col > 0 {
+        let leftHandle = NSRect(
+          x: rect.minX - resizeHandleThickness / 2,
+          y: rect.minY,
+          width: resizeHandleThickness,
+          height: rect.height
+        )
+        if leftHandle.maxX > Self.headerSize {
+          addCursorRect(leftHandle, cursor: .resizeLeftRight)
+        }
+      }
+    }
+
+    let rowRange = visibleRowRange()
+    for row in rowRange {
+      let rect = rowHeaderRect(for: row)
+      let bottomHandle = NSRect(
+        x: rect.minX,
+        y: rect.maxY - resizeHandleThickness / 2,
+        width: rect.width,
+        height: resizeHandleThickness
+      )
+      if bottomHandle.maxY > Self.headerSize {
+        addCursorRect(bottomHandle, cursor: .resizeUpDown)
+      }
+
+      if row > 0 {
+        let topHandle = NSRect(
+          x: rect.minX,
+          y: rect.minY - resizeHandleThickness / 2,
+          width: rect.width,
+          height: resizeHandleThickness
+        )
+        if topHandle.maxY > Self.headerSize {
+          addCursorRect(topHandle, cursor: .resizeUpDown)
+        }
+      }
+    }
   }
 
   // MARK: - Drawing
@@ -460,12 +605,14 @@ final class SpreadsheetGridNSView: NSView {
 
   func syncDisplay() {
     updateEditorFrame()
+    window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
 
-  func reloadContent() {
-    resetScroll()
+  func reloadContent(resetScrollPosition shouldReset: Bool = false) {
+    if shouldReset { scrollOrigin = .zero }
     updateEditorFrame()
+    window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
 
@@ -477,11 +624,36 @@ final class SpreadsheetGridNSView: NSView {
 
   // MARK: - Mouse
 
+  override func mouseMoved(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    updateCursor(for: point)
+  }
+
+  override func cursorUpdate(with event: NSEvent) {
+    let point = convert(event.locationInWindow, from: nil)
+    updateCursor(for: point)
+  }
+
   override func mouseDown(with event: NSEvent) {
     window?.makeFirstResponder(self)
     let point = convert(event.locationInWindow, from: nil)
 
     if isEditorActive { hideEditor(commit: true) }
+
+    if let target = resizeTarget(at: point) {
+      if event.clickCount >= 2 {
+        switch target {
+        case .column(let col, _, _):
+          viewModel?.autoFitColumn(col)
+        case .row(let row, _, _):
+          viewModel?.autoFitRow(row)
+        }
+        needsDisplay = true
+        return
+      }
+      activeResize = target
+      return
+    }
 
     switch headerHit(at: point) {
     case .corner:
@@ -489,16 +661,12 @@ final class SpreadsheetGridNSView: NSView {
       needsDisplay = true
       return
     case .column(let col):
-      if event.clickCount >= 2 {
-        viewModel?.autoFitColumn(col)
-        needsDisplay = true
-      }
+      viewModel?.selectColumn(col)
+      needsDisplay = true
       return
     case .row(let row):
-      if event.clickCount >= 2 {
-        viewModel?.autoFitRow(row)
-        needsDisplay = true
-      }
+      viewModel?.selectRow(row)
+      needsDisplay = true
       return
     case .content:
       break
@@ -520,8 +688,24 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func mouseDragged(with event: NSEvent) {
-    guard isDraggingSelection, let viewModel else { return }
     let point = convert(event.locationInWindow, from: nil)
+
+    if let resize = activeResize {
+      switch resize {
+      case .column(let col, let startWidth, let startX):
+        let delta = point.x - startX
+        viewModel?.setColumnWidth(col, width: startWidth + delta)
+      case .row(let row, let startHeight, let startY):
+        let delta = point.y - startY
+        viewModel?.setRowHeight(row, height: startHeight + delta)
+      }
+      window?.invalidateCursorRects(for: self)
+      updateEditorFrame()
+      needsDisplay = true
+      return
+    }
+
+    guard isDraggingSelection, let viewModel else { return }
     let clamped = NSPoint(
       x: max(contentRect.minX, min(point.x, contentRect.maxX - 1)),
       y: max(contentRect.minY, min(point.y, contentRect.maxY - 1))
@@ -531,15 +715,67 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func mouseUp(with event: NSEvent) {
+    if activeResize != nil {
+      activeResize = nil
+      window?.invalidateCursorRects(for: self)
+      let point = convert(event.locationInWindow, from: nil)
+      updateCursor(for: point)
+    }
     isDraggingSelection = false
   }
 
   override func scrollWheel(with event: NSEvent) {
+    let invert = AppSettings.shared.invertScrollDirection
     scrollOrigin.x += event.scrollingDeltaX
-    scrollOrigin.y += event.scrollingDeltaY
+    scrollOrigin.y += event.scrollingDeltaY * (invert ? -1 : 1)
     clampScrollOrigin()
     updateEditorFrame()
     needsDisplay = true
+  }
+
+  override func menu(for event: NSEvent) -> NSMenu? {
+    let point = convert(event.locationInWindow, from: nil)
+
+    if contentRect.contains(point), let viewModel {
+      let address = addressAtContent(point: point)
+      if !viewModel.selectionRange.contains(address) {
+        viewModel.selectRange(from: address, to: address)
+        needsDisplay = true
+      }
+    }
+
+    let menu = NSMenu()
+    let cut = menu.addItem(withTitle: "Cut", action: #selector(handleMenuCut(_:)), keyEquivalent: "")
+    cut.target = self
+    let copy = menu.addItem(withTitle: "Copy", action: #selector(handleMenuCopy(_:)), keyEquivalent: "")
+    copy.target = self
+    let paste = menu.addItem(withTitle: "Paste", action: #selector(handleMenuPaste(_:)), keyEquivalent: "")
+    paste.target = self
+    menu.addItem(.separator())
+    let selectAll = menu.addItem(withTitle: "Select All", action: #selector(handleMenuSelectAll(_:)), keyEquivalent: "")
+    selectAll.target = self
+    return menu
+  }
+
+  @objc private func handleMenuCut(_ sender: Any?) {
+    viewModel?.cutSelection()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuCopy(_ sender: Any?) {
+    guard let text = viewModel?.copySelection() else { return }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+  }
+
+  @objc private func handleMenuPaste(_ sender: Any?) {
+    viewModel?.pasteFromPasteboard()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuSelectAll(_ sender: Any?) {
+    viewModel?.selectAll()
+    syncDisplay()
   }
 
   // MARK: - Keyboard
@@ -561,9 +797,8 @@ final class SpreadsheetGridNSView: NSView {
       return
     case 48:
       viewModel.moveSelection(rowDelta: 0, colDelta: event.modifierFlags.contains(.shift) ? -1 : 1, extending: event.modifierFlags.contains(.shift))
-    case 51:
-      viewModel.setCellValue("", at: viewModel.selectionAnchor)
-      viewModel.syncEditTextFromSelection()
+    case 51, 117:
+      viewModel.clearSelection()
     default:
       if let chars = event.characters, chars.count == 1, let scalar = chars.unicodeScalars.first {
         let isPrintable = CharacterSet.alphanumerics.contains(scalar)
@@ -583,26 +818,38 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
-    guard event.modifierFlags.contains(.command) else {
-      return super.performKeyEquivalent(with: event)
-    }
-    switch event.charactersIgnoringModifiers?.lowercased() {
-    case "c":
+    let settings = AppSettings.shared
+    if settings.matches(.copy, event: event) {
       if let text = viewModel?.copySelection() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         return true
       }
-    case "x":
+    }
+    if settings.matches(.cut, event: event) {
       viewModel?.cutSelection()
       syncDisplay()
       return true
-    case "v":
+    }
+    if settings.matches(.paste, event: event) {
       viewModel?.pasteFromPasteboard()
       syncDisplay()
       return true
-    default:
-      break
+    }
+    if settings.matches(.bold, event: event) {
+      viewModel?.toggleBold()
+      syncDisplay()
+      return true
+    }
+    if settings.matches(.italic, event: event) {
+      viewModel?.toggleItalic()
+      syncDisplay()
+      return true
+    }
+    if settings.matches(.underline, event: event) {
+      viewModel?.toggleUnderline()
+      syncDisplay()
+      return true
     }
     return super.performKeyEquivalent(with: event)
   }

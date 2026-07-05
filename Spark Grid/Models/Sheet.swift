@@ -57,4 +57,14 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     var maxPopulatedColumn: Int {
         cells.keys.map(\.col).max() ?? -1
     }
+
+    /// Grid row count — at least the default, expands when data exceeds it.
+    var effectiveRowCount: Int {
+        max(Workbook.defaultRowCount, maxPopulatedRow + 1)
+    }
+
+    /// Grid column count — at least the default, expands when data exceeds it.
+    var effectiveColumnCount: Int {
+        max(Workbook.defaultColumnCount, maxPopulatedColumn + 1)
+    }
 }

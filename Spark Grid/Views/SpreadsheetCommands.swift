@@ -1,12 +1,20 @@
 import SwiftUI
 
 struct SpreadsheetCommands: Commands {
+  @Bindable private var settings = AppSettings.shared
   @FocusedValue(\.spreadsheetViewModel) private var viewModel: SpreadsheetViewModel?
 
   var body: some Commands {
+    CommandGroup(replacing: .undoRedo) {
+      Button("Undo") { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
+        .keyboardShortcut(settings.keyEquivalent(for: .undo), modifiers: settings.eventModifiers(for: .undo))
+      Button("Redo") { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
+        .keyboardShortcut(settings.keyEquivalent(for: .redo), modifiers: settings.eventModifiers(for: .redo))
+    }
+
     CommandGroup(replacing: .pasteboard) {
       Button("Cut") { viewModel?.cutSelection() }
-        .keyboardShortcut("x", modifiers: .command)
+        .keyboardShortcut(settings.keyEquivalent(for: .cut), modifiers: settings.eventModifiers(for: .cut))
         .disabled(viewModel == nil)
       Button("Copy") {
         if let text = viewModel?.copySelection() {
@@ -14,20 +22,20 @@ struct SpreadsheetCommands: Commands {
           NSPasteboard.general.setString(text, forType: .string)
         }
       }
-      .keyboardShortcut("c", modifiers: .command)
+      .keyboardShortcut(settings.keyEquivalent(for: .copy), modifiers: settings.eventModifiers(for: .copy))
       .disabled(viewModel == nil)
       Button("Paste") { viewModel?.pasteFromPasteboard() }
-        .keyboardShortcut("v", modifiers: .command)
+        .keyboardShortcut(settings.keyEquivalent(for: .paste), modifiers: settings.eventModifiers(for: .paste))
         .disabled(viewModel == nil)
     }
 
     CommandGroup(after: .pasteboard) {
       Button("Bold") { viewModel?.toggleBold() }
-        .keyboardShortcut("b", modifiers: .command)
+        .keyboardShortcut(settings.keyEquivalent(for: .bold), modifiers: settings.eventModifiers(for: .bold))
       Button("Italic") { viewModel?.toggleItalic() }
-        .keyboardShortcut("i", modifiers: .command)
+        .keyboardShortcut(settings.keyEquivalent(for: .italic), modifiers: settings.eventModifiers(for: .italic))
       Button("Underline") { viewModel?.toggleUnderline() }
-        .keyboardShortcut("u", modifiers: .command)
+        .keyboardShortcut(settings.keyEquivalent(for: .underline), modifiers: settings.eventModifiers(for: .underline))
     }
   }
 }

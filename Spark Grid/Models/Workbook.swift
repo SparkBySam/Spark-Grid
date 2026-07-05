@@ -20,5 +20,9 @@ struct Workbook: Codable, Equatable, Sendable {
         set { sheets[activeSheetIndex] = newValue }
     }
 
+    var isEffectivelyEmpty: Bool {
+        sheets.allSatisfy(\.cells.isEmpty)
+    }
+
     static var empty: Workbook { Workbook() }
 }

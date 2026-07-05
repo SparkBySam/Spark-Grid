@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SpreadsheetFileCommands: Commands {
   @Bindable var store: SpreadsheetDocumentStore
+  @Bindable private var settings = AppSettings.shared
 
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
@@ -20,8 +21,11 @@ struct SpreadsheetFileCommands: Commands {
       Button("Save") {
         saveDocument()
       }
-      .keyboardShortcut("s", modifiers: .command)
-      .disabled(store.document.workbook.activeSheet.cells.isEmpty && store.fileURL == nil)
+      .keyboardShortcut(settings.keyEquivalent(for: .save), modifiers: settings.eventModifiers(for: .save))
+      .disabled(
+        (store.fileURL == nil && store.document.workbook.isEffectivelyEmpty)
+          || (store.fileURL != nil && !store.isDirty)
+      )
     }
   }
 
@@ -35,15 +39,40 @@ struct SpreadsheetFileCommands: Commands {
   }
 
   private func saveDocument() {
+    if store.hasMultipleSheets, !confirmActiveSheetOnlySave() {
+      return
+    }
+
     if let url = store.fileURL {
       try? store.save(to: url)
       return
     }
+
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.commaSeparatedText]
-    panel.nameFieldStringValue = "Untitled.csv"
+    panel.nameFieldStringValue = suggestedFilename()
     guard panel.runModal() == .OK, let url = panel.url else { return }
     try? store.save(to: url)
+  }
+
+  private func suggestedFilename() -> String {
+    let sheetName = store.document.workbook.activeSheet.name
+    if store.fileURL != nil {
+      return store.fileURL!.lastPathComponent
+    }
+    return "\(sheetName).csv"
+  }
+
+  private func confirmActiveSheetOnlySave() -> Bool {
+    let sheetName = store.document.workbook.activeSheet.name
+    let alert = NSAlert()
+    alert.messageText = "Save Active Sheet Only?"
+    alert.informativeText =
+      "CSV files contain one sheet. Only \"\(sheetName)\" will be saved; other sheets in this workbook won't be included."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Save")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
   }
 }
 

@@ -66,12 +66,10 @@ final class SpreadsheetViewModel {
   func selectAll() {
     commitEditIfNeeded()
     let sheet = activeSheet
-    let maxRow = max(sheet.maxPopulatedRow, 0)
-    let maxCol = max(sheet.maxPopulatedColumn, 0)
     selectionAnchor = .origin
     selectionEnd = CellAddress(
-      row: min(max(maxRow, 99), Workbook.defaultRowCount - 1),
-      col: min(max(maxCol, 25), Workbook.defaultColumnCount - 1)
+      row: sheet.effectiveRowCount - 1,
+      col: sheet.effectiveColumnCount - 1
     )
     syncEditTextFromSelection()
     isEditing = false
@@ -81,14 +79,14 @@ final class SpreadsheetViewModel {
     commitEditIfNeeded()
     if extending {
       let end = CellAddress(
-        row: max(0, min(Workbook.defaultRowCount - 1, selectionEnd.row + rowDelta)),
-        col: max(0, min(Workbook.defaultColumnCount - 1, selectionEnd.col + colDelta))
+        row: max(0, min(activeSheet.effectiveRowCount - 1, selectionEnd.row + rowDelta)),
+        col: max(0, min(activeSheet.effectiveColumnCount - 1, selectionEnd.col + colDelta))
       )
       selectionEnd = end
     } else {
       let next = CellAddress(
-        row: max(0, min(Workbook.defaultRowCount - 1, selectionAnchor.row + rowDelta)),
-        col: max(0, min(Workbook.defaultColumnCount - 1, selectionAnchor.col + colDelta))
+        row: max(0, min(activeSheet.effectiveRowCount - 1, selectionAnchor.row + rowDelta)),
+        col: max(0, min(activeSheet.effectiveColumnCount - 1, selectionAnchor.col + colDelta))
       )
       selectionAnchor = next
       selectionEnd = next
@@ -99,6 +97,26 @@ final class SpreadsheetViewModel {
 
   func select(_ address: CellAddress) {
     selectRange(from: address, to: address)
+  }
+
+  func selectColumn(_ col: Int) {
+    commitEditIfNeeded()
+    let sheet = activeSheet
+    let clampedCol = max(0, min(sheet.effectiveColumnCount - 1, col))
+    selectionAnchor = CellAddress(row: 0, col: clampedCol)
+    selectionEnd = CellAddress(row: sheet.effectiveRowCount - 1, col: clampedCol)
+    syncEditTextFromSelection()
+    isEditing = false
+  }
+
+  func selectRow(_ row: Int) {
+    commitEditIfNeeded()
+    let sheet = activeSheet
+    let clampedRow = max(0, min(sheet.effectiveRowCount - 1, row))
+    selectionAnchor = CellAddress(row: clampedRow, col: 0)
+    selectionEnd = CellAddress(row: clampedRow, col: sheet.effectiveColumnCount - 1)
+    syncEditTextFromSelection()
+    isEditing = false
   }
 
   func beginEditing(preserveSelection: Bool = true) {
@@ -156,7 +174,7 @@ final class SpreadsheetViewModel {
     var sheet = activeSheet
     var maxWidth = Workbook.defaultColumnWidth
     let lastRow = max(sheet.maxPopulatedRow, 0)
-    for row in 0...min(lastRow, Workbook.defaultRowCount - 1) {
+    for row in 0...min(lastRow, activeSheet.effectiveRowCount - 1) {
       let address = CellAddress(row: row, col: col)
       let cell = sheet.cell(at: address)
       let text = CellFormatRenderer.displayText(raw: cell.raw, format: cell.format)
@@ -172,7 +190,7 @@ final class SpreadsheetViewModel {
     var sheet = activeSheet
     var maxHeight = Workbook.defaultRowHeight
     let lastCol = max(sheet.maxPopulatedColumn, 0)
-    for col in 0...min(lastCol, Workbook.defaultColumnCount - 1) {
+    for col in 0...min(lastCol, activeSheet.effectiveColumnCount - 1) {
       let address = CellAddress(row: row, col: col)
       let cell = sheet.cell(at: address)
       let text = CellFormatRenderer.displayText(raw: cell.raw, format: cell.format)
@@ -182,6 +200,65 @@ final class SpreadsheetViewModel {
     }
     sheet.rowHeights[row] = min(max(maxHeight, 22), 200)
     activeSheet = sheet
+  }
+
+  func setColumnWidth(_ col: Int, width: CGFloat) {
+    var sheet = activeSheet
+    sheet.columnWidths[col] = min(max(width, 24), 600)
+    activeSheet = sheet
+  }
+
+  func setRowHeight(_ row: Int, height: CGFloat) {
+    var sheet = activeSheet
+    sheet.rowHeights[row] = min(max(height, 16), 400)
+    activeSheet = sheet
+  }
+
+  // MARK: - Sheets
+
+  func addSheet() {
+    commitEditIfNeeded()
+    var wb = workbook
+    let index = wb.sheets.count + 1
+    wb.sheets.append(Sheet(name: "Sheet\(index)"))
+    wb.activeSheetIndex = wb.sheets.count - 1
+    workbook = wb
+    selection = .origin
+    syncEditTextFromSelection()
+    isEditing = false
+  }
+
+  func selectSheet(at index: Int) {
+    commitEditIfNeeded()
+    guard index >= 0, index < workbook.sheets.count else { return }
+    workbook.activeSheetIndex = index
+    selection = .origin
+    syncEditTextFromSelection()
+    isEditing = false
+  }
+
+  func deleteSheet(at index: Int) {
+    commitEditIfNeeded()
+    guard workbook.sheets.count > 1 else { return }
+    guard index >= 0, index < workbook.sheets.count else { return }
+
+    let wasActive = index == workbook.activeSheetIndex
+    workbook.sheets.remove(at: index)
+    if wasActive {
+      workbook.activeSheetIndex = min(index, workbook.sheets.count - 1)
+    } else if index < workbook.activeSheetIndex {
+      workbook.activeSheetIndex -= 1
+    }
+    selection = .origin
+    syncEditTextFromSelection()
+    isEditing = false
+  }
+
+  func renameSheet(at index: Int, to name: String) {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    guard index >= 0, index < workbook.sheets.count else { return }
+    workbook.sheets[index].name = trimmed
   }
 
   // MARK: - Formatting
@@ -224,6 +301,10 @@ final class SpreadsheetViewModel {
 
   func setVerticalAlign(_ align: CellFormat.VerticalAlign) {
     updateSelectedFormat { $0.verticalAlign = align }
+  }
+
+  func setTextRotation(_ degrees: Int) {
+    updateSelectedFormat { $0.textRotation = degrees }
   }
 
   func setNumberFormat(_ numberFormat: CellFormat.NumberFormat) {
@@ -297,30 +378,78 @@ final class SpreadsheetViewModel {
   }
 
   private func clamp(_ address: CellAddress) -> CellAddress {
-    CellAddress(
-      row: max(0, min(Workbook.defaultRowCount - 1, address.row)),
-      col: max(0, min(Workbook.defaultColumnCount - 1, address.col))
+    let sheet = activeSheet
+    return CellAddress(
+      row: max(0, min(sheet.effectiveRowCount - 1, address.row)),
+      col: max(0, min(sheet.effectiveColumnCount - 1, address.col))
     )
+  }
+
+  func clearSelection() {
+    commitEditIfNeeded()
+    clearRange(selectionRange)
+    syncEditTextFromSelection()
   }
 
   // MARK: - Clipboard
 
   func copySelection() -> String? {
-    activeSheet.cell(at: selectionAnchor).raw.nilIfEmpty
+    let text = SpreadsheetClipboard.copyText(from: activeSheet, range: selectionRange)
+    let hasContent = selectionRange.allAddresses().contains {
+      !activeSheet.cell(at: $0).raw.isEmpty
+    }
+    guard hasContent else { return nil }
+    return text
   }
 
   func cutSelection() {
-    let value = activeSheet.cell(at: selectionAnchor).raw
-    guard !value.isEmpty else { return }
-    setCellValue("", at: selectionAnchor)
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
+    guard let text = copySelection() else { return }
+    clearRange(selectionRange)
+    writeToPasteboard(text)
   }
 
   func pasteFromPasteboard() {
     guard let text = NSPasteboard.general.string(forType: .string) else { return }
-    setCellValue(text, at: selectionAnchor)
+    let grid = SpreadsheetClipboard.parseGrid(text)
+    if grid.isEmpty {
+      setCellValue(text, at: selectionAnchor)
+    } else {
+      pasteGrid(grid, at: selectionAnchor)
+    }
     syncEditTextFromSelection()
+  }
+
+  private func pasteGrid(_ grid: [[String]], at origin: CellAddress) {
+    undoManager?.beginUndoGrouping()
+    for (rowOffset, row) in grid.enumerated() {
+      for (colOffset, value) in row.enumerated() {
+        let address = CellAddress(row: origin.row + rowOffset, col: origin.col + colOffset)
+        guard address.row < activeSheet.effectiveRowCount, address.col < activeSheet.effectiveColumnCount else { continue }
+        setCellValue(value, at: address)
+      }
+    }
+    undoManager?.endUndoGrouping()
+    undoManager?.setActionName("Paste")
+
+    if let lastRow = grid.indices.last, let lastCol = grid[lastRow].indices.last {
+      selectionEnd = CellAddress(row: origin.row + lastRow, col: origin.col + lastCol)
+    }
+  }
+
+  private func clearRange(_ range: CellRange) {
+    undoManager?.beginUndoGrouping()
+    for address in range.allAddresses() {
+      let oldValue = activeSheet.cell(at: address).raw
+      guard !oldValue.isEmpty else { continue }
+      setCellValue("", at: address)
+    }
+    undoManager?.endUndoGrouping()
+    undoManager?.setActionName("Cut")
+  }
+
+  private func writeToPasteboard(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 
   // MARK: - Undo
@@ -352,7 +481,3 @@ final class SpreadsheetViewModel {
 }
 
 import AppKit
-
-private extension String {
-  var nilIfEmpty: String? { isEmpty ? nil : self }
-}

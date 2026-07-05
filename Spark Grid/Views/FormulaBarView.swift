@@ -3,6 +3,7 @@ import SwiftUI
 
 struct FormulaBarView: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  @Bindable var store: SpreadsheetDocumentStore
 
   var body: some View {
     HStack(spacing: 8) {
@@ -20,6 +21,11 @@ struct FormulaBarView: View {
       .textFieldStyle(.plain)
       .font(.system(.body, design: .monospaced))
       .onSubmit { viewModel.applyFormulaBar() }
+
+      Divider()
+
+      AutosaveStatusView(store: store)
+        .padding(.trailing, 2)
     }
     .padding(.horizontal, 10)
     .frame(height: 28)

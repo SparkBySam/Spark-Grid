@@ -80,7 +80,20 @@ enum CellFormatRenderer {
 
     let size = (text as NSString).size(withAttributes: attrs)
     let point = alignedOrigin(for: size, in: inset, format: resolved)
-    (text as NSString).draw(at: point, withAttributes: attrs)
+
+    if resolved.textRotation != 0 {
+      NSGraphicsContext.saveGraphicsState()
+      let center = NSPoint(x: inset.midX, y: inset.midY)
+      let transform = NSAffineTransform()
+      transform.translateX(by: center.x, yBy: center.y)
+      transform.rotate(byDegrees: CGFloat(resolved.textRotation))
+      transform.translateX(by: -center.x, yBy: -center.y)
+      transform.concat()
+      (text as NSString).draw(at: point, withAttributes: attrs)
+      NSGraphicsContext.restoreGraphicsState()
+    } else {
+      (text as NSString).draw(at: point, withAttributes: attrs)
+    }
   }
 
   static func measuredWidth(for text: String, format: CellFormat?) -> CGFloat {
