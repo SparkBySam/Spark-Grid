@@ -5,12 +5,15 @@ import Observation
 @MainActor
 final class SpreadsheetDocumentStore {
   var document = SpreadsheetDocument()
+  /// Live grid view model for the open window; used by print and menu commands.
+  var activeViewModel: SpreadsheetViewModel?
   var fileURL: URL?
   private(set) var isDirty = false
   private(set) var isAutosaving = false
 
   private var savedFingerprint: Data?
   private var autosaveTask: Task<Void, Never>?
+  private var isForceClosing = false
 
   init() {
     savedFingerprint = try? JSONEncoder().encode(SpreadsheetDocument().workbook)
@@ -33,6 +36,7 @@ final class SpreadsheetDocumentStore {
     savedFingerprint = fingerprint(of: document.workbook)
     isDirty = false
     isAutosaving = false
+    isForceClosing = false
   }
 
   func load(from url: URL) throws {
@@ -64,6 +68,64 @@ final class SpreadsheetDocumentStore {
   func autosaveIfNeeded() {
     guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty else { return }
     performAutosave()
+  }
+
+  /// Prompts to save when closing with unsaved changes. Returns whether the app may close.
+  @discardableResult
+  func attemptClose() -> Bool {
+    if isForceClosing { return true }
+    guard isDirty else { return true }
+
+    let alert = NSAlert()
+    alert.messageText = "Do you want to save the changes you made?"
+    let documentName = fileURL?.lastPathComponent ?? "Untitled"
+    alert.informativeText = "Your changes to \"\(documentName)\" will be lost if you don't save."
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Save")
+    alert.addButton(withTitle: "Don't Save")
+    alert.addButton(withTitle: "Cancel")
+
+    switch alert.runModal() {
+    case .alertFirstButtonReturn:
+      guard saveInteractively() else { return false }
+      return true
+    case .alertSecondButtonReturn:
+      isForceClosing = true
+      return true
+    default:
+      return false
+    }
+  }
+
+  @discardableResult
+  func saveInteractively() -> Bool {
+    if hasMultipleSheets, !confirmActiveSheetOnlySave() {
+      return false
+    }
+
+    if let url = fileURL {
+      do {
+        try save(to: url)
+        return true
+      } catch {
+        presentSaveError(error)
+        return false
+      }
+    }
+
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.commaSeparatedText]
+    panel.nameFieldStringValue = suggestedSaveFilename()
+    panel.canCreateDirectories = true
+    guard panel.runModal() == .OK, let url = panel.url else { return false }
+
+    do {
+      try save(to: url)
+      return true
+    } catch {
+      presentSaveError(error)
+      return false
+    }
   }
 
   func restartAutosave() {
@@ -109,6 +171,35 @@ final class SpreadsheetDocumentStore {
   private func noteRecent(_ url: URL) {
     NSDocumentController.shared.noteNewRecentDocumentURL(url)
   }
+
+  private func suggestedSaveFilename() -> String {
+    let sheetName = document.workbook.activeSheet.name
+    if let fileURL {
+      return fileURL.lastPathComponent
+    }
+    return "\(sheetName).csv"
+  }
+
+  private func confirmActiveSheetOnlySave() -> Bool {
+    let sheetName = document.workbook.activeSheet.name
+    let alert = NSAlert()
+    alert.messageText = "Save Active Sheet Only?"
+    alert.informativeText =
+      "CSV files contain one sheet. Only \"\(sheetName)\" will be saved; other sheets in this workbook won't be included."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Save")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  private func presentSaveError(_ error: Error) {
+    let alert = NSAlert()
+    alert.messageText = "Couldn't Save Spreadsheet"
+    alert.informativeText = error.localizedDescription
+    alert.alertStyle = .warning
+    alert.runModal()
+  }
 }
 
 import AppKit
+import UniformTypeIdentifiers

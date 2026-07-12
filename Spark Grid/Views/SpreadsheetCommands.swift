@@ -27,9 +27,37 @@ struct SpreadsheetCommands: Commands {
       Button("Paste") { viewModel?.pasteFromPasteboard() }
         .keyboardShortcut(settings.keyEquivalent(for: .paste), modifiers: settings.eventModifiers(for: .paste))
         .disabled(viewModel == nil)
+
+      Divider()
+
+      Button("Copy Formulas") { viewModel?.copyFormulas() }
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .copyFormulas),
+          modifiers: settings.eventModifiers(for: .copyFormulas)
+        )
+        .disabled(viewModel == nil)
+      Button("Paste Formulas") { viewModel?.pasteFormulasFromPasteboard() }
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .pasteFormulas),
+          modifiers: settings.eventModifiers(for: .pasteFormulas)
+        )
+        .disabled(viewModel == nil)
+
+      Button("Convert to Values") { viewModel?.convertSelectionToValues() }
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .convertToValues),
+          modifiers: settings.eventModifiers(for: .convertToValues)
+        )
+        .disabled(viewModel == nil)
     }
 
     CommandGroup(after: .pasteboard) {
+      Button("Select All") { viewModel?.selectAll() }
+        .keyboardShortcut("a", modifiers: .command)
+        .disabled(viewModel == nil)
+
+      Divider()
+
       Button("Bold") { viewModel?.toggleBold() }
         .keyboardShortcut(settings.keyEquivalent(for: .bold), modifiers: settings.eventModifiers(for: .bold))
       Button("Italic") { viewModel?.toggleItalic() }

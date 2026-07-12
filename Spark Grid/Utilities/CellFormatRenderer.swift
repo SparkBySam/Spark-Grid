@@ -37,11 +37,45 @@ enum CellFormatRenderer {
     }
   }
 
-  static func attributes(for format: CellFormat?) -> [NSAttributedString.Key: Any] {
+  /// Format an evaluated formula/literal value for display.
+  static func displayText(for value: CellValue, format: CellFormat?, fallbackRaw: String) -> String {
+    switch value {
+    case .error:
+      return value.displayString
+    case .blank:
+      return ""
+    case .bool, .string:
+      return value.displayString
+    case .number(let number):
+      guard let format else { return value.displayString }
+      let places = format.decimalPlaces ?? decimalPlaces(for: format.numberFormat)
+      switch format.numberFormat {
+      case .general:
+        return value.displayString
+      case .number:
+        return formatNumber(number, places: places)
+      case .currency:
+        return formatCurrency(number, places: places)
+      case .percent:
+        return formatPercent(number, places: places)
+      case .scientific:
+        return String(format: "%.\(places)e", number)
+      case .date, .time:
+        return value.displayString
+      }
+    }
+  }
+
+  static func attributes(for format: CellFormat?, onLightBackground: Bool = false) -> [NSAttributedString.Key: Any] {
     let resolved = format ?? CellFormat()
+    let defaultTextColor = onLightBackground ? NSColor.black : NSColor.labelColor
+    let textColor: NSColor = {
+      if onLightBackground { return NSColor.black }
+      return nsColor(resolved.textColor) ?? defaultTextColor
+    }()
     var attrs: [NSAttributedString.Key: Any] = [
       .font: font(for: resolved),
-      .foregroundColor: nsColor(resolved.textColor) ?? NSColor.labelColor,
+      .foregroundColor: textColor,
     ]
 
     if resolved.underline {
@@ -63,9 +97,60 @@ enum CellFormatRenderer {
     return attrs
   }
 
-  static func drawText(_ text: String, in cellRect: NSRect, format: CellFormat?) {
+  static func drawSingleLineText(
+    _ text: String,
+    in rect: NSRect,
+    format: CellFormat?,
+    onLightBackground: Bool = false
+  ) {
+    guard !text.isEmpty else { return }
+    var attrs = attributes(for: format, onLightBackground: onLightBackground)
+    let paragraph = ((attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
+      as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+    paragraph.lineBreakMode = .byTruncatingTail
+    attrs[.paragraphStyle] = paragraph
+
+    let size = (text as NSString).size(withAttributes: attrs)
+    var drawRect = rect
+    drawRect.size.height = max(size.height, 1)
+    drawRect.origin.y += (rect.height - drawRect.height) / 2
+
+    (text as NSString).draw(
+      with: drawRect,
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: attrs
+    )
+  }
+
+  static func drawCenteredLabel(
+    _ text: String,
+    in rect: NSRect,
+    font: NSFont,
+    color: NSColor
+  ) {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = .center
+    let attrs: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: color,
+      .paragraphStyle: paragraph,
+    ]
+    (text as NSString).draw(
+      with: rect,
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: attrs
+    )
+  }
+
+  static func drawText(
+    _ text: String,
+    in cellRect: NSRect,
+    format: CellFormat?,
+    onLightBackground: Bool = false,
+    verticalAlign: CellFormat.VerticalAlign? = nil
+  ) {
     let resolved = format ?? CellFormat()
-    let attrs = attributes(for: format)
+    let attrs = attributes(for: format, onLightBackground: onLightBackground)
     let inset = cellRect.insetBy(dx: 4, dy: 2)
     guard inset.width > 1, inset.height > 1 else { return }
 
@@ -79,7 +164,8 @@ enum CellFormatRenderer {
     }
 
     let size = (text as NSString).size(withAttributes: attrs)
-    let point = alignedOrigin(for: size, in: inset, format: resolved)
+    let alignment = verticalAlign ?? resolved.verticalAlign
+    let point = alignedOrigin(for: size, in: inset, horizontalAlign: resolved.horizontalAlign, verticalAlign: alignment)
 
     if resolved.textRotation != 0 {
       NSGraphicsContext.saveGraphicsState()
@@ -108,9 +194,14 @@ enum CellFormatRenderer {
     return (text as NSString).size(withAttributes: attrs).height
   }
 
-  private static func alignedOrigin(for size: NSSize, in rect: NSRect, format: CellFormat) -> NSPoint {
+  private static func alignedOrigin(
+    for size: NSSize,
+    in rect: NSRect,
+    horizontalAlign: CellFormat.HorizontalAlign,
+    verticalAlign: CellFormat.VerticalAlign
+  ) -> NSPoint {
     let x: CGFloat
-    switch format.horizontalAlign {
+    switch horizontalAlign {
     case .center:
       x = rect.midX - size.width / 2
     case .right:
@@ -120,7 +211,7 @@ enum CellFormatRenderer {
     }
 
     let y: CGFloat
-    switch format.verticalAlign {
+    switch verticalAlign {
     case .top:
       y = rect.minY
     case .middle:

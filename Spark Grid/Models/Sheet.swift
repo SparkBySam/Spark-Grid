@@ -58,6 +58,35 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         cells.keys.map(\.col).max() ?? -1
     }
 
+    /// Tight bounds around every non-empty cell, if any.
+    var populatedBounds: CellRange? {
+        guard !cells.isEmpty else { return nil }
+        let rows = cells.keys.map(\.row)
+        let cols = cells.keys.map(\.col)
+        return CellRange(
+            start: CellAddress(row: rows.min() ?? 0, col: cols.min() ?? 0),
+            end: CellAddress(row: rows.max() ?? 0, col: cols.max() ?? 0)
+        )
+    }
+
+    /// Full used range from A1 through the last populated row/column.
+    var populatedRangeFromOrigin: CellRange {
+        if maxPopulatedRow < 0 || maxPopulatedColumn < 0 {
+            return .singleOrigin
+        }
+        return CellRange(
+            start: .origin,
+            end: CellAddress(row: maxPopulatedRow, col: maxPopulatedColumn)
+        )
+    }
+
+    func wholeSheetRange() -> CellRange {
+        CellRange(
+            start: .origin,
+            end: CellAddress(row: effectiveRowCount - 1, col: effectiveColumnCount - 1)
+        )
+    }
+
     /// Grid row count — at least the default, expands when data exceeds it.
     var effectiveRowCount: Int {
         max(Workbook.defaultRowCount, maxPopulatedRow + 1)

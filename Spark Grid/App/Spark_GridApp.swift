@@ -13,6 +13,7 @@ struct Spark_GridApp: App {
   var body: some Scene {
     WindowGroup(id: "main") {
       SpreadsheetRootView(store: store)
+        .environment(\.sparkGridAppDelegate, appDelegate)
         .onAppear {
           appDelegate.documentStore = store
           store.restartAutosave()
@@ -31,6 +32,7 @@ struct Spark_GridApp: App {
     .defaultSize(width: 1280, height: 800)
     .commands {
       SpreadsheetCommands()
+      SpreadsheetStructureCommands()
       SpreadsheetFileCommands(store: store)
     }
 

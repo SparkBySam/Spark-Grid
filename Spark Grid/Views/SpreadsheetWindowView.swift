@@ -3,20 +3,26 @@ import SwiftUI
 
 private enum SpreadsheetChrome {
   static let formulaBarHeight: CGFloat = 28
+  static let formulaErrorBannerHeight: CGFloat = 40
   static let dividerHeight: CGFloat = 1
 
   static func toolbarHeight(showLabels: Bool) -> CGFloat {
     58
   }
 
-  static func topHeight(showLabels: Bool) -> CGFloat {
-    toolbarHeight(showLabels: showLabels) + dividerHeight + formulaBarHeight + dividerHeight
+  static func topHeight(showLabels: Bool, showingFormulaError: Bool) -> CGFloat {
+    var height = toolbarHeight(showLabels: showLabels) + dividerHeight + formulaBarHeight + dividerHeight
+    if showingFormulaError {
+      height += formulaErrorBannerHeight
+    }
+    return height
   }
 }
 
 struct SpreadsheetWindowView: View {
   @Bindable var store: SpreadsheetDocumentStore
   @Environment(\.undoManager) private var undoManager
+  @Environment(\.sparkGridAppDelegate) private var appDelegate
   @Bindable private var settings = AppSettings.shared
 
   @State private var viewModel: SpreadsheetViewModel
@@ -37,9 +43,15 @@ struct SpreadsheetWindowView: View {
   var onDocumentChanged: () -> Void = {}
 
   var body: some View {
+    let showingFormulaError = viewModel.selectedFormulaErrorExplanation != nil
     ZStack(alignment: .top) {
       VStack(spacing: 0) {
-        Color.clear.frame(height: SpreadsheetChrome.topHeight(showLabels: settings.showToolbarLabels))
+        Color.clear.frame(
+          height: SpreadsheetChrome.topHeight(
+            showLabels: settings.showToolbarLabels,
+            showingFormulaError: showingFormulaError
+          )
+        )
         SpreadsheetGridView(viewModel: viewModel)
           .frame(minHeight: 0, maxHeight: .infinity)
         Divider()
@@ -70,9 +82,9 @@ struct SpreadsheetWindowView: View {
     .onChange(of: store.document.workbook) { _, newValue in
       guard newValue != viewModel.workbook else { return }
       viewModel.workbook = newValue
-      viewModel.selection = .origin
       viewModel.isEditing = false
       viewModel.syncEditTextFromSelection()
+      // Keep current selection — file loads remount via .id(fileURL) anyway.
       onDocumentChanged()
     }
     .onAppear {
@@ -81,10 +93,21 @@ struct SpreadsheetWindowView: View {
         viewModel.workbook = store.document.workbook
         viewModel.syncEditTextFromSelection()
       }
+      registerWithAppDelegate()
+    }
+    .task {
+      registerWithAppDelegate()
+    }
+    .onDisappear {
+      appDelegate?.unregisterSpreadsheetViewModel(viewModel, store: store)
     }
     .onChange(of: undoManager) { _, newValue in
       viewModel.undoManager = newValue
     }
+  }
+
+  private func registerWithAppDelegate() {
+    appDelegate?.registerSpreadsheetViewModel(viewModel, store: store)
   }
 }
 

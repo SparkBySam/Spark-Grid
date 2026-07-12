@@ -129,16 +129,8 @@ struct FormattingToolbar: View {
           viewModel.adjustFontSize(by: -1)
           syncFontSizeFromSelection()
         }
-        TextField("", text: $fontSizeText)
-          .font(.system(size: 12, design: .monospaced))
-          .multilineTextAlignment(.center)
+        FontSizeTextField(text: $fontSizeText, onSubmit: applyFontSizeFromField)
           .frame(width: 32)
-          .textFieldStyle(.plain)
-          .onSubmit(applyFontSizeFromField)
-          .onChange(of: fontSizeText) { _, newValue in
-            let filtered = newValue.filter(\.isNumber)
-            if filtered != newValue { fontSizeText = filtered }
-          }
         ToolbarIconButton(systemName: "plus", title: "Larger", showLabel: showLabels, active: false) {
           viewModel.adjustFontSize(by: 1)
           syncFontSizeFromSelection()
@@ -288,6 +280,78 @@ struct FormattingToolbar: View {
     }
     viewModel.setFontSize(CGFloat(size))
     syncFontSizeFromSelection()
+  }
+}
+
+/// Font size field that can be typed into, but won't steal focus on app launch.
+private struct FontSizeTextField: NSViewRepresentable {
+  @Binding var text: String
+  var onSubmit: () -> Void
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(text: $text, onSubmit: onSubmit)
+  }
+
+  func makeNSView(context: Context) -> ClickToFocusTextField {
+    let field = ClickToFocusTextField(string: text)
+    field.delegate = context.coordinator
+    field.isBordered = false
+    field.isBezeled = false
+    field.drawsBackground = false
+    field.focusRingType = .default
+    field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+    field.alignment = .center
+    return field
+  }
+
+  func updateNSView(_ field: ClickToFocusTextField, context: Context) {
+    context.coordinator.onSubmit = onSubmit
+    if field.stringValue != text {
+      field.stringValue = text
+    }
+    field.delegate = context.coordinator
+  }
+
+  final class Coordinator: NSObject, NSTextFieldDelegate {
+    @Binding var text: String
+    var onSubmit: () -> Void
+
+    init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+      _text = text
+      self.onSubmit = onSubmit
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+      guard let field = notification.object as? NSTextField else { return }
+      let filtered = field.stringValue.filter(\.isNumber)
+      if filtered != field.stringValue {
+        field.stringValue = filtered
+      }
+      text = filtered
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+      if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+        onSubmit()
+        control.window?.makeFirstResponder(nil)
+        return true
+      }
+      return false
+    }
+  }
+}
+
+private final class ClickToFocusTextField: NSTextField {
+  private var allowsKeyboardFocus = false
+
+  override var acceptsFirstResponder: Bool {
+    allowsKeyboardFocus
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    allowsKeyboardFocus = true
+    window?.makeFirstResponder(self)
+    super.mouseDown(with: event)
   }
 }
 

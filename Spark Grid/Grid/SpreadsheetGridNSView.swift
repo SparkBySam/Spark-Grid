@@ -13,14 +13,43 @@ final class SpreadsheetGridNSView: NSView {
   )
 
   var viewModel: SpreadsheetViewModel? {
-    didSet { needsDisplay = true }
+    didSet {
+      guard viewModel !== oldValue else { return }
+      invalidateLayoutCache()
+      needsDisplay = true
+    }
   }
 
   private var scrollOrigin = CGPoint.zero
+  private var cachedColumnOffsets: [CGFloat]?
+  private var cachedRowOffsets: [CGFloat]?
+  private var cachedColumnCount = 0
+  private var cachedRowCount = 0
   private let editor = NSTextField()
   private var isEditorActive = false
+
+  private enum EditorEntryMode {
+  /// Started by typing over a selected cell — arrow keys save and move selection.
+    case replaceOnType
+  /// Started by double-click or Enter — arrow keys move the text cursor.
+    case inCellEdit
+  }
+
+  private var editorEntryMode: EditorEntryMode = .inCellEdit
   private var isDraggingSelection = false
+  private var isDraggingFill = false
+  private var fillSourceRange: CellRange?
+  private var headerDrag: HeaderDrag?
   private let resizeHandleThickness: CGFloat = 6
+  private let fillHandleSize: CGFloat = 8
+  private var editorCaretObserver: NSObjectProtocol?
+  private var isApplyingFormulaAttributes = false
+  private var lastAppliedFormulaHighlightKey = ""
+
+  private enum HeaderDrag {
+    case columns(anchor: Int)
+    case rows(anchor: Int)
+  }
 
   private enum ResizeTarget {
     case column(Int, startWidth: CGFloat, startX: CGFloat)
@@ -100,6 +129,28 @@ final class SpreadsheetGridNSView: NSView {
     needsDisplay = true
   }
 
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    guard window != nil else {
+      claimedInitialFocus = false
+      return
+    }
+    claimInitialFocusIfNeeded()
+  }
+
+  private var claimedInitialFocus = false
+
+  func claimInitialFocusIfNeeded() {
+    guard !claimedInitialFocus, window != nil else { return }
+    claimedInitialFocus = true
+    DispatchQueue.main.async { [weak self] in
+      DispatchQueue.main.async {
+        guard let self, let window = self.window else { return }
+        window.makeFirstResponder(self)
+      }
+    }
+  }
+
   private func configureEditor() {
     editor.isBordered = true
     editor.isBezeled = true
@@ -108,6 +159,20 @@ final class SpreadsheetGridNSView: NSView {
     editor.delegate = self
     editor.isHidden = true
     addSubview(editor)
+
+    editorCaretObserver = NotificationCenter.default.addObserver(
+      forName: NSTextView.didChangeSelectionNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] note in
+      guard let self, self.isEditorActive, !self.isApplyingFormulaAttributes,
+            let textView = note.object as? NSTextView,
+            self.editor.currentEditor() === textView
+      else { return }
+      // Only update which ref is focused for grid borders — do not rewrite
+      // attributed text here (that retriggers selection and freezes the app).
+      self.viewModel?.updateFormulaHighlightFocus(atUTF16: textView.selectedRange.location)
+    }
   }
 
   // MARK: - Layout helpers
@@ -122,16 +187,132 @@ final class SpreadsheetGridNSView: NSView {
     return sheet.rowHeight(for: row, default: Self.defaultRowHeight)
   }
 
+  private func frozenColumnCount() -> Int {
+    viewModel?.activeSheet.frozenColumns ?? 0
+  }
+
+  private func frozenRowCount() -> Int {
+    viewModel?.activeSheet.frozenRows ?? 0
+  }
+
+  private func frozenColumnBoundaryX() -> CGFloat {
+    let frozen = frozenColumnCount()
+    guard frozen > 0 else { return Self.headerSize }
+    return Self.headerSize + columnOffsets()[frozen]
+  }
+
+  private func frozenRowBoundaryY() -> CGFloat {
+    let frozen = frozenRowCount()
+    guard frozen > 0 else { return Self.headerSize }
+    return Self.headerSize + rowOffsets()[frozen]
+  }
+
+  private func headerColumnIndices() -> [Int] {
+    let frozen = frozenColumnCount()
+    var columns: [Int] = []
+    if frozen > 0 {
+      for col in 0..<frozen where shouldDrawColumnHeader(col) {
+        columns.append(col)
+      }
+    }
+    for col in visibleColumnRange() where col >= frozen && shouldDrawColumnHeader(col) {
+      columns.append(col)
+    }
+    return columns
+  }
+
+  private func headerRowIndices() -> [Int] {
+    let frozen = frozenRowCount()
+    var rows: [Int] = []
+    if frozen > 0 {
+      for row in 0..<frozen where shouldDrawRowHeader(row) {
+        rows.append(row)
+      }
+    }
+    for row in visibleRowRange() where row >= frozen && shouldDrawRowHeader(row) {
+      rows.append(row)
+    }
+    return rows
+  }
+
+  private func invalidateLayoutCache() {
+    cachedColumnOffsets = nil
+    cachedRowOffsets = nil
+    cachedColumnCount = 0
+    cachedRowCount = 0
+  }
+
+  private func columnOffsets() -> [CGFloat] {
+    let count = columnCount()
+    if let cached = cachedColumnOffsets, cachedColumnCount == count {
+      return cached
+    }
+    var offsets = [CGFloat](repeating: 0, count: count + 1)
+    for col in 0..<count {
+      offsets[col + 1] = offsets[col] + columnWidth(at: col)
+    }
+    cachedColumnOffsets = offsets
+    cachedColumnCount = count
+    return offsets
+  }
+
+  private func rowOffsets() -> [CGFloat] {
+    let count = rowCount()
+    if let cached = cachedRowOffsets, cachedRowCount == count {
+      return cached
+    }
+    var offsets = [CGFloat](repeating: 0, count: count + 1)
+    for row in 0..<count {
+      offsets[row + 1] = offsets[row] + rowHeight(at: row)
+    }
+    cachedRowOffsets = offsets
+    cachedRowCount = count
+    return offsets
+  }
+
+  private func indexAtOffset(_ offsets: [CGFloat], position: CGFloat, lowerBound: Int, upperBound: Int) -> Int {
+    guard upperBound > lowerBound else { return lowerBound }
+    var lo = lowerBound
+    var hi = upperBound - 1
+    while lo < hi {
+      let mid = (lo + hi + 1) / 2
+      if offsets[mid] <= position {
+        lo = mid
+      } else {
+        hi = mid - 1
+      }
+    }
+    return lo
+  }
+
+  private func widthOfColumns(from: Int, to: Int) -> CGFloat {
+    guard to > from else { return 0 }
+    let offsets = columnOffsets()
+    return offsets[to] - offsets[from]
+  }
+
+  private func heightOfRows(from: Int, to: Int) -> CGFloat {
+    guard to > from else { return 0 }
+    let offsets = rowOffsets()
+    return offsets[to] - offsets[from]
+  }
+
   private func xForColumn(_ col: Int) -> CGFloat {
-    var x = Self.headerSize
-    for c in 0..<col { x += columnWidth(at: c) }
-    return x
+    let offsets = columnOffsets()
+    let modelX = offsets[col]
+    if col < frozenColumnCount() {
+      return Self.headerSize + modelX
+    }
+    return Self.headerSize + modelX - scrollOrigin.x
   }
 
   private func yForRow(_ row: Int) -> CGFloat {
-    var y = Self.headerSize
-    for r in 0..<row { y += rowHeight(at: r) }
-    return y
+    let offsets = rowOffsets()
+    let modelY = offsets[row]
+    if row < frozenRowCount() {
+      return Self.headerSize + modelY
+    }
+    return Self.headerSize + modelY - scrollOrigin.y
   }
 
   private func rowCount() -> Int {
@@ -143,38 +324,63 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func columnAtContent(x: CGFloat) -> Int {
-    var remaining = x - Self.headerSize + scrollOrigin.x
-    guard remaining >= 0 else { return 0 }
-    var col = 0
-    while col < columnCount() {
-      let width = columnWidth(at: col)
-      if remaining < width { return col }
-      remaining -= width
-      col += 1
+    let count = columnCount()
+    let offsets = columnOffsets()
+    let frozen = frozenColumnCount()
+    let frozenEndX = frozenColumnBoundaryX()
+
+    if x < frozenEndX {
+      let position = max(0, x - Self.headerSize)
+      return indexAtOffset(offsets, position: position, lowerBound: 0, upperBound: frozen)
     }
-    return columnCount() - 1
+
+    let position = max(0, x - Self.headerSize + scrollOrigin.x)
+    return indexAtOffset(offsets, position: position, lowerBound: frozen, upperBound: count)
   }
 
   private func rowAtContent(y: CGFloat) -> Int {
-    var remaining = y - Self.headerSize + scrollOrigin.y
-    guard remaining >= 0 else { return 0 }
-    var row = 0
-    while row < rowCount() {
-      let height = rowHeight(at: row)
-      if remaining < height { return row }
-      remaining -= height
-      row += 1
+    let count = rowCount()
+    let offsets = rowOffsets()
+    let frozen = frozenRowCount()
+    let frozenEndY = frozenRowBoundaryY()
+
+    if y < frozenEndY {
+      let position = max(0, y - Self.headerSize)
+      return indexAtOffset(offsets, position: position, lowerBound: 0, upperBound: frozen)
     }
-    return rowCount() - 1
+
+    let position = max(0, y - Self.headerSize + scrollOrigin.y)
+    return indexAtOffset(offsets, position: position, lowerBound: frozen, upperBound: count)
   }
 
   private func rectForCell(row: Int, col: Int) -> NSRect {
     NSRect(
-      x: xForColumn(col) - scrollOrigin.x,
-      y: yForRow(row) - scrollOrigin.y,
+      x: xForColumn(col),
+      y: yForRow(row),
       width: columnWidth(at: col),
       height: rowHeight(at: row)
     )
+  }
+
+  private func fillHandleRect() -> NSRect? {
+    guard let viewModel, !viewModel.isEditing, !isEditorActive else { return nil }
+    guard !viewModel.hasMultipleSelectionRanges else { return nil }
+    let range = viewModel.selectionRange.normalized
+    guard visibleRowRange().contains(range.maxRow),
+          visibleColumnRange().contains(range.maxCol) else { return nil }
+    let cell = rectForCell(row: range.maxRow, col: range.maxCol)
+    guard isCellRectInContentArea(cell) else { return nil }
+    return NSRect(
+      x: cell.maxX - fillHandleSize + 1,
+      y: cell.maxY - fillHandleSize + 1,
+      width: fillHandleSize,
+      height: fillHandleSize
+    )
+  }
+
+  private func isPointInFillHandle(_ point: NSPoint) -> Bool {
+    guard let rect = fillHandleRect() else { return false }
+    return rect.insetBy(dx: -2, dy: -2).contains(point)
   }
 
   private func isCellRectInContentArea(_ rect: NSRect) -> Bool {
@@ -199,17 +405,23 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func totalContentSize() -> NSSize {
-    var width = Self.headerSize
-    for col in 0..<columnCount() { width += columnWidth(at: col) }
-    var height = Self.headerSize
-    for row in 0..<rowCount() { height += rowHeight(at: row) }
-    return NSSize(width: width, height: height)
+    let colOffsets = columnOffsets()
+    let rowOff = rowOffsets()
+    return NSSize(
+      width: Self.headerSize + colOffsets[columnCount()],
+      height: Self.headerSize + rowOff[rowCount()]
+    )
   }
 
   private func clampScrollOrigin() {
-    let content = totalContentSize()
-    let maxX = max(0, content.width - bounds.width)
-    let maxY = max(0, content.height - bounds.height)
+    let frozenCols = frozenColumnCount()
+    let frozenRows = frozenRowCount()
+    let scrollableWidth = widthOfColumns(from: frozenCols, to: columnCount())
+    let scrollableHeight = heightOfRows(from: frozenRows, to: rowCount())
+    let visibleScrollableWidth = max(0, contentRect.width - widthOfColumns(from: 0, to: frozenCols))
+    let visibleScrollableHeight = max(0, contentRect.height - heightOfRows(from: 0, to: frozenRows))
+    let maxX = max(0, scrollableWidth - visibleScrollableWidth)
+    let maxY = max(0, scrollableHeight - visibleScrollableHeight)
     scrollOrigin.x = min(max(0, scrollOrigin.x), maxX)
     scrollOrigin.y = min(max(0, scrollOrigin.y), maxY)
   }
@@ -252,7 +464,7 @@ final class SpreadsheetGridNSView: NSView {
 
   private func columnHeaderRect(for col: Int) -> NSRect {
     NSRect(
-      x: xForColumn(col) - scrollOrigin.x,
+      x: xForColumn(col),
       y: 0,
       width: columnWidth(at: col),
       height: Self.headerSize
@@ -262,10 +474,24 @@ final class SpreadsheetGridNSView: NSView {
   private func rowHeaderRect(for row: Int) -> NSRect {
     NSRect(
       x: 0,
-      y: yForRow(row) - scrollOrigin.y,
+      y: yForRow(row),
       width: Self.headerSize,
       height: rowHeight(at: row)
     )
+  }
+
+  private func shouldDrawColumnHeader(_ col: Int) -> Bool {
+    let rect = columnHeaderRect(for: col)
+    guard rect.maxX > Self.headerSize, rect.minX < bounds.width else { return false }
+    if col < frozenColumnCount() { return true }
+    return rect.minX >= Self.headerSize && rect.minX >= frozenColumnBoundaryX()
+  }
+
+  private func shouldDrawRowHeader(_ row: Int) -> Bool {
+    let rect = rowHeaderRect(for: row)
+    guard rect.maxY > Self.headerSize, rect.minY < bounds.height else { return false }
+    if row < frozenRowCount() { return true }
+    return rect.minY >= Self.headerSize && rect.minY >= frozenRowBoundaryY()
   }
 
   private func resizeTarget(at point: NSPoint) -> ResizeTarget? {
@@ -308,6 +534,10 @@ final class SpreadsheetGridNSView: NSView {
 
   private func updateCursor(for point: NSPoint) {
     guard activeResize == nil else { return }
+    if isPointInFillHandle(point) {
+      NSCursor.crosshair.set()
+      return
+    }
     switch resizeTarget(at: point) {
     case .column:
       NSCursor.resizeLeftRight.set()
@@ -386,21 +616,125 @@ final class SpreadsheetGridNSView: NSView {
       drawGridLines(in: dirtyRect)
       drawCells(in: dirtyRect)
       drawSelection(in: dirtyRect)
+      drawFormulaReferenceHighlights(in: dirtyRect)
       ctx.restoreGraphicsState()
     }
 
-    // 2. Sticky headers drawn on top so scrolled cell text cannot bleed through.
+    // 2. Frozen panes redrawn on top so scrolled content cannot bleed through.
+    if frozenRowCount() > 0 || frozenColumnCount() > 0 {
+      if let ctx = NSGraphicsContext.current {
+        ctx.saveGraphicsState()
+        NSBezierPath(rect: contentRect).addClip()
+        drawFrozenGridLines(in: dirtyRect)
+        drawFrozenCells(in: dirtyRect)
+        ctx.restoreGraphicsState()
+      }
+    }
+
+    // 2.5 Opaque header gutters so scrolled cells cannot bleed into labels.
+    NSColor.controlBackgroundColor.setFill()
+    if dirtyRect.intersects(NSRect(x: 0, y: 0, width: bounds.width, height: Self.headerSize)) {
+      NSRect(x: 0, y: 0, width: bounds.width, height: Self.headerSize).fill()
+    }
+    if dirtyRect.intersects(NSRect(x: 0, y: 0, width: Self.headerSize, height: bounds.height)) {
+      NSRect(x: 0, y: 0, width: Self.headerSize, height: bounds.height).fill()
+    }
+
+    // 3. Sticky headers drawn on top so scrolled cell text cannot bleed through.
     drawStickyHeaders(in: dirtyRect)
+    drawFreezeDividers(in: dirtyRect)
+    drawHeaderCorner(in: dirtyRect)
+  }
+
+  private enum GridLineRegion {
+    case scrollable
+    case frozenCorner
+    case frozenTop
+    case frozenLeft
+  }
+
+  private func columnIncludedInGridLines(_ col: Int, region: GridLineRegion, frozenCols: Int) -> Bool {
+    switch region {
+    case .scrollable: col >= frozenCols
+    case .frozenCorner, .frozenLeft: col < frozenCols
+    case .frozenTop: col >= frozenCols
+    }
+  }
+
+  private func rowIncludedInGridLines(_ row: Int, region: GridLineRegion, frozenRows: Int) -> Bool {
+    switch region {
+    case .scrollable: row >= frozenRows
+    case .frozenCorner, .frozenTop: row < frozenRows
+    case .frozenLeft: row >= frozenRows
+    }
+  }
+
+  private func scrollableCellsClipRect() -> NSRect {
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let top = frozenRows > 0 ? frozenRowBoundaryY() : contentRect.minY
+    let left = frozenCols > 0 ? frozenColumnBoundaryX() : contentRect.minX
+    return NSRect(
+      x: max(contentRect.minX, left),
+      y: max(contentRect.minY, top),
+      width: max(0, contentRect.maxX - max(contentRect.minX, left)),
+      height: max(0, contentRect.maxY - max(contentRect.minY, top))
+    )
+  }
+
+  private func frozenCellsClipRect() -> NSRect {
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    guard frozenRows > 0, frozenCols > 0 else { return .zero }
+    return NSRect(
+      x: contentRect.minX,
+      y: contentRect.minY,
+      width: max(0, frozenColumnBoundaryX() - contentRect.minX),
+      height: max(0, frozenRowBoundaryY() - contentRect.minY)
+    )
+  }
+
+  private func frozenTopStripClipRect() -> NSRect {
+    let frozenRows = frozenRowCount()
+    guard frozenRows > 0 else { return .zero }
+    let left = frozenColumnCount() > 0 ? frozenColumnBoundaryX() : contentRect.minX
+    return NSRect(
+      x: max(contentRect.minX, left),
+      y: contentRect.minY,
+      width: max(0, contentRect.maxX - max(contentRect.minX, left)),
+      height: max(0, frozenRowBoundaryY() - contentRect.minY)
+    )
+  }
+
+  private func frozenLeftStripClipRect() -> NSRect {
+    let frozenCols = frozenColumnCount()
+    guard frozenCols > 0 else { return .zero }
+    let top = frozenRowCount() > 0 ? frozenRowBoundaryY() : contentRect.minY
+    return NSRect(
+      x: contentRect.minX,
+      y: max(contentRect.minY, top),
+      width: max(0, frozenColumnBoundaryX() - contentRect.minX),
+      height: max(0, contentRect.maxY - max(contentRect.minY, top))
+    )
   }
 
   private func drawStickyHeaders(in dirtyRect: NSRect) {
     let headerFill = NSColor.controlBackgroundColor
     let headerText = NSColor.secondaryLabelColor
+    let selectionFill = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12)
+    let accent = NSColor.controlAccentColor
     let gridLine = headerLineColor()
     let attrs: [NSAttributedString.Key: Any] = [
       .font: NSFont.systemFont(ofSize: 11, weight: .medium),
       .foregroundColor: headerText,
     ]
+    let isSheetSelection = viewModel?.selectionAxis == .sheet
+    let isColumnSelected: (Int) -> Bool = { [self] col in
+      self.viewModel?.isColumnInSelection(col) ?? false
+    }
+    let isRowSelected: (Int) -> Bool = { [self] row in
+      self.viewModel?.isRowInSelection(row) ?? false
+    }
 
     // Opaque header bands (cover any scrolled cell text underneath).
     let topBand = NSRect(x: 0, y: 0, width: bounds.width, height: Self.headerSize)
@@ -415,139 +749,395 @@ final class SpreadsheetGridNSView: NSView {
     }
 
     // Column headers (fixed vertically, scroll horizontally).
-    let colRange = visibleColumnRange()
-    for col in colRange {
-      let cellX = xForColumn(col) - scrollOrigin.x
-      let rect = NSRect(x: cellX, y: 0, width: columnWidth(at: col), height: Self.headerSize)
-      guard rect.maxX > Self.headerSize, dirtyRect.intersects(rect) else { continue }
+    NSGraphicsContext.saveGraphicsState()
+    let columnHeaderClip = NSRect(
+      x: Self.headerSize,
+      y: 0,
+      width: max(0, bounds.width - Self.headerSize),
+      height: Self.headerSize
+    )
+    NSBezierPath(rect: columnHeaderClip).addClip()
+    if frozenColumnCount() > 0 {
+      let frozenHeaderBand = NSRect(
+        x: Self.headerSize,
+        y: 0,
+        width: max(0, frozenColumnBoundaryX() - Self.headerSize),
+        height: Self.headerSize
+      )
       headerFill.setFill()
-      rect.fill()
+      frozenHeaderBand.fill()
+      let scrollableHeaderBand = NSRect(
+        x: frozenColumnBoundaryX(),
+        y: 0,
+        width: max(0, bounds.width - frozenColumnBoundaryX()),
+        height: Self.headerSize
+      )
+      scrollableHeaderBand.fill()
+    }
+    if isSheetSelection, dirtyRect.intersects(columnHeaderClip) {
+      selectionFill.setFill()
+      columnHeaderClip.fill()
+      accent.setStroke()
+      let border = NSBezierPath()
+      border.lineWidth = 2
+      border.move(to: NSPoint(x: columnHeaderClip.minX, y: columnHeaderClip.maxY - 1))
+      border.line(to: NSPoint(x: columnHeaderClip.maxX, y: columnHeaderClip.maxY - 1))
+      border.stroke()
+    }
+    let colRange = headerColumnIndices()
+    for col in colRange {
+      let rect = columnHeaderRect(for: col)
+      let drawRect = rect.intersection(columnHeaderClip)
+      guard !drawRect.isEmpty, dirtyRect.intersects(drawRect) else { continue }
+      if !isSheetSelection {
+        let isSelected = isColumnSelected(col)
+        (isSelected ? selectionFill : headerFill).setFill()
+        drawRect.fill()
+      }
       let label = A1Notation.columnLabel(for: col) as NSString
       let size = label.size(withAttributes: attrs)
       label.draw(
-        at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+        at: NSPoint(x: drawRect.midX - size.width / 2, y: drawRect.midY - size.height / 2),
         withAttributes: attrs
       )
+      if !isSheetSelection {
+        let isSelected = isColumnSelected(col)
+        if isSelected {
+          accent.setStroke()
+          let border = NSBezierPath()
+          border.lineWidth = 2
+          border.move(to: NSPoint(x: drawRect.minX + 0.5, y: drawRect.maxY - 1))
+          border.line(to: NSPoint(x: drawRect.maxX - 0.5, y: drawRect.maxY - 1))
+          border.stroke()
+        }
+      }
       gridLine.setStroke()
-      NSBezierPath.strokeLine(from: NSPoint(x: rect.maxX, y: 0), to: NSPoint(x: rect.maxX, y: rect.maxY))
+      let boundaryX = frozenColumnBoundaryX()
+      if abs(rect.maxX - boundaryX) > 0.5 {
+        NSBezierPath.strokeLine(from: NSPoint(x: rect.maxX, y: 0), to: NSPoint(x: rect.maxX, y: Self.headerSize))
+      }
     }
+    NSGraphicsContext.restoreGraphicsState()
 
     // Row headers (fixed horizontally, scroll vertically).
-    let rowRange = visibleRowRange()
-    for row in rowRange {
-      let cellY = yForRow(row) - scrollOrigin.y
-      let rect = NSRect(x: 0, y: cellY, width: Self.headerSize, height: rowHeight(at: row))
-      guard rect.maxY > Self.headerSize, dirtyRect.intersects(rect) else { continue }
+    NSGraphicsContext.saveGraphicsState()
+    let rowHeaderClip = NSRect(
+      x: 0,
+      y: Self.headerSize,
+      width: Self.headerSize,
+      height: max(0, bounds.height - Self.headerSize)
+    )
+    NSBezierPath(rect: rowHeaderClip).addClip()
+    if frozenRowCount() > 0 {
+      let frozenHeaderBand = NSRect(
+        x: 0,
+        y: Self.headerSize,
+        width: Self.headerSize,
+        height: max(0, frozenRowBoundaryY() - Self.headerSize)
+      )
       headerFill.setFill()
-      rect.fill()
+      frozenHeaderBand.fill()
+      let scrollableHeaderBand = NSRect(
+        x: 0,
+        y: frozenRowBoundaryY(),
+        width: Self.headerSize,
+        height: max(0, bounds.height - frozenRowBoundaryY())
+      )
+      scrollableHeaderBand.fill()
+    }
+    if isSheetSelection, dirtyRect.intersects(rowHeaderClip) {
+      selectionFill.setFill()
+      rowHeaderClip.fill()
+      accent.setStroke()
+      let border = NSBezierPath()
+      border.lineWidth = 2
+      border.move(to: NSPoint(x: rowHeaderClip.maxX - 1, y: rowHeaderClip.minY))
+      border.line(to: NSPoint(x: rowHeaderClip.maxX - 1, y: rowHeaderClip.maxY))
+      border.stroke()
+    }
+    let rowRange = headerRowIndices()
+    for row in rowRange {
+      let rect = rowHeaderRect(for: row)
+      let drawRect = rect.intersection(rowHeaderClip)
+      guard !drawRect.isEmpty, dirtyRect.intersects(drawRect) else { continue }
+      if !isSheetSelection {
+        let isSelected = isRowSelected(row)
+        (isSelected ? selectionFill : headerFill).setFill()
+        drawRect.fill()
+      }
       let label = "\(row + 1)" as NSString
       let size = label.size(withAttributes: attrs)
       label.draw(
-        at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+        at: NSPoint(x: drawRect.midX - size.width / 2, y: drawRect.midY - size.height / 2),
         withAttributes: attrs
       )
+      if !isSheetSelection {
+        let isSelected = isRowSelected(row)
+        if isSelected {
+          accent.setStroke()
+          let border = NSBezierPath()
+          border.lineWidth = 2
+          border.move(to: NSPoint(x: drawRect.maxX - 1, y: drawRect.minY + 0.5))
+          border.line(to: NSPoint(x: drawRect.maxX - 1, y: drawRect.maxY - 0.5))
+          border.stroke()
+        }
+      }
       gridLine.setStroke()
-      NSBezierPath.strokeLine(from: NSPoint(x: 0, y: rect.maxY), to: NSPoint(x: rect.maxX, y: rect.maxY))
+      let boundaryY = frozenRowBoundaryY()
+      if abs(rect.maxY - boundaryY) > 0.5 {
+        NSBezierPath.strokeLine(from: NSPoint(x: 0, y: rect.maxY), to: NSPoint(x: Self.headerSize, y: rect.maxY))
+      }
     }
-
-    // Corner border.
-    let corner = NSRect(x: 0, y: 0, width: Self.headerSize, height: Self.headerSize)
-    if dirtyRect.intersects(corner) {
-      gridLine.setStroke()
-      NSBezierPath.strokeLine(from: NSPoint(x: corner.maxX, y: 0), to: NSPoint(x: corner.maxX, y: corner.maxY))
-      NSBezierPath.strokeLine(from: NSPoint(x: 0, y: corner.maxY), to: NSPoint(x: corner.maxX, y: corner.maxY))
-    }
+    NSGraphicsContext.restoreGraphicsState()
   }
 
-  private func drawGridLines(in dirtyRect: NSRect) {
+  private func drawHeaderCorner(in dirtyRect: NSRect) {
+    let headerFill = NSColor.controlBackgroundColor
+    let selectionFill = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12)
+    let isSheetSelection = viewModel?.selectionAxis == .sheet
+    let gridLine = headerLineColor()
+
+    let corner = NSRect(x: 0, y: 0, width: Self.headerSize, height: Self.headerSize)
+    guard dirtyRect.intersects(corner) else { return }
+    (isSheetSelection ? selectionFill : headerFill).setFill()
+    corner.fill()
+    gridLine.setStroke()
+    NSBezierPath.strokeLine(from: NSPoint(x: corner.maxX, y: 0), to: NSPoint(x: corner.maxX, y: corner.maxY))
+    NSBezierPath.strokeLine(from: NSPoint(x: 0, y: corner.maxY), to: NSPoint(x: corner.maxX, y: corner.maxY))
+  }
+
+  private func drawGridLinesInClip(
+    dirtyRect: NSRect,
+    region: GridLineRegion,
+    clipRect: NSRect
+  ) {
+    guard !clipRect.isEmpty else { return }
+
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let frozenBoundaryX = frozenColumnBoundaryX()
+    let frozenBoundaryY = frozenRowBoundaryY()
+
     gridLineColor().setStroke()
     let path = NSBezierPath()
     path.lineWidth = 0.5
     let content = contentRect
 
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(rect: clipRect).addClip()
+
     let colRange = visibleColumnRange()
     for col in colRange {
-      let x = xForColumn(col) - scrollOrigin.x
+      guard columnIncludedInGridLines(col, region: region, frozenCols: frozenCols) else { continue }
+      let x = xForColumn(col)
+      let maxX = x + columnWidth(at: col)
+      if region == .scrollable, x < frozenBoundaryX - 0.5 { continue }
+      if region == .frozenCorner || region == .frozenLeft, maxX > frozenBoundaryX + 0.5 { continue }
       path.move(to: NSPoint(x: x, y: content.minY))
       path.line(to: NSPoint(x: x, y: content.maxY))
-      let maxX = x + columnWidth(at: col)
       path.move(to: NSPoint(x: maxX, y: content.minY))
       path.line(to: NSPoint(x: maxX, y: content.maxY))
     }
 
     let rowRange = visibleRowRange()
     for row in rowRange {
-      let y = yForRow(row) - scrollOrigin.y
+      guard rowIncludedInGridLines(row, region: region, frozenRows: frozenRows) else { continue }
+      let y = yForRow(row)
+      let maxY = y + rowHeight(at: row)
+      if region == .scrollable, y < frozenBoundaryY - 0.5 { continue }
+      if region == .frozenCorner || region == .frozenTop, maxY > frozenBoundaryY + 0.5 { continue }
       path.move(to: NSPoint(x: content.minX, y: y))
       path.line(to: NSPoint(x: content.maxX, y: y))
-      let maxY = y + rowHeight(at: row)
       path.move(to: NSPoint(x: content.minX, y: maxY))
       path.line(to: NSPoint(x: content.maxX, y: maxY))
     }
     path.stroke()
+    NSGraphicsContext.restoreGraphicsState()
+  }
+
+  private func drawGridLines(in dirtyRect: NSRect) {
+    drawGridLinesInClip(
+      dirtyRect: dirtyRect,
+      region: .scrollable,
+      clipRect: scrollableCellsClipRect()
+    )
+  }
+
+  private func drawFrozenGridLines(in dirtyRect: NSRect) {
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    guard frozenRows > 0 || frozenCols > 0 else { return }
+
+    if frozenRows > 0 && frozenCols > 0 {
+      drawGridLinesInClip(dirtyRect: dirtyRect, region: .frozenCorner, clipRect: frozenCellsClipRect())
+    }
+    if frozenRows > 0 {
+      drawGridLinesInClip(dirtyRect: dirtyRect, region: .frozenTop, clipRect: frozenTopStripClipRect())
+    }
+    if frozenCols > 0 {
+      drawGridLinesInClip(dirtyRect: dirtyRect, region: .frozenLeft, clipRect: frozenLeftStripClipRect())
+    }
+  }
+
+  private func drawCell(
+    _ cell: Cell,
+    at address: CellAddress,
+    in dirtyRect: NSRect,
+    viewModel: SpreadsheetViewModel
+  ) {
+    let rect = rectForCell(row: address.row, col: address.col)
+    guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { return }
+    if cell.raw.isEmpty && cell.format?.fillColor == nil { return }
+    if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { return }
+
+    if let fill = CellFormatRenderer.fillColor(for: cell.format) {
+      fill.setFill()
+      rect.fill()
+    }
+
+    guard !cell.raw.isEmpty else { return }
+
+    let value = viewModel.displayValue(at: address)
+    let text = viewModel.displayString(at: address)
+    let textRect = rect.insetBy(dx: 4, dy: 2)
+    guard textRect.width > 1, textRect.height > 1 else { return }
+
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(rect: rect).addClip()
+    if value.isError {
+      var errorFormat = cell.format ?? CellFormat()
+      errorFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
+      CellFormatRenderer.drawText(text, in: textRect, format: errorFormat)
+    } else {
+      CellFormatRenderer.drawText(text, in: textRect, format: cell.format)
+    }
+    NSGraphicsContext.restoreGraphicsState()
   }
 
   private func drawCells(in dirtyRect: NSRect) {
     guard let viewModel else { return }
     let sheet = viewModel.activeSheet
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
 
     let colRange = visibleColumnRange()
     let rowRange = visibleRowRange()
 
-    for (address, cell) in sheet.cells where
-      rowRange.contains(address.row) &&
-      colRange.contains(address.col)
-    {
-      let rect = rectForCell(row: address.row, col: address.col)
-      guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
-      if cell.raw.isEmpty && cell.format?.fillColor == nil { continue }
-      if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
-
-      if let fill = CellFormatRenderer.fillColor(for: cell.format) {
-        fill.setFill()
-        rect.fill()
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(rect: scrollableCellsClipRect()).addClip()
+    for row in rowRange where row >= frozenRows {
+      for col in colRange where col >= frozenCols {
+        let address = CellAddress(row: row, col: col)
+        guard let cell = sheet.cells[address] else { continue }
+        drawCell(cell, at: address, in: dirtyRect, viewModel: viewModel)
       }
+    }
+    NSGraphicsContext.restoreGraphicsState()
+  }
 
-      guard !cell.raw.isEmpty else { continue }
+  private func drawFrozenRegionCells(
+    in dirtyRect: NSRect,
+    rowRange: ClosedRange<Int>,
+    colRange: ClosedRange<Int>,
+    clipRect: NSRect,
+    viewModel: SpreadsheetViewModel,
+    sheet: Sheet
+  ) {
+    guard !clipRect.isEmpty, !rowRange.isEmpty, !colRange.isEmpty else { return }
 
-      let text = CellFormatRenderer.displayText(raw: cell.raw, format: cell.format)
-      let textRect = rect.insetBy(dx: 4, dy: 2)
-      guard textRect.width > 1, textRect.height > 1 else { continue }
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(rect: clipRect).addClip()
+    for row in rowRange {
+      for col in colRange {
+        let address = CellAddress(row: row, col: col)
+        guard let cell = sheet.cells[address] else { continue }
+        drawCell(cell, at: address, in: dirtyRect, viewModel: viewModel)
+      }
+    }
+    NSGraphicsContext.restoreGraphicsState()
+  }
 
-      NSGraphicsContext.saveGraphicsState()
-      NSBezierPath(rect: rect).addClip()
-      CellFormatRenderer.drawText(text, in: textRect, format: cell.format)
-      NSGraphicsContext.restoreGraphicsState()
+  private func drawFrozenCells(in dirtyRect: NSRect) {
+    guard let viewModel else { return }
+    let sheet = viewModel.activeSheet
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let visibleRows = visibleRowRange()
+    let visibleCols = visibleColumnRange()
+
+    if frozenRows > 0 && frozenCols > 0 {
+      drawFrozenRegionCells(
+        in: dirtyRect,
+        rowRange: 0...(frozenRows - 1),
+        colRange: 0...(frozenCols - 1),
+        clipRect: frozenCellsClipRect(),
+        viewModel: viewModel,
+        sheet: sheet
+      )
+    }
+    if frozenRows > 0 {
+      let colLower = max(visibleCols.lowerBound, frozenCols)
+      if colLower <= visibleCols.upperBound {
+        drawFrozenRegionCells(
+          in: dirtyRect,
+          rowRange: 0...(frozenRows - 1),
+          colRange: colLower...visibleCols.upperBound,
+          clipRect: frozenTopStripClipRect(),
+          viewModel: viewModel,
+          sheet: sheet
+        )
+      }
+    }
+    if frozenCols > 0 {
+      let rowLower = max(visibleRows.lowerBound, frozenRows)
+      if rowLower <= visibleRows.upperBound {
+        drawFrozenRegionCells(
+          in: dirtyRect,
+          rowRange: rowLower...visibleRows.upperBound,
+          colRange: 0...(frozenCols - 1),
+          clipRect: frozenLeftStripClipRect(),
+          viewModel: viewModel,
+          sheet: sheet
+        )
+      }
     }
   }
 
   private func drawSelection(in dirtyRect: NSRect) {
     guard let viewModel else { return }
-    let range = viewModel.selectionRange.normalized
+    let visibleRows = visibleRowRange()
+    let visibleCols = visibleColumnRange()
+    let ranges = viewModel.selectionRanges
+    let isMulti = ranges.count > 1
 
-    for row in range.minRow...range.maxRow {
-      for col in range.minCol...range.maxCol {
-        let rect = rectForCell(row: row, col: col)
-        guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
+    for (index, range) in ranges.enumerated() {
+      let n = range.normalized
+      let startRow = max(n.minRow, visibleRows.lowerBound)
+      let endRow = min(n.maxRow, visibleRows.upperBound)
+      let startCol = max(n.minCol, visibleCols.lowerBound)
+      let endCol = min(n.maxCol, visibleCols.upperBound)
+      guard startRow <= endRow, startCol <= endCol else { continue }
+
+      let topLeft = rectForCell(row: startRow, col: startCol)
+      let bottomRight = rectForCell(row: endRow, col: endCol)
+      let fillRect = NSRect(
+        x: topLeft.minX,
+        y: topLeft.minY,
+        width: bottomRight.maxX - topLeft.minX,
+        height: bottomRight.maxY - topLeft.minY
+      )
+      if isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) {
         NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12).setFill()
-        rect.fill()
+        fillRect.fill()
+      }
+
+      if isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) {
+        NSColor.controlAccentColor.setStroke()
+        let border = NSBezierPath(rect: fillRect.insetBy(dx: 0.5, dy: 0.5))
+        border.lineWidth = index == ranges.count - 1 ? 2 : 1.5
+        border.stroke()
       }
     }
-
-    let topLeft = rectForCell(row: range.minRow, col: range.minCol)
-    let bottomRight = rectForCell(row: range.maxRow, col: range.maxCol)
-    let outer = NSRect(
-      x: topLeft.minX,
-      y: topLeft.minY,
-      width: bottomRight.maxX - topLeft.minX,
-      height: bottomRight.maxY - topLeft.minY
-    )
-    guard isCellRectInContentArea(outer), dirtyRect.intersects(outer) else { return }
-
-    NSColor.controlAccentColor.setStroke()
-    let border = NSBezierPath(rect: outer.insetBy(dx: 0.5, dy: 0.5))
-    border.lineWidth = 2
-    border.stroke()
 
     let anchor = rectForCell(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
     if isCellRectInContentArea(anchor) {
@@ -555,21 +1145,129 @@ final class SpreadsheetGridNSView: NSView {
       NSRect(x: anchor.minX, y: anchor.minY, width: 2, height: anchor.height).fill()
       NSRect(x: anchor.minX, y: anchor.minY, width: anchor.width, height: 2).fill()
     }
+
+    if !isMulti {
+      drawFillHandle(in: dirtyRect)
+    }
+  }
+
+  private func drawFillHandle(in dirtyRect: NSRect) {
+    guard let rect = fillHandleRect(), dirtyRect.intersects(rect) else { return }
+    NSColor.controlAccentColor.setFill()
+    NSBezierPath(rect: rect).fill()
+    NSColor.windowBackgroundColor.setStroke()
+    let border = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
+    border.lineWidth = 1
+    border.stroke()
+  }
+
+  private func drawFormulaReferenceHighlights(in dirtyRect: NSRect) {
+    guard let viewModel else { return }
+    let highlights = viewModel.formulaReferenceHighlights
+    guard !highlights.isEmpty else { return }
+
+    let activeSheetName = viewModel.activeSheet.name
+    let visibleRows = visibleRowRange()
+    let visibleCols = visibleColumnRange()
+    let focused = viewModel.focusedFormulaHighlightIndex
+
+    for (index, highlight) in highlights.enumerated() {
+      if let sheet = highlight.sheet,
+         sheet.caseInsensitiveCompare(activeSheetName) != .orderedSame
+      {
+        continue
+      }
+      let n = highlight.cellRange.normalized
+      let startRow = max(n.minRow, visibleRows.lowerBound)
+      let endRow = min(n.maxRow, visibleRows.upperBound)
+      let startCol = max(n.minCol, visibleCols.lowerBound)
+      let endCol = min(n.maxCol, visibleCols.upperBound)
+      guard startRow <= endRow, startCol <= endCol else { continue }
+
+      let topLeft = rectForCell(row: startRow, col: startCol)
+      let bottomRight = rectForCell(row: endRow, col: endCol)
+      let fillRect = NSRect(
+        x: topLeft.minX,
+        y: topLeft.minY,
+        width: bottomRight.maxX - topLeft.minX,
+        height: bottomRight.maxY - topLeft.minY
+      )
+      guard isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) else { continue }
+
+      let color = highlight.color
+      let isFocused = focused == index || (focused == nil && highlights.count == 1)
+      color.withAlphaComponent(isFocused ? 0.16 : 0.08).setFill()
+      fillRect.fill()
+
+      color.setStroke()
+      let border = NSBezierPath(rect: fillRect.insetBy(dx: 0.5, dy: 0.5))
+      border.lineWidth = isFocused ? 2 : 1.5
+      // Sheets-style dashed range outline
+      border.setLineDash([4, 3], count: 2, phase: 0)
+      border.stroke()
+    }
+  }
+
+  private func drawFreezeDividers(in dirtyRect: NSRect) {
+    guard let sheet = viewModel?.activeSheet else { return }
+    let frozenCols = sheet.frozenColumns
+    let frozenRows = sheet.frozenRows
+    guard frozenCols > 0 || frozenRows > 0 else { return }
+
+    let content = contentRect
+    NSColor.separatorColor.withAlphaComponent(0.9).setStroke()
+    if frozenCols > 0 {
+      let x = frozenColumnBoundaryX()
+      let line = NSBezierPath()
+      line.move(to: NSPoint(x: x, y: content.minY))
+      line.line(to: NSPoint(x: x, y: content.maxY))
+      line.lineWidth = 1.5
+      line.stroke()
+    }
+    if frozenRows > 0 {
+      let y = frozenRowBoundaryY()
+      let line = NSBezierPath()
+      line.move(to: NSPoint(x: content.minX, y: y))
+      line.line(to: NSPoint(x: content.maxX, y: y))
+      line.lineWidth = 1.5
+      line.stroke()
+    }
   }
 
   // MARK: - Editor
 
-  func showEditor() {
+  func showEditor(selectAll: Bool = false) {
     guard let viewModel else { return }
     let rect = rectForCell(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
     guard isCellRectInContentArea(rect) else { return }
     isEditorActive = true
+    lastAppliedFormulaHighlightKey = ""
     editor.stringValue = viewModel.editText
     applyEditorFormat(from: viewModel.selectedCell.format)
     updateEditorFrame()
     editor.isHidden = false
     window?.makeFirstResponder(editor)
-    editor.currentEditor()?.selectAll(nil)
+    guard let fieldEditor = editor.currentEditor() else { return }
+    if selectAll {
+      fieldEditor.selectAll(nil)
+    } else {
+      let length = editor.stringValue.utf16.count
+      fieldEditor.selectedRange = NSRange(location: length, length: 0)
+    }
+    applyInCellFormulaAttributes(preserveSelection: true)
+    if let textView = editor.currentEditor() as? NSTextView {
+      viewModel.updateFormulaHighlightFocus(atUTF16: textView.selectedRange.location)
+      // Focus update may arrive before highlights exist; refresh once more next turn.
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.isEditorActive else { return }
+        self.lastAppliedFormulaHighlightKey = ""
+        self.applyInCellFormulaAttributes(preserveSelection: true)
+        if let textView = self.editor.currentEditor() as? NSTextView {
+          self.viewModel?.updateFormulaHighlightFocus(atUTF16: textView.selectedRange.location)
+        }
+        self.needsDisplay = true
+      }
+    }
   }
 
   private func applyEditorFormat(from format: CellFormat?) {
@@ -581,16 +1279,62 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
+  private func applyInCellFormulaAttributes(preserveSelection: Bool) {
+    guard !isApplyingFormulaAttributes else { return }
+    guard let viewModel, FormulaSyntax.isFormula(editor.stringValue) else {
+      lastAppliedFormulaHighlightKey = ""
+      return
+    }
+
+    let key = "\(editor.stringValue)|\(viewModel.focusedFormulaHighlightIndex ?? -1)|\(viewModel.formulaHighlightRevision)"
+    guard key != lastAppliedFormulaHighlightKey else { return }
+    lastAppliedFormulaHighlightKey = key
+
+    isApplyingFormulaAttributes = true
+    defer { isApplyingFormulaAttributes = false }
+
+    let font = editor.font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
+    let baseColor = editor.textColor ?? .labelColor
+    let attributed = FormulaReferenceScanner.attributedFormula(
+      editor.stringValue,
+      highlights: viewModel.formulaReferenceHighlights,
+      focusedIndex: viewModel.focusedFormulaHighlightIndex,
+      baseFont: font,
+      baseColor: baseColor
+    )
+    var selected: NSRange?
+    if preserveSelection, let textView = editor.currentEditor() as? NSTextView {
+      selected = textView.selectedRange
+    }
+    editor.attributedStringValue = attributed
+    if let selected, let textView = editor.currentEditor() as? NSTextView {
+      let maxLen = (editor.stringValue as NSString).length
+      let loc = min(selected.location, maxLen)
+      let len = min(selected.length, max(0, maxLen - loc))
+      textView.setSelectedRange(NSRange(location: loc, length: len))
+    }
+  }
+
   func hideEditor(commit: Bool) {
     guard isEditorActive else { return }
+    isEditorActive = false
     if commit, let viewModel {
       viewModel.editText = editor.stringValue
       viewModel.commitEdit()
+    } else {
+      viewModel?.cancelEdit()
     }
     editor.isHidden = true
-    isEditorActive = false
     window?.makeFirstResponder(self)
     needsDisplay = true
+  }
+
+  private func commitEditorAndMove(rowDelta: Int, colDelta: Int) {
+    guard let viewModel else { return }
+    viewModel.editText = editor.stringValue
+    hideEditor(commit: true)
+    viewModel.moveSelection(rowDelta: rowDelta, colDelta: colDelta)
+    scrollSelectionIntoView()
   }
 
   private func updateEditorFrame() {
@@ -604,13 +1348,47 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   func syncDisplay() {
+    clampScrollOrigin()
     updateEditorFrame()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
 
+  func applyFreezePanesLayout() {
+    invalidateLayoutCache()
+    syncDisplay()
+  }
+
+  func refreshSelectionDisplay() {
+    updateEditorFrame()
+    needsDisplay = true
+  }
+
+  func refreshFormulaHighlights() {
+    needsDisplay = true
+    guard isEditorActive else { return }
+    applyInCellFormulaAttributes(preserveSelection: true)
+  }
+
+  func scrollFocusedFormulaHighlightIntoViewIfNeeded() {
+    guard let viewModel,
+          let index = viewModel.focusedFormulaHighlightIndex,
+          viewModel.formulaReferenceHighlights.indices.contains(index)
+    else { return }
+    let highlight = viewModel.formulaReferenceHighlights[index]
+    if let sheet = highlight.sheet,
+       sheet.caseInsensitiveCompare(viewModel.activeSheet.name) != .orderedSame
+    {
+      return
+    }
+    let address = highlight.start
+    let rect = rectForCell(row: address.row, col: address.col)
+    scrollToVisible(rect.insetBy(dx: -40, dy: -40))
+  }
+
   func reloadContent(resetScrollPosition shouldReset: Bool = false) {
     if shouldReset { scrollOrigin = .zero }
+    invalidateLayoutCache()
     updateEditorFrame()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
@@ -627,6 +1405,20 @@ final class SpreadsheetGridNSView: NSView {
   override func mouseMoved(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
     updateCursor(for: point)
+    updateErrorToolTip(at: point)
+  }
+
+  private func updateErrorToolTip(at point: NSPoint) {
+    guard let viewModel, contentRect.contains(point) else {
+      toolTip = nil
+      return
+    }
+    let address = addressAtContent(point: point)
+    if let error = viewModel.displayValue(at: address).formulaError {
+      toolTip = "\(error.displayCode) — \(error.explanation)"
+    } else {
+      toolTip = nil
+    }
   }
 
   override func cursorUpdate(with event: NSEvent) {
@@ -640,6 +1432,12 @@ final class SpreadsheetGridNSView: NSView {
 
     if isEditorActive { hideEditor(commit: true) }
 
+    if isPointInFillHandle(point) {
+      fillSourceRange = viewModel?.selectionRange
+      isDraggingFill = true
+      return
+    }
+
     if let target = resizeTarget(at: point) {
       if event.clickCount >= 2 {
         switch target {
@@ -648,6 +1446,8 @@ final class SpreadsheetGridNSView: NSView {
         case .row(let row, _, _):
           viewModel?.autoFitRow(row)
         }
+        invalidateLayoutCache()
+        updateEditorFrame()
         needsDisplay = true
         return
       }
@@ -657,15 +1457,26 @@ final class SpreadsheetGridNSView: NSView {
 
     switch headerHit(at: point) {
     case .corner:
-      viewModel?.selectAll()
+      viewModel?.toggleSelectAll()
+      window?.makeFirstResponder(self)
       needsDisplay = true
       return
     case .column(let col):
-      viewModel?.selectColumn(col)
+      if event.modifierFlags.contains(.command) {
+        viewModel?.commandClickColumn(col)
+      } else {
+        viewModel?.selectColumn(col)
+        headerDrag = .columns(anchor: col)
+      }
       needsDisplay = true
       return
     case .row(let row):
-      viewModel?.selectRow(row)
+      if event.modifierFlags.contains(.command) {
+        viewModel?.commandClickRow(row)
+      } else {
+        viewModel?.selectRow(row)
+        headerDrag = .rows(anchor: row)
+      }
       needsDisplay = true
       return
     case .content:
@@ -675,13 +1486,20 @@ final class SpreadsheetGridNSView: NSView {
     guard contentRect.contains(point) else { return }
 
     let address = addressAtContent(point: point)
+    if event.modifierFlags.contains(.command) {
+      viewModel?.commandClickCell(address)
+      needsDisplay = true
+      return
+    }
+
     isDraggingSelection = true
     viewModel?.selectRange(from: address, to: address)
 
     if event.clickCount >= 2 {
       isDraggingSelection = false
+      editorEntryMode = .inCellEdit
       viewModel?.beginEditing()
-      showEditor()
+      showEditor(selectAll: false)
     } else {
       scrollSelectionIntoView()
     }
@@ -699,9 +1517,55 @@ final class SpreadsheetGridNSView: NSView {
         let delta = point.y - startY
         viewModel?.setRowHeight(row, height: startHeight + delta)
       }
+      invalidateLayoutCache()
       window?.invalidateCursorRects(for: self)
       updateEditorFrame()
       needsDisplay = true
+      return
+    }
+
+    if let headerDrag {
+      switch headerDrag {
+      case .columns(let anchor):
+        let col: Int
+        if point.y < Self.headerSize, point.x >= Self.headerSize {
+          col = columnAtContent(x: max(Self.headerSize, min(point.x, bounds.width - 1)))
+        } else if contentRect.contains(point) {
+          col = addressAtContent(point: point).col
+        } else {
+          col = columnAtContent(x: max(Self.headerSize, min(point.x, bounds.width - 1)))
+        }
+        viewModel?.selectColumns(from: anchor, to: col)
+        needsDisplay = true
+        return
+      case .rows(let anchor):
+        let row: Int
+        if point.x < Self.headerSize, point.y >= Self.headerSize {
+          row = rowAtContent(y: max(Self.headerSize, min(point.y, bounds.height - 1)))
+        } else if contentRect.contains(point) {
+          row = addressAtContent(point: point).row
+        } else {
+          row = rowAtContent(y: max(Self.headerSize, min(point.y, bounds.height - 1)))
+        }
+        viewModel?.selectRows(from: anchor, to: row)
+        needsDisplay = true
+        return
+      }
+    }
+
+    if isDraggingFill, let viewModel, let source = fillSourceRange {
+      let clamped = NSPoint(
+        x: max(contentRect.minX, min(point.x, contentRect.maxX - 1)),
+        y: max(contentRect.minY, min(point.y, contentRect.maxY - 1))
+      )
+      let end = addressAtContent(point: clamped)
+      let normalized = source.normalized
+      let fillEnd = CellAddress(
+        row: max(normalized.maxRow, end.row),
+        col: max(normalized.maxCol, end.col)
+      )
+      viewModel.extendSelection(to: fillEnd)
+      scrollSelectionIntoView()
       return
     }
 
@@ -715,12 +1579,32 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func mouseUp(with event: NSEvent) {
+    if isDraggingFill, let viewModel, let source = fillSourceRange {
+      let point = convert(event.locationInWindow, from: nil)
+      let clamped = NSPoint(
+        x: max(contentRect.minX, min(point.x, contentRect.maxX - 1)),
+        y: max(contentRect.minY, min(point.y, contentRect.maxY - 1))
+      )
+      let end = addressAtContent(point: clamped)
+      let normalized = source.normalized
+      if end.row > normalized.maxRow || end.col > normalized.maxCol {
+        viewModel.fillSelection(from: source, to: end)
+      } else {
+        viewModel.selectRange(from: source.start, to: source.end)
+      }
+      isDraggingFill = false
+      fillSourceRange = nil
+      syncDisplay()
+      return
+    }
+
     if activeResize != nil {
       activeResize = nil
       window?.invalidateCursorRects(for: self)
       let point = convert(event.locationInWindow, from: nil)
       updateCursor(for: point)
     }
+    headerDrag = nil
     isDraggingSelection = false
   }
 
@@ -736,11 +1620,22 @@ final class SpreadsheetGridNSView: NSView {
   override func menu(for event: NSEvent) -> NSMenu? {
     let point = convert(event.locationInWindow, from: nil)
 
-    if contentRect.contains(point), let viewModel {
-      let address = addressAtContent(point: point)
-      if !viewModel.selectionRange.contains(address) {
-        viewModel.selectRange(from: address, to: address)
+    if let viewModel {
+      switch headerHit(at: point) {
+      case .row(let row):
+        viewModel.selectRow(row)
         needsDisplay = true
+      case .column(let col):
+        viewModel.selectColumn(col)
+        needsDisplay = true
+      case .content:
+        let address = addressAtContent(point: point)
+        if !viewModel.selectionRange.contains(address) {
+          viewModel.selectRange(from: address, to: address)
+          needsDisplay = true
+        }
+      case .corner:
+        break
       }
     }
 
@@ -754,7 +1649,48 @@ final class SpreadsheetGridNSView: NSView {
     menu.addItem(.separator())
     let selectAll = menu.addItem(withTitle: "Select All", action: #selector(handleMenuSelectAll(_:)), keyEquivalent: "")
     selectAll.target = self
+    menu.addItem(.separator())
+    addStructureMenuItems(to: menu)
     return menu
+  }
+
+  private func addStructureMenuItems(to menu: NSMenu) {
+    guard let viewModel else { return }
+    let axis = viewModel.selectionAxis
+    let showRows = axis != .column
+    let showCols = axis != .row
+
+    if showRows {
+      let insertRowAbove = menu.addItem(withTitle: "Insert Row Above", action: #selector(handleMenuInsertRowAbove(_:)), keyEquivalent: "")
+      insertRowAbove.target = self
+      let insertRowBelow = menu.addItem(withTitle: "Insert Row Below", action: #selector(handleMenuInsertRowBelow(_:)), keyEquivalent: "")
+      insertRowBelow.target = self
+      let deleteRows = menu.addItem(withTitle: "Delete Row(s)", action: #selector(handleMenuDeleteRows(_:)), keyEquivalent: "")
+      deleteRows.target = self
+    }
+
+    if showRows && showCols {
+      menu.addItem(.separator())
+    }
+
+    if showCols {
+      let insertColLeft = menu.addItem(withTitle: "Insert Column Left", action: #selector(handleMenuInsertColumnLeft(_:)), keyEquivalent: "")
+      insertColLeft.target = self
+      let insertColRight = menu.addItem(withTitle: "Insert Column Right", action: #selector(handleMenuInsertColumnRight(_:)), keyEquivalent: "")
+      insertColRight.target = self
+      let deleteCols = menu.addItem(withTitle: "Delete Column(s)", action: #selector(handleMenuDeleteColumns(_:)), keyEquivalent: "")
+      deleteCols.target = self
+    }
+
+    menu.addItem(.separator())
+    let freeze = menu.addItem(withTitle: "Freeze Panes", action: #selector(handleMenuFreezePanes(_:)), keyEquivalent: "")
+    freeze.target = self
+    let freezeRows = menu.addItem(withTitle: "Freeze Rows", action: #selector(handleMenuFreezeRows(_:)), keyEquivalent: "")
+    freezeRows.target = self
+    let freezeCols = menu.addItem(withTitle: "Freeze Columns", action: #selector(handleMenuFreezeColumns(_:)), keyEquivalent: "")
+    freezeCols.target = self
+    let unfreeze = menu.addItem(withTitle: "Unfreeze Panes", action: #selector(handleMenuUnfreezePanes(_:)), keyEquivalent: "")
+    unfreeze.target = self
   }
 
   @objc private func handleMenuCut(_ sender: Any?) {
@@ -778,7 +1714,93 @@ final class SpreadsheetGridNSView: NSView {
     syncDisplay()
   }
 
+  @objc private func handleMenuInsertRowAbove(_ sender: Any?) {
+    viewModel?.insertRowsAbove()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuInsertRowBelow(_ sender: Any?) {
+    viewModel?.insertRowsBelow()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuDeleteRows(_ sender: Any?) {
+    viewModel?.deleteSelectedRows()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuInsertColumnLeft(_ sender: Any?) {
+    viewModel?.insertColumnsLeft()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuInsertColumnRight(_ sender: Any?) {
+    viewModel?.insertColumnsRight()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuDeleteColumns(_ sender: Any?) {
+    viewModel?.deleteSelectedColumns()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuFreezePanes(_ sender: Any?) {
+    guard viewModel?.freezePanesAtSelection() == true else {
+      Self.presentFreezeRequiresOffsetAlert(axis: .both)
+      return
+    }
+    applyFreezePanesLayout()
+  }
+
+  @objc private func handleMenuFreezeRows(_ sender: Any?) {
+    guard viewModel?.freezeRowsAtSelection() == true else {
+      Self.presentFreezeRequiresOffsetAlert(axis: .rows)
+      return
+    }
+    applyFreezePanesLayout()
+  }
+
+  @objc private func handleMenuFreezeColumns(_ sender: Any?) {
+    guard viewModel?.freezeColumnsAtSelection() == true else {
+      Self.presentFreezeRequiresOffsetAlert(axis: .columns)
+      return
+    }
+    applyFreezePanesLayout()
+  }
+
+  @objc private func handleMenuUnfreezePanes(_ sender: Any?) {
+    viewModel?.unfreezePanes()
+    applyFreezePanesLayout()
+  }
+
+  enum FreezeAlertAxis {
+    case both
+    case rows
+    case columns
+  }
+
+  static func presentFreezeRequiresOffsetAlert(axis: FreezeAlertAxis) {
+    let alert = NSAlert()
+    alert.messageText = "Can’t Freeze Panes"
+    switch axis {
+    case .both:
+      alert.informativeText = "Select a cell below or to the right of the rows and columns you want to keep visible, then try again. For example, select B2 to freeze row 1 and column A."
+    case .rows:
+      alert.informativeText = "Select a cell in a lower row first. For example, select A2 to freeze row 1."
+    case .columns:
+      alert.informativeText = "Select a cell in a column to the right first. For example, select B1 to freeze column A."
+    }
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
+  }
+
   // MARK: - Keyboard
+
+  @objc override func selectAll(_ sender: Any?) {
+    viewModel?.selectAll()
+    needsDisplay = true
+  }
 
   override func keyDown(with event: NSEvent) {
     guard let viewModel, !isEditorActive else {
@@ -792,8 +1814,9 @@ final class SpreadsheetGridNSView: NSView {
     case 125: viewModel.moveSelection(rowDelta: 1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
     case 126: viewModel.moveSelection(rowDelta: -1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
     case 36:
+      editorEntryMode = .inCellEdit
       viewModel.beginEditing()
-      showEditor()
+      showEditor(selectAll: false)
       return
     case 48:
       viewModel.moveSelection(rowDelta: 0, colDelta: event.modifierFlags.contains(.shift) ? -1 : 1, extending: event.modifierFlags.contains(.shift))
@@ -806,9 +1829,10 @@ final class SpreadsheetGridNSView: NSView {
           || CharacterSet.symbols.contains(scalar)
           || scalar == " "
         if isPrintable {
+          editorEntryMode = .replaceOnType
           viewModel.editText = chars
           viewModel.isEditing = true
-          showEditor()
+          showEditor(selectAll: false)
           return
         }
       }
@@ -819,6 +1843,12 @@ final class SpreadsheetGridNSView: NSView {
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     let settings = AppSettings.shared
+    let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+    if event.charactersIgnoringModifiers?.lowercased() == "a", mods == .command {
+      viewModel?.selectAll()
+      needsDisplay = true
+      return true
+    }
     if settings.matches(.copy, event: event) {
       if let text = viewModel?.copySelection() {
         NSPasteboard.general.clearContents()
@@ -833,6 +1863,20 @@ final class SpreadsheetGridNSView: NSView {
     }
     if settings.matches(.paste, event: event) {
       viewModel?.pasteFromPasteboard()
+      syncDisplay()
+      return true
+    }
+    if settings.matches(.copyFormulas, event: event) {
+      viewModel?.copyFormulas()
+      return true
+    }
+    if settings.matches(.pasteFormulas, event: event) {
+      viewModel?.pasteFormulasFromPasteboard()
+      syncDisplay()
+      return true
+    }
+    if settings.matches(.convertToValues, event: event) {
+      viewModel?.convertSelectionToValues()
       syncDisplay()
       return true
     }
@@ -856,12 +1900,130 @@ final class SpreadsheetGridNSView: NSView {
 }
 
 extension SpreadsheetGridNSView: NSTextFieldDelegate {
+  func control(
+    _ control: NSControl,
+    textView: NSTextView,
+    doCommandBy commandSelector: Selector
+  ) -> Bool {
+    guard isEditorActive else { return false }
+
+    if editorEntryMode == .replaceOnType {
+      switch commandSelector {
+      case #selector(NSResponder.insertNewline(_:)):
+        commitEditorAndMove(rowDelta: 1, colDelta: 0)
+        return true
+      case #selector(NSResponder.moveUp(_:)):
+        commitEditorAndMove(rowDelta: -1, colDelta: 0)
+        return true
+      case #selector(NSResponder.moveDown(_:)):
+        commitEditorAndMove(rowDelta: 1, colDelta: 0)
+        return true
+      case #selector(NSResponder.moveLeft(_:)):
+        commitEditorAndMove(rowDelta: 0, colDelta: -1)
+        return true
+      case #selector(NSResponder.moveRight(_:)):
+        commitEditorAndMove(rowDelta: 0, colDelta: 1)
+        return true
+      default:
+        return false
+      }
+    }
+
+    if commandSelector == #selector(NSResponder.insertTab(_:)) {
+      return applyFormulaTabCompletion(in: textView)
+    }
+
+    if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+      commitEditorAndMove(rowDelta: 1, colDelta: 0)
+      return true
+    }
+
+    return false
+  }
+
+  private var namedRangeNames: [String] {
+    guard let keys = viewModel?.workbook.namedRanges.keys else { return [] }
+    return Array(keys)
+  }
+
+  @discardableResult
+  private func applyFormulaTabCompletion(in textView: NSTextView) -> Bool {
+    let cursor = textView.selectedRange.location
+    guard let result = FormulaAutocomplete.tabComplete(
+      text: textView.string,
+      utf16Cursor: cursor,
+      namedRanges: namedRangeNames
+    ) else { return false }
+    textView.string = result.text
+    textView.setSelectedRange(NSRange(location: result.cursor, length: 0))
+    editor.stringValue = result.text
+    viewModel?.editText = result.text
+    viewModel?.noteFormulaEditTextChanged()
+    return true
+  }
+
   func controlTextDidEndEditing(_ obj: Notification) {
     guard isEditorActive else { return }
     hideEditor(commit: true)
   }
 
   func controlTextDidChange(_ obj: Notification) {
+    guard !isApplyingFormulaAttributes else { return }
     viewModel?.editText = editor.stringValue
+    viewModel?.noteFormulaEditTextChanged()
+    if let fieldEditor = editor.currentEditor() as? NSTextView {
+      viewModel?.updateFormulaHighlightFocus(atUTF16: fieldEditor.selectedRange.location)
+    }
+    applyInCellFormulaAttributes(preserveSelection: true)
+    maybeOfferFormulaCompletions()
+  }
+
+  func control(
+    _ control: NSControl,
+    textView: NSTextView,
+    completions words: [String],
+    forPartialWordRange charRange: NSRange,
+    indexOfSelectedItem index: UnsafeMutablePointer<Int>
+  ) -> [String] {
+    guard editor.stringValue.hasPrefix("=") else { return [] }
+    guard FormulaAutocomplete.shouldOfferPopup(
+      in: textView.string,
+      utf16Cursor: charRange.location + charRange.length,
+      namedRanges: namedRangeNames
+    ) else { return [] }
+    let partial = (textView.string as NSString).substring(with: charRange)
+    index.pointee = 0
+    return FormulaAutocomplete.suggestions(
+      matching: partial,
+      namedRanges: namedRangeNames
+    )
+  }
+
+  private func maybeOfferFormulaCompletions() {
+    guard let window = window,
+          let fieldEditor = window.fieldEditor(false, for: editor) as? NSTextView
+    else { return }
+
+    let cursor = fieldEditor.selectedRange.location
+    guard FormulaAutocomplete.shouldOfferPopup(
+      in: fieldEditor.string,
+      utf16Cursor: cursor,
+      namedRanges: namedRangeNames
+    ) else {
+      NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(triggerFormulaComplete), object: nil)
+      return
+    }
+
+    NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(triggerFormulaComplete), object: nil)
+    perform(#selector(triggerFormulaComplete), with: nil, afterDelay: 0.12)
+  }
+
+  @objc private func triggerFormulaComplete() {
+    guard isEditorActive,
+          !isApplyingFormulaAttributes,
+          let window = window,
+          let fieldEditor = window.fieldEditor(false, for: editor) as? NSTextView
+    else { return }
+    fieldEditor.complete(nil)
   }
 }

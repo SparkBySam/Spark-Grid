@@ -6,6 +6,9 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
   case copy
   case cut
   case paste
+  case copyFormulas
+  case pasteFormulas
+  case convertToValues
   case undo
   case redo
   case save
@@ -20,6 +23,9 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
     case .copy: return "Copy"
     case .cut: return "Cut"
     case .paste: return "Paste"
+    case .copyFormulas: return "Copy Formulas"
+    case .pasteFormulas: return "Paste Formulas"
+    case .convertToValues: return "Convert to Values"
     case .undo: return "Undo"
     case .redo: return "Redo"
     case .save: return "Save"
@@ -169,6 +175,18 @@ final class AppSettings {
     .copy: StoredShortcut(key: "c", modifiers: NSEvent.ModifierFlags.command.rawValue),
     .cut: StoredShortcut(key: "x", modifiers: NSEvent.ModifierFlags.command.rawValue),
     .paste: StoredShortcut(key: "v", modifiers: NSEvent.ModifierFlags.command.rawValue),
+    .copyFormulas: StoredShortcut(
+      key: "c",
+      modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue
+    ),
+    .pasteFormulas: StoredShortcut(
+      key: "v",
+      modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue
+    ),
+    .convertToValues: StoredShortcut(
+      key: "e",
+      modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue
+    ),
     .undo: StoredShortcut(key: "z", modifiers: NSEvent.ModifierFlags.command.rawValue),
     .redo: StoredShortcut(key: "z", modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue),
     .save: StoredShortcut(key: "s", modifiers: NSEvent.ModifierFlags.command.rawValue),
