@@ -149,7 +149,11 @@ nonisolated enum CellValue: Equatable, Sendable {
       return .number(number)
     }
     if trimmed.hasSuffix("%"),
-       let number = Double(String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces))
+       let number = Double(
+         String(trimmed.dropLast())
+           .trimmingCharacters(in: .whitespaces)
+           .replacingOccurrences(of: ",", with: "")
+       )
     {
       return .number(number / 100)
     }

@@ -700,6 +700,7 @@ final class SpreadsheetViewModel {
     guard index >= 0, index < workbook.sheets.count else { return }
     workbook.activeSheetIndex = index
     filterState = nil
+    invalidateFindMatches()
     selection = .origin
     syncEditTextFromSelection()
     isEditing = false
@@ -718,6 +719,8 @@ final class SpreadsheetViewModel {
       workbook.activeSheetIndex -= 1
     }
     contentRevision &+= 1
+    filterState = nil
+    invalidateFindMatches()
     selection = .origin
     syncEditTextFromSelection()
     isEditing = false

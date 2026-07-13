@@ -313,12 +313,19 @@ final class SpreadsheetPrintPaginatedView: NSView {
   override var isOpaque: Bool { true }
 
   override func knowsPageRange(_ range: NSRangePointer) -> Bool {
-    range.pointee = NSRange(location: 1, length: 1)
+    range.pointee = NSRange(location: 1, length: pageCount)
     return true
   }
 
   override func rectForPage(_ page: Int) -> NSRect {
     bounds
+  }
+
+  private var activePageIndex: Int {
+    if let current = NSPrintOperation.current?.currentPage, current >= 1 {
+      return min(current, pageCount)
+    }
+    return pageIndex
   }
 
   /// Content scroll offset (in unscaled points) for a 1-based page index.
@@ -362,6 +369,14 @@ final class SpreadsheetPrintPaginatedView: NSView {
     guard naturalSize.width > 1, naturalSize.height > 1 else { return }
     guard let context = NSGraphicsContext.current?.cgContext else { return }
 
+    let currentPage = activePageIndex
+    let offset = Self.pageContentOffset(
+      pageIndex: currentPage,
+      options: options,
+      contentSize: naturalSize,
+      scale: fitScale
+    )
+
     let margin = options.margins.inset
     let printable = NSRect(
       x: margin,
@@ -370,9 +385,9 @@ final class SpreadsheetPrintPaginatedView: NSView {
       height: max(0, bounds.height - margin * 2)
     )
 
-    // Align within the first page's printable area; later pages are scrolled via pageOffset.
+    // Align within the first page's printable area; later pages are scrolled via offset.
     let baseOrigin = options.contentOrigin(contentSize: naturalSize, scale: fitScale)
-    let drawOrigin = pageIndex == 1
+    let drawOrigin = currentPage == 1
       ? baseOrigin
       : NSPoint(x: margin, y: margin)
 
@@ -380,18 +395,18 @@ final class SpreadsheetPrintPaginatedView: NSView {
     NSBezierPath(rect: printable).addClip()
     context.translateBy(x: drawOrigin.x, y: drawOrigin.y)
     context.scaleBy(x: fitScale, y: fitScale)
-    context.translateBy(x: -pageOffset.x, y: -pageOffset.y)
+    context.translateBy(x: -offset.x, y: -offset.y)
     gridView.draw(NSRect(origin: .zero, size: naturalSize))
     context.restoreGState()
 
-    drawHeadersAndFooters()
+    drawHeadersAndFooters(forPage: currentPage)
   }
 
-  private func drawHeadersAndFooters() {
+  private func drawHeadersAndFooters(forPage currentPage: Int) {
     guard options.headersFooters.hasAny else { return }
     let lines = options.headerFooterLines(
       sheetName: sheetName,
-      pageIndex: pageIndex,
+      pageIndex: currentPage,
       pageCount: pageCount
     )
     let attrs: [NSAttributedString.Key: Any] = [

@@ -16,6 +16,15 @@ extension SpreadsheetViewModel {
     findMatchIndex = -1
   }
 
+  /// Drop cached matches when the active sheet or filter set changes.
+  func invalidateFindMatches() {
+    findMatches = []
+    findMatchIndex = -1
+    if isFindBarVisible {
+      refreshFindMatches(selectCurrent: true)
+    }
+  }
+
   func refreshFindMatches(selectCurrent: Bool = false) {
     findMatches = collectFindMatches()
     if findMatches.isEmpty {
@@ -43,8 +52,12 @@ extension SpreadsheetViewModel {
       showFindBar(replace: isFindReplaceMode)
       return
     }
-    if findMatches.isEmpty { refreshFindMatches() }
-    guard !findMatches.isEmpty else { return }
+    // After close / sheet switch / empty cache, land on the current match first
+    // instead of skipping straight to the next one.
+    if findMatches.isEmpty {
+      refreshFindMatches(selectCurrent: true)
+      return
+    }
     findMatchIndex = (findMatchIndex + 1) % findMatches.count
     jumpToCurrentFindMatch()
   }
@@ -54,8 +67,10 @@ extension SpreadsheetViewModel {
       showFindBar(replace: isFindReplaceMode)
       return
     }
-    if findMatches.isEmpty { refreshFindMatches() }
-    guard !findMatches.isEmpty else { return }
+    if findMatches.isEmpty {
+      refreshFindMatches(selectCurrent: true)
+      return
+    }
     findMatchIndex = (findMatchIndex - 1 + findMatches.count) % findMatches.count
     jumpToCurrentFindMatch()
   }
@@ -174,13 +189,23 @@ extension SpreadsheetViewModel {
       guard text.contains(query) else { return nil }
       return text.replacingOccurrences(of: query, with: replacement)
     }
-    guard let range = text.range(of: query, options: .caseInsensitive) else { return nil }
-    var result = text
-    result.replaceSubrange(range, with: replacement)
-    // Replace remaining case-insensitive occurrences.
-    while let next = result.range(of: query, options: .caseInsensitive) {
-      result.replaceSubrange(next, with: replacement)
+
+    // Case-insensitive: walk once left-to-right. Never re-search from the start,
+    // or replacements that still contain the query (e.g. a → aa) loop forever.
+    var result = ""
+    result.reserveCapacity(text.count)
+    var searchStart = text.startIndex
+    var replaced = false
+    while searchStart < text.endIndex,
+          let match = text.range(of: query, options: .caseInsensitive, range: searchStart..<text.endIndex)
+    {
+      result.append(contentsOf: text[searchStart..<match.lowerBound])
+      result.append(replacement)
+      searchStart = match.upperBound
+      replaced = true
     }
+    guard replaced else { return nil }
+    result.append(contentsOf: text[searchStart..<text.endIndex])
     return result
   }
 
