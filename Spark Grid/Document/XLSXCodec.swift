@@ -1,0 +1,601 @@
+import CoreGraphics
+import CoreXLSX
+import Foundation
+
+enum XLSXCodec {
+  enum CodecError: LocalizedError {
+    case unreadable
+    case emptyWorkbook
+    case writeFailed
+
+    var errorDescription: String? {
+      switch self {
+      case .unreadable: return "Couldn't read the Excel workbook."
+      case .emptyWorkbook: return "The Excel workbook has no sheets."
+      case .writeFailed: return "Couldn't write the Excel workbook."
+      }
+    }
+  }
+
+  // MARK: - Import
+
+  static func importWorkbook(from data: Data) throws -> Workbook {
+    let file = try XLSXFile(data: data)
+    return try importWorkbook(from: file)
+  }
+
+  static func importWorkbook(from url: URL) throws -> Workbook {
+    guard let file = XLSXFile(filepath: url.path) else {
+      throw CodecError.unreadable
+    }
+    return try importWorkbook(from: file)
+  }
+
+  private static func importWorkbook(from file: XLSXFile) throws -> Workbook {
+    let sharedStrings = try? file.parseSharedStrings()
+    let styles = try? file.parseStyles()
+    var sheets: [Sheet] = []
+
+    for wbk in try file.parseWorkbooks() {
+      for (name, path) in try file.parseWorksheetPathsAndNames(workbook: wbk) {
+        let worksheet = try file.parseWorksheet(at: path)
+        var sheet = Sheet(name: name ?? "Sheet\(sheets.count + 1)")
+        importCells(
+          from: worksheet,
+          into: &sheet,
+          sharedStrings: sharedStrings,
+          styles: styles
+        )
+        importColumnWidths(from: worksheet, into: &sheet)
+        importRowHeights(from: worksheet, into: &sheet)
+        sheets.append(sheet)
+      }
+    }
+
+    guard !sheets.isEmpty else { throw CodecError.emptyWorkbook }
+    // Defined names are not exposed by CoreXLSX Workbook model — skip without failing.
+    return Workbook(sheets: sheets, activeSheetIndex: 0)
+  }
+
+  private static func importCells(
+    from worksheet: Worksheet,
+    into sheet: inout Sheet,
+    sharedStrings: SharedStrings?,
+    styles: Styles?
+  ) {
+    for row in worksheet.data?.rows ?? [] {
+      for cell in row.cells {
+        guard let address = address(from: cell.reference) else { continue }
+        let raw = cellRawValue(cell, sharedStrings: sharedStrings)
+        guard !raw.isEmpty || cell.styleIndex != nil else { continue }
+        var model = Cell(raw: raw)
+        if let styles, let format = cellFormat(from: cell, styles: styles) {
+          model.format = format
+        }
+        sheet.setCell(model, at: address)
+      }
+    }
+  }
+
+  private static func cellRawValue(_ cell: CoreXLSX.Cell, sharedStrings: SharedStrings?) -> String {
+    if let formula = cell.formula?.value, !formula.isEmpty {
+      return formula.hasPrefix("=") ? formula : "=\(formula)"
+    }
+    if let sharedStrings, let text = cell.stringValue(sharedStrings) {
+      return text
+    }
+    if let inline = cell.inlineString?.text, !inline.isEmpty {
+      return inline
+    }
+    return cell.value ?? ""
+  }
+
+  private static func cellFormat(from cell: CoreXLSX.Cell, styles: Styles) -> CellFormat? {
+    var format = CellFormat()
+    var changed = false
+
+    if let font = cell.font(in: styles) {
+      if font.bold != nil {
+        format.bold = true
+        changed = true
+      }
+      if font.italic != nil {
+        format.italic = true
+        changed = true
+      }
+      if font.strike != nil {
+        format.strikethrough = true
+        changed = true
+      }
+      if let size = font.size?.value {
+        format.fontSize = CGFloat(size)
+        changed = true
+      }
+      if let name = font.name?.value, !name.isEmpty {
+        format.fontFamily = name
+        changed = true
+      }
+      if let color = codableColor(from: font.color) {
+        format.textColor = color
+        changed = true
+      }
+    }
+
+    if let fillId = cell.format(in: styles)?.fillId,
+       let fills = styles.fills?.items,
+       fillId >= 0,
+       fillId < fills.count
+    {
+      let pattern = fills[fillId].patternFill
+      if pattern.patternType != "none",
+         let color = codableColor(from: pattern.foregroundColor ?? pattern.backgroundColor)
+      {
+        format.fillColor = color
+        changed = true
+      }
+    }
+
+    if let numFmtId = cell.format(in: styles)?.numberFormatId {
+      // Prefer explicit number formats even when applyNumberFormat is omitted (common in Excel exports).
+      if let mapped = numberFormat(for: numFmtId, styles: styles) {
+        format.numberFormat = mapped
+        changed = true
+      }
+    }
+
+    return changed ? format : nil
+  }
+
+  private static func numberFormat(for id: Int, styles: Styles) -> CellFormat.NumberFormat? {
+    if let custom = styles.numberFormats?.items.first(where: { $0.id == id })?.formatCode.lowercased() {
+      if custom.contains("%") { return .percent }
+      if custom.contains("$") || custom.contains("¥") || custom.contains("€") { return .currency }
+      if custom.contains("e+") || custom.contains("e-") { return .scientific }
+      // Avoid treating patterns like `#0` as dates just because of incidental letters.
+      let looksLikeDate = (custom.contains("y") || custom.contains("d"))
+        && (custom.contains("m") || custom.contains("yy") || custom.contains("dd"))
+      if looksLikeDate {
+        if custom.contains("h") || custom.contains("s") { return .time }
+        return .date
+      }
+      if custom.contains("h") && custom.contains(":") { return .time }
+      if custom.contains("0") || custom.contains("#") { return .number }
+    }
+    switch id {
+    case 1, 2, 3, 4: return .number
+    case 9, 10: return .percent
+    case 11: return .scientific
+    case 14, 15, 16, 17: return .date
+    case 18, 19, 20, 21: return .time
+    default: return nil
+    }
+  }
+
+  private static func codableColor(from color: Color?) -> CodableColor? {
+    guard let rgb = color?.rgb, rgb.count >= 6 else { return nil }
+    let hex = rgb.count == 8 ? String(rgb.suffix(6)) : rgb
+    guard let value = UInt32(hex, radix: 16) else { return nil }
+    let r = Double((value >> 16) & 0xFF) / 255
+    let g = Double((value >> 8) & 0xFF) / 255
+    let b = Double(value & 0xFF) / 255
+    return CodableColor(red: r, green: g, blue: b, alpha: 1)
+  }
+
+  private static func importColumnWidths(from worksheet: Worksheet, into sheet: inout Sheet) {
+    for column in worksheet.columns?.items ?? [] {
+      // Excel character widths ≈ pixels / 7 for default fonts.
+      let width = CGFloat(column.width) * 7
+      guard width > 0 else { continue }
+      for col in column.min...column.max {
+        sheet.columnWidths[col - 1] = width
+      }
+    }
+  }
+
+  private static func importRowHeights(from worksheet: Worksheet, into sheet: inout Sheet) {
+    for row in worksheet.data?.rows ?? [] {
+      guard let height = row.height, height > 0 else { continue }
+      sheet.rowHeights[Int(row.reference) - 1] = CGFloat(height)
+    }
+  }
+
+  private static func address(from reference: CellReference) -> CellAddress? {
+    guard let col = A1Notation.columnIndex(from: reference.column.value) else { return nil }
+    let row = Int(reference.row) - 1
+    guard row >= 0, col >= 0 else { return nil }
+    return CellAddress(row: row, col: col)
+  }
+
+  // MARK: - Export
+
+  static func exportWorkbook(_ workbook: Workbook) throws -> Data {
+    var sharedStrings: [String] = []
+    var sharedIndex: [String: Int] = [:]
+
+    func intern(_ text: String) -> Int {
+      if let existing = sharedIndex[text] { return existing }
+      let index = sharedStrings.count
+      sharedStrings.append(text)
+      sharedIndex[text] = index
+      return index
+    }
+
+    var styleCatalog: [StyleKey: Int] = [:]
+    var styleList: [StyleKey] = [.default]
+    styleCatalog[.default] = 0
+
+    func styleIndex(for format: CellFormat?) -> Int {
+      let key = StyleKey(format: format)
+      if let existing = styleCatalog[key] { return existing }
+      let index = styleList.count
+      styleList.append(key)
+      styleCatalog[key] = index
+      return index
+    }
+
+    var files: [String: Data] = [:]
+    files["[Content_Types].xml"] = contentTypesXML(sheetCount: workbook.sheets.count)
+    files["_rels/.rels"] = rootRelsXML
+    files["xl/workbook.xml"] = workbookXML(workbook)
+    files["xl/_rels/workbook.xml.rels"] = workbookRelsXML(sheetCount: workbook.sheets.count)
+
+    for (index, sheet) in workbook.sheets.enumerated() {
+      let sheetXML = worksheetXML(
+        sheet,
+        intern: intern,
+        styleIndex: styleIndex
+      )
+      files["xl/worksheets/sheet\(index + 1).xml"] = sheetXML
+    }
+
+    files["xl/sharedStrings.xml"] = sharedStringsXML(sharedStrings)
+    files["xl/styles.xml"] = stylesXML(styleList)
+
+    guard let data = MinimalZip.archive(files: files) else {
+      throw CodecError.writeFailed
+    }
+    return data
+  }
+
+  // MARK: - Export XML builders
+
+  private static func contentTypesXML(sheetCount: Int) -> Data {
+    var overrides = """
+    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+    <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+    """
+    for i in 1...sheetCount {
+      overrides += """
+      <Override PartName="/xl/worksheets/sheet\(i).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+      """
+    }
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+    <Default Extension="xml" ContentType="application/xml"/>
+    \(overrides)
+    </Types>
+    """
+    return Data(xml.utf8)
+  }
+
+  private static let rootRelsXML = Data("""
+  <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  </Relationships>
+  """.utf8)
+
+  private static func workbookXML(_ workbook: Workbook) -> Data {
+    var sheetsXML = ""
+    for (index, sheet) in workbook.sheets.enumerated() {
+      let name = escapeXML(sheet.name)
+      sheetsXML += #"<sheet name="\#(name)" sheetId="\#(index + 1)" r:id="rId\#(index + 1)"/>"#
+    }
+    var definedNames = ""
+    if !workbook.namedRanges.isEmpty {
+      let items = workbook.namedRanges.values.sorted { $0.name.uppercased() < $1.name.uppercased() }
+      let body = items.map { named -> String in
+        let sheetRef = escapeXML(named.sheetName.replacingOccurrences(of: "'", with: "''"))
+        let start = CellAddress(row: named.startRow, col: named.startCol).a1
+        let end = CellAddress(row: named.endRow, col: named.endCol).a1
+        let formula = "'\(sheetRef)'!\(start):\(end)"
+        return #"<definedName name="\#(escapeXML(named.name))">\#(escapeXML(formula))</definedName>"#
+      }.joined()
+      definedNames = "<definedNames>\(body)</definedNames>"
+    }
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <sheets>\(sheetsXML)</sheets>
+    \(definedNames)
+    </workbook>
+    """
+    return Data(xml.utf8)
+  }
+
+  private static func workbookRelsXML(sheetCount: Int) -> Data {
+    var rels = ""
+    for i in 1...sheetCount {
+      rels += """
+      <Relationship Id="rId\(i)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet\(i).xml"/>
+      """
+    }
+    let stylesId = sheetCount + 1
+    let sharedId = sheetCount + 2
+    rels += """
+    <Relationship Id="rId\(stylesId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+    <Relationship Id="rId\(sharedId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+    """
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    \(rels)
+    </Relationships>
+    """
+    return Data(xml.utf8)
+  }
+
+  private static func worksheetXML(
+    _ sheet: Sheet,
+    intern: (String) -> Int,
+    styleIndex: (CellFormat?) -> Int
+  ) -> Data {
+    var colsXML = ""
+    if !sheet.columnWidths.isEmpty {
+      let items = sheet.columnWidths.keys.sorted().map { col -> String in
+        let width = (sheet.columnWidths[col] ?? Workbook.defaultColumnWidth) / 7
+        return #"<col min="\#(col + 1)" max="\#(col + 1)" width="\#(width)" customWidth="1"/>"#
+      }.joined()
+      colsXML = "<cols>\(items)</cols>"
+    }
+
+    let grouped = Dictionary(grouping: sheet.cells.keys, by: \.row)
+    let rowNumbers = grouped.keys.sorted()
+    var sheetData = ""
+    for row in rowNumbers {
+      let heightAttr: String
+      if let height = sheet.rowHeights[row] {
+        heightAttr = #" ht="\#(height)" customHeight="1""#
+      } else {
+        heightAttr = ""
+      }
+      let addresses = (grouped[row] ?? []).sorted()
+      var cellsXML = ""
+      for address in addresses {
+        let cell = sheet.cell(at: address)
+        let sIndex = styleIndex(cell.format)
+        let styleAttr = sIndex > 0 ? #" s="\#(sIndex)""# : ""
+        if FormulaSyntax.isFormula(cell.raw) {
+          let formula = String(cell.raw.drop(while: { $0 == "=" || $0.isWhitespace }))
+          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)><f>\#(escapeXML(formula))</f></c>"#
+        } else if Double(cell.raw) != nil, !cell.raw.contains(where: { $0.isLetter }) {
+          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)><v>\#(escapeXML(cell.raw))</v></c>"#
+        } else if !cell.raw.isEmpty {
+          let idx = intern(cell.raw)
+          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr) t="s"><v>\#(idx)</v></c>"#
+        } else if cell.format != nil {
+          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)/>"#
+        }
+      }
+      sheetData += #"<row r="\#(row + 1)"\#(heightAttr)>\#(cellsXML)</row>"#
+    }
+
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    \(colsXML)
+    <sheetData>\(sheetData)</sheetData>
+    </worksheet>
+    """
+    return Data(xml.utf8)
+  }
+
+  private static func sharedStringsXML(_ strings: [String]) -> Data {
+    let items = strings.map { #"<si><t>\#(escapeXML($0))</t></si>"# }.joined()
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="\(strings.count)" uniqueCount="\(strings.count)">
+    \(items)
+    </sst>
+    """
+    return Data(xml.utf8)
+  }
+
+  private static func stylesXML(_ styles: [StyleKey]) -> Data {
+    var fonts = ""
+    var fills = #"<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>"#
+    var cellXfs = ""
+    var fillCount = 2
+
+    for (fontId, style) in styles.enumerated() {
+      let bold = style.bold ? "<b/>" : ""
+      let italic = style.italic ? "<i/>" : ""
+      let underline = style.underline ? #"<u val="single"/>"# : ""
+      let strike = style.strikethrough ? "<strike/>" : ""
+      let size = style.fontSize.map { #"<sz val="\#($0)"/>"# } ?? #"<sz val="12"/>"#
+      let name = #"<name val="\#(escapeXML(style.fontFamily ?? "Helvetica Neue"))"/>"#
+      let color = style.textRGB.map { #"<color rgb="FF\#($0)"/>"# } ?? ""
+      fonts += "<font>\(bold)\(italic)\(underline)\(strike)\(size)\(color)\(name)</font>"
+
+      var fillId = 0
+      if let fillRGB = style.fillRGB {
+        fills += #"<fill><patternFill patternType="solid"><fgColor rgb="FF\#(fillRGB)"/><bgColor indexed="64"/></patternFill></fill>"#
+        fillId = fillCount
+        fillCount += 1
+      }
+
+      let numFmtId: Int
+      switch style.numberFormat {
+      case .general: numFmtId = 0
+      case .number: numFmtId = 2
+      case .currency: numFmtId = 164
+      case .percent: numFmtId = 10
+      case .scientific: numFmtId = 11
+      case .date: numFmtId = 14
+      case .time: numFmtId = 21
+      }
+
+      cellXfs += #"<xf numFmtId="\#(numFmtId)" fontId="\#(fontId)" fillId="\#(fillId)" borderId="0" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1"/>"#
+    }
+
+    let xml = """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts>
+    <fonts count="\(styles.count)">\(fonts)</fonts>
+    <fills count="\(fillCount)">\(fills)</fills>
+    <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+    <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+    <cellXfs count="\(styles.count)">\(cellXfs)</cellXfs>
+    </styleSheet>
+    """
+    return Data(xml.utf8)
+  }
+
+  private static func escapeXML(_ string: String) -> String {
+    string
+      .replacingOccurrences(of: "&", with: "&amp;")
+      .replacingOccurrences(of: "<", with: "&lt;")
+      .replacingOccurrences(of: ">", with: "&gt;")
+      .replacingOccurrences(of: "\"", with: "&quot;")
+      .replacingOccurrences(of: "'", with: "&apos;")
+  }
+}
+
+// MARK: - Style key
+
+private struct StyleKey: Hashable {
+  var bold = false
+  var italic = false
+  var underline = false
+  var strikethrough = false
+  var fontFamily: String?
+  var fontSize: Double?
+  var textRGB: String?
+  var fillRGB: String?
+  var numberFormat: CellFormat.NumberFormat = .general
+
+  static let `default` = StyleKey()
+
+  init(format: CellFormat? = nil) {
+    guard let format else { return }
+    bold = format.bold
+    italic = format.italic
+    underline = format.underline
+    strikethrough = format.strikethrough
+    fontFamily = format.fontFamily
+    fontSize = format.fontSize.map(Double.init)
+    textRGB = format.textColor.map(Self.rgbHex)
+    fillRGB = format.fillColor.map(Self.rgbHex)
+    numberFormat = format.numberFormat
+  }
+
+  private static func rgbHex(_ color: CodableColor) -> String {
+    let r = Int((color.red * 255).rounded())
+    let g = Int((color.green * 255).rounded())
+    let b = Int((color.blue * 255).rounded())
+    return String(format: "%02X%02X%02X", r, g, b)
+  }
+}
+
+// MARK: - Minimal stored ZIP (Excel accepts method 0)
+
+private enum MinimalZip {
+  static func archive(files: [String: Data]) -> Data? {
+    var central = Data()
+    var local = Data()
+    var offset: UInt32 = 0
+
+    for path in files.keys.sorted() {
+      guard let payload = files[path] else { continue }
+      let nameData = Data(path.utf8)
+      let crc = crc32(payload)
+      let size = UInt32(payload.count)
+
+      var localHeader = Data()
+      localHeader.appendUInt32(0x0403_4b50)
+      localHeader.appendUInt16(20)
+      localHeader.appendUInt16(0)
+      localHeader.appendUInt16(0) // stored
+      localHeader.appendUInt16(0)
+      localHeader.appendUInt16(0)
+      localHeader.appendUInt32(crc)
+      localHeader.appendUInt32(size)
+      localHeader.appendUInt32(size)
+      localHeader.appendUInt16(UInt16(nameData.count))
+      localHeader.appendUInt16(0)
+      localHeader.append(nameData)
+      localHeader.append(payload)
+
+      var centralHeader = Data()
+      centralHeader.appendUInt32(0x0201_4b50)
+      centralHeader.appendUInt16(20)
+      centralHeader.appendUInt16(20)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt32(crc)
+      centralHeader.appendUInt32(size)
+      centralHeader.appendUInt32(size)
+      centralHeader.appendUInt16(UInt16(nameData.count))
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt16(0)
+      centralHeader.appendUInt32(0)
+      centralHeader.appendUInt32(offset)
+      centralHeader.append(nameData)
+
+      local.append(localHeader)
+      central.append(centralHeader)
+      offset += UInt32(localHeader.count)
+    }
+
+    var end = Data()
+    end.appendUInt32(0x0605_4b50)
+    end.appendUInt16(0)
+    end.appendUInt16(0)
+    end.appendUInt16(UInt16(files.count))
+    end.appendUInt16(UInt16(files.count))
+    end.appendUInt32(UInt32(central.count))
+    end.appendUInt32(UInt32(local.count))
+    end.appendUInt16(0)
+
+    return local + central + end
+  }
+
+  private static func crc32(_ data: Data) -> UInt32 {
+    var crc: UInt32 = 0xFFFF_FFFF
+    for byte in data {
+      let index = Int((crc ^ UInt32(byte)) & 0xFF)
+      crc = (crc >> 8) ^ crcTable[index]
+    }
+    return crc ^ 0xFFFF_FFFF
+  }
+
+  private static let crcTable: [UInt32] = {
+    (0..<256).map { i -> UInt32 in
+      var c = UInt32(i)
+      for _ in 0..<8 {
+        c = (c & 1) != 0 ? (0xEDB8_8320 ^ (c >> 1)) : (c >> 1)
+      }
+      return c
+    }
+  }()
+}
+
+private extension Data {
+  mutating func appendUInt16(_ value: UInt16) {
+    var le = value.littleEndian
+    Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
+  }
+
+  mutating func appendUInt32(_ value: UInt32) {
+    var le = value.littleEndian
+    Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
+  }
+}

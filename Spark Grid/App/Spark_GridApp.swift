@@ -33,6 +33,8 @@ struct Spark_GridApp: App {
     .commands {
       SpreadsheetCommands()
       SpreadsheetStructureCommands()
+      SpreadsheetDataCommands()
+      SpreadsheetViewCommands()
       SpreadsheetFileCommands(store: store)
     }
 

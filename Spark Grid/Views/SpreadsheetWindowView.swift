@@ -3,6 +3,7 @@ import SwiftUI
 
 private enum SpreadsheetChrome {
   static let formulaBarHeight: CGFloat = 28
+  static let findBarHeight: CGFloat = 36
   static let formulaErrorBannerHeight: CGFloat = 40
   static let dividerHeight: CGFloat = 1
 
@@ -10,8 +11,15 @@ private enum SpreadsheetChrome {
     58
   }
 
-  static func topHeight(showLabels: Bool, showingFormulaError: Bool) -> CGFloat {
+  static func topHeight(
+    showLabels: Bool,
+    showingFormulaError: Bool,
+    showingFindBar: Bool
+  ) -> CGFloat {
     var height = toolbarHeight(showLabels: showLabels) + dividerHeight + formulaBarHeight + dividerHeight
+    if showingFindBar {
+      height += findBarHeight + dividerHeight
+    }
     if showingFormulaError {
       height += formulaErrorBannerHeight
     }
@@ -49,7 +57,8 @@ struct SpreadsheetWindowView: View {
         Color.clear.frame(
           height: SpreadsheetChrome.topHeight(
             showLabels: settings.showToolbarLabels,
-            showingFormulaError: showingFormulaError
+            showingFormulaError: showingFormulaError,
+            showingFindBar: viewModel.isFindBarVisible
           )
         )
         SpreadsheetGridView(viewModel: viewModel)
@@ -63,6 +72,10 @@ struct SpreadsheetWindowView: View {
         Divider()
         FormulaBarView(viewModel: viewModel, store: store)
         Divider()
+        if viewModel.isFindBarVisible {
+          FindReplaceBar(viewModel: viewModel)
+          Divider()
+        }
       }
       .frame(maxWidth: .infinity)
       .background(Color(nsColor: .controlBackgroundColor))

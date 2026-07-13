@@ -5,10 +5,16 @@ import Observation
 @Observable
 @MainActor
 final class SpreadsheetViewModel {
+  /// When true, `workbook` didSet skips a full formula rebuild (format-only / batched edits).
+  private var suspendFormulaRebuild = false
+
   var workbook: Workbook {
     didSet {
       contentRevision &+= 1
-      formulaEngine.rebuild(workbook: workbook)
+      hiddenRowsCache = nil
+      if !suspendFormulaRebuild {
+        formulaEngine.rebuild(workbook: workbook)
+      }
     }
   }
   var selectionAnchor: CellAddress = .origin
@@ -24,6 +30,41 @@ final class SpreadsheetViewModel {
   private(set) var contentRevision = 0
   private(set) var gridRefreshToken = 0
   private(set) var selectionRevision = 0
+  /// Bumped when find/navigation wants the grid to scroll the selection into view.
+  var scrollRequestToken = 0
+
+  // MARK: - Find / Replace
+  var isFindBarVisible = false
+  var isFindReplaceMode = false
+  var findQuery = ""
+  var findReplaceText = ""
+  var findMatchCase = false
+  var findEntireCell = false
+  var findScope: FindScope = .sheet
+  var findMatches: [CellAddress] = []
+  var findMatchIndex: Int = -1
+
+  // MARK: - Filter / Zoom
+  var filterState: SheetFilterState? {
+    didSet {
+      hiddenRowsCache = nil
+    }
+  }
+  /// Cached rows hidden by the active filter (invalidated on filter/content changes).
+  var hiddenRowsCache: Set<Int>?
+  /// View zoom (0.5…2.0). Scales cell geometry in the grid.
+  var zoomScale: CGFloat = 1.0 {
+    didSet {
+      let clamped = min(2.0, max(0.5, zoomScale))
+      if abs(clamped - zoomScale) > 0.0001 {
+        zoomScale = clamped
+        return
+      }
+      if oldValue != zoomScale {
+        notifyGridRefresh()
+      }
+    }
+  }
 
   weak var undoManager: UndoManager?
 
@@ -78,7 +119,7 @@ final class SpreadsheetViewModel {
     updateFormulaHighlightFocus(atUTF16: location)
   }
 
-  private func notifyGridRefresh() {
+  func notifyGridRefresh() {
     gridRefreshToken &+= 1
   }
 
@@ -197,7 +238,23 @@ final class SpreadsheetViewModel {
     get { workbook.activeSheet }
     set {
       workbook.activeSheet = newValue
-      contentRevision &+= 1
+    }
+  }
+
+  /// Format-only sheet writes — avoids re-parsing every formula on the sheet.
+  private func setActiveSheetPreservingFormulas(_ sheet: Sheet) {
+    suspendFormulaRebuild = true
+    workbook.activeSheet = sheet
+    suspendFormulaRebuild = false
+  }
+
+  /// Value edits — incremental formula update instead of a full rebuild.
+  private func setActiveSheet(_ sheet: Sheet, formulaCellsChanged addresses: [CellAddress]) {
+    suspendFormulaRebuild = true
+    workbook.activeSheet = sheet
+    suspendFormulaRebuild = false
+    if !addresses.isEmpty {
+      formulaEngine.cellsDidChange(addresses, sheet: sheet)
     }
   }
 
@@ -372,21 +429,44 @@ final class SpreadsheetViewModel {
   func moveSelection(rowDelta: Int, colDelta: Int, extending: Bool = false) {
     commitEditIfNeeded()
     if extending {
-      let end = CellAddress(
-        row: max(0, min(activeSheet.effectiveRowCount - 1, selectionEnd.row + rowDelta)),
-        col: max(0, min(activeSheet.effectiveColumnCount - 1, selectionEnd.col + colDelta))
-      )
-      selectionEnd = end
+      var endRow = selectionEnd.row + rowDelta
+      var endCol = selectionEnd.col + colDelta
+      endRow = max(0, min(activeSheet.effectiveRowCount - 1, endRow))
+      endCol = max(0, min(activeSheet.effectiveColumnCount - 1, endCol))
+      if rowDelta != 0 {
+        endRow = nextVisibleRow(from: selectionEnd.row, delta: rowDelta) ?? endRow
+      }
+      selectionEnd = CellAddress(row: endRow, col: endCol)
       setPrimaryRange(from: selectionAnchor, to: selectionEnd)
     } else {
-      let next = CellAddress(
-        row: max(0, min(activeSheet.effectiveRowCount - 1, selectionAnchor.row + rowDelta)),
-        col: max(0, min(activeSheet.effectiveColumnCount - 1, selectionAnchor.col + colDelta))
-      )
+      var nextRow = selectionAnchor.row + rowDelta
+      var nextCol = selectionAnchor.col + colDelta
+      nextRow = max(0, min(activeSheet.effectiveRowCount - 1, nextRow))
+      nextCol = max(0, min(activeSheet.effectiveColumnCount - 1, nextCol))
+      if rowDelta != 0 {
+        nextRow = nextVisibleRow(from: selectionAnchor.row, delta: rowDelta) ?? nextRow
+      }
+      let next = CellAddress(row: nextRow, col: nextCol)
       replaceSelection(with: CellRange(start: next, end: next))
     }
     syncEditTextFromSelection()
     isEditing = false
+  }
+
+  private func nextVisibleRow(from row: Int, delta: Int) -> Int? {
+    guard delta != 0 else { return row }
+    let step = delta > 0 ? 1 : -1
+    var remaining = abs(delta)
+    var current = row
+    let maxRow = activeSheet.effectiveRowCount - 1
+    while remaining > 0 {
+      current += step
+      if current < 0 || current > maxRow { return nil }
+      if !isRowHiddenByFilter(current) {
+        remaining -= 1
+      }
+    }
+    return current
   }
 
   func select(_ address: CellAddress) {
@@ -476,8 +556,9 @@ final class SpreadsheetViewModel {
     var sheet = activeSheet
     var cell = sheet.cell(at: address)
     cell.raw = newValue
+    applyInferredNumberFormatIfNeeded(to: &cell, raw: newValue)
     sheet.setCell(cell, at: address)
-    activeSheet = sheet
+    setActiveSheet(sheet, formulaCellsChanged: [address])
     isEditing = false
     noteFormulaEditTextChanged()
   }
@@ -500,10 +581,34 @@ final class SpreadsheetViewModel {
     var sheet = activeSheet
     var cell = sheet.cell(at: address)
     cell.raw = value
+    applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
     sheet.setCell(cell, at: address)
-    activeSheet = sheet
+    setActiveSheet(sheet, formulaCellsChanged: [address])
     if address == selectionAnchor && !isEditing {
       editText = value
+    }
+    // Clearing/changing a value can change which filter rows are hidden.
+    if filterState != nil {
+      hiddenRowsCache = nil
+      notifyGridRefresh()
+    }
+  }
+
+  /// When the user types/imports `50%`, keep the raw text for the formula bar and mark percent format
+  /// so the grid shows a percentage instead of the fractional evaluated value.
+  private func applyInferredNumberFormatIfNeeded(to cell: inout Cell, raw: String) {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasSuffix("%"),
+          !FormulaSyntax.isFormula(trimmed),
+          Double(String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")) != nil
+    else { return }
+    var format = cell.format ?? CellFormat()
+    if format.numberFormat == .general {
+      format.numberFormat = .percent
+      if format.decimalPlaces == nil {
+        format.decimalPlaces = defaultDecimalPlaces(for: .percent)
+      }
+      cell.format = format
     }
   }
 
@@ -531,7 +636,7 @@ final class SpreadsheetViewModel {
       maxWidth = max(maxWidth, width)
     }
     sheet.columnWidths[col] = min(max(maxWidth, 48), 420)
-    activeSheet = sheet
+    setActiveSheetPreservingFormulas(sheet)
   }
 
   func autoFitRow(_ row: Int) {
@@ -547,19 +652,33 @@ final class SpreadsheetViewModel {
       maxHeight = max(maxHeight, height)
     }
     sheet.rowHeights[row] = min(max(maxHeight, 22), 200)
-    activeSheet = sheet
+    setActiveSheetPreservingFormulas(sheet)
+  }
+
+  func autoFitAllColumns() {
+    let lastCol = max(activeSheet.maxPopulatedColumn, activeSheet.effectiveColumnCount - 1)
+    for col in 0...lastCol {
+      autoFitColumn(col)
+    }
+  }
+
+  func autoFitAllRows() {
+    let lastRow = max(activeSheet.maxPopulatedRow, activeSheet.effectiveRowCount - 1)
+    for row in 0...lastRow where !isRowHiddenByFilter(row) {
+      autoFitRow(row)
+    }
   }
 
   func setColumnWidth(_ col: Int, width: CGFloat) {
     var sheet = activeSheet
     sheet.columnWidths[col] = min(max(width, 24), 600)
-    activeSheet = sheet
+    setActiveSheetPreservingFormulas(sheet)
   }
 
   func setRowHeight(_ row: Int, height: CGFloat) {
     var sheet = activeSheet
     sheet.rowHeights[row] = min(max(height, 16), 400)
-    activeSheet = sheet
+    setActiveSheetPreservingFormulas(sheet)
   }
 
   // MARK: - Sheets
@@ -580,6 +699,7 @@ final class SpreadsheetViewModel {
     commitEditIfNeeded()
     guard index >= 0, index < workbook.sheets.count else { return }
     workbook.activeSheetIndex = index
+    filterState = nil
     selection = .origin
     syncEditTextFromSelection()
     isEditing = false
@@ -665,6 +785,132 @@ final class SpreadsheetViewModel {
     }
   }
 
+  /// Default color used when applying border presets from the toolbar.
+  var borderColor: CodableColor?
+  /// Line style used when applying border presets (thin, dashed, dotted, …).
+  var borderStyle: BorderStyle = .thin
+
+  func setBorderColor(_ color: CodableColor?) {
+    borderColor = color
+  }
+
+  func setBorderStyle(_ style: BorderStyle) {
+    borderStyle = style
+  }
+
+  func applyBorderPreset(_ preset: BorderPreset) {
+    commitEditIfNeeded()
+    let edge = BorderEdge.styled(borderStyle, color: borderColor)
+    let thickEdge = BorderEdge.styled(.thick, color: borderColor)
+    for range in selectionRanges {
+      applyBorderPreset(preset, to: range, edge: edge, thickEdge: thickEdge)
+    }
+  }
+
+  private func applyBorderPreset(
+    _ preset: BorderPreset,
+    to range: CellRange,
+    edge: BorderEdge,
+    thickEdge: BorderEdge
+  ) {
+    let n = range.normalized
+    switch preset {
+    case .none:
+      updateFormat(in: range) { $0.borders = .none }
+    case .all:
+      updateFormat(in: range) {
+        $0.borders = CellBorders(top: edge, bottom: edge, left: edge, right: edge)
+      }
+    case .outside:
+      applyBorderMutation(in: range) { address, borders in
+        if address.row == n.minRow { borders.top = edge }
+        if address.row == n.maxRow { borders.bottom = edge }
+        if address.col == n.minCol { borders.left = edge }
+        if address.col == n.maxCol { borders.right = edge }
+      }
+    case .inside:
+      applyBorderMutation(in: range) { address, borders in
+        if address.row > n.minRow { borders.top = edge }
+        if address.row < n.maxRow { borders.bottom = edge }
+        if address.col > n.minCol { borders.left = edge }
+        if address.col < n.maxCol { borders.right = edge }
+      }
+    case .top:
+      applyBorderMutation(in: range) { address, borders in
+        if address.row == n.minRow { borders.top = edge }
+      }
+    case .bottom:
+      applyBorderMutation(in: range) { address, borders in
+        if address.row == n.maxRow { borders.bottom = edge }
+      }
+    case .left:
+      applyBorderMutation(in: range) { address, borders in
+        if address.col == n.minCol { borders.left = edge }
+      }
+    case .right:
+      applyBorderMutation(in: range) { address, borders in
+        if address.col == n.maxCol { borders.right = edge }
+      }
+    case .thickOutside:
+      applyBorderMutation(in: range) { address, borders in
+        if address.row == n.minRow { borders.top = thickEdge }
+        if address.row == n.maxRow { borders.bottom = thickEdge }
+        if address.col == n.minCol { borders.left = thickEdge }
+        if address.col == n.maxCol { borders.right = thickEdge }
+      }
+    }
+  }
+
+  /// Address-aware border edits in one sheet write (no per-cell formula rebuild).
+  private func applyBorderMutation(
+    in range: CellRange,
+    mutate: (CellAddress, inout CellBorders) -> Void
+  ) {
+    let n = range.normalized
+    let cellCount = (n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1)
+    var sheet = activeSheet
+    var changed = false
+
+    func mutateAddress(_ address: CellAddress) {
+      var cell = sheet.cell(at: address)
+      var format = cell.format ?? CellFormat()
+      let oldFormat = format
+      mutate(address, &format.borders)
+      guard format != oldFormat else { return }
+      cell.format = format.isDefault ? nil : format
+      registerFormatUndo(address: address, oldFormat: oldFormat, newFormat: format)
+      sheet.setCell(cell, at: address)
+      changed = true
+    }
+
+    if cellCount > 2_000 {
+      for address in sheet.cells.keys where range.contains(address) {
+        mutateAddress(address)
+      }
+      if range.contains(selectionAnchor), sheet.cells[selectionAnchor] == nil {
+        mutateAddress(selectionAnchor)
+      }
+    } else {
+      for address in range.allAddresses() {
+        mutateAddress(address)
+      }
+    }
+
+    if changed {
+      setActiveSheetPreservingFormulas(sheet)
+    }
+  }
+
+  private func updateFormat(in range: CellRange, mutate: (inout CellFormat) -> Void) {
+    applyFormat(to: range, mutate: mutate)
+  }
+
+  private func mutateBorders(at address: CellAddress, mutate: (inout CellBorders) -> Void) {
+    applyFormatMutation(at: address) { format in
+      mutate(&format.borders)
+    }
+  }
+
   func increaseDecimalPlaces() {
     updateSelectedFormat { format in
       let current = format.decimalPlaces ?? defaultDecimalPlaces(for: format.numberFormat)
@@ -699,32 +945,41 @@ final class SpreadsheetViewModel {
     let n = range.normalized
     let cellCount = (n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1)
 
-    if cellCount > 2_000 {
-      for address in activeSheet.cells.keys where range.contains(address) {
-        applyFormatMutation(at: address, mutate: mutate)
-      }
-      if range.contains(selectionAnchor), activeSheet.cells[selectionAnchor] == nil {
-        applyFormatMutation(at: selectionAnchor, mutate: mutate)
-      }
-      return
+    var sheet = activeSheet
+    var changed = false
+
+    func mutateAddress(_ address: CellAddress) {
+      var cell = sheet.cell(at: address)
+      var format = cell.format ?? CellFormat()
+      let oldFormat = format
+      mutate(&format)
+      guard format != oldFormat else { return }
+      cell.format = format.isDefault ? nil : format
+      registerFormatUndo(address: address, oldFormat: oldFormat, newFormat: format)
+      sheet.setCell(cell, at: address)
+      changed = true
     }
 
-    for address in range.allAddresses() {
-      applyFormatMutation(at: address, mutate: mutate)
+    if cellCount > 2_000 {
+      for address in sheet.cells.keys where range.contains(address) {
+        mutateAddress(address)
+      }
+      if range.contains(selectionAnchor), sheet.cells[selectionAnchor] == nil {
+        mutateAddress(selectionAnchor)
+      }
+    } else {
+      for address in range.allAddresses() {
+        mutateAddress(address)
+      }
+    }
+
+    if changed {
+      setActiveSheetPreservingFormulas(sheet)
     }
   }
 
   private func applyFormatMutation(at address: CellAddress, mutate: (inout CellFormat) -> Void) {
-    var sheet = activeSheet
-    var cell = sheet.cell(at: address)
-    var format = cell.format ?? CellFormat()
-    let oldFormat = format
-    mutate(&format)
-    guard format != oldFormat else { return }
-    cell.format = format.isDefault ? nil : format
-    registerFormatUndo(address: address, oldFormat: oldFormat, newFormat: format)
-    sheet.setCell(cell, at: address)
-    activeSheet = sheet
+    applyFormat(to: CellRange(start: address, end: address), mutate: mutate)
   }
 
   private func registerFormatUndo(address: CellAddress, oldFormat: CellFormat, newFormat: CellFormat) {
@@ -742,7 +997,7 @@ final class SpreadsheetViewModel {
     var cell = sheet.cell(at: address)
     cell.format = format.isDefault ? nil : format
     sheet.setCell(cell, at: address)
-    activeSheet = sheet
+    setActiveSheetPreservingFormulas(sheet)
   }
 
   private func clamp(_ address: CellAddress) -> CellAddress {
@@ -804,26 +1059,27 @@ final class SpreadsheetViewModel {
   @discardableResult
   func freezePanesAtSelection() -> Bool {
     commitEditIfNeeded()
-    let row = selectionAnchor.row
-    let col = selectionAnchor.col
-    guard row > 0 || col > 0 else { return false }
-    return applyFreeze(rows: row, cols: col)
+    // Freeze the selected row/column and everything above/to the left (inclusive).
+    let rows = selectionAnchor.row + 1
+    let cols = selectionAnchor.col + 1
+    guard rows > 0 || cols > 0 else { return false }
+    return applyFreeze(rows: rows, cols: cols)
   }
 
   @discardableResult
   func freezeRowsAtSelection() -> Bool {
     commitEditIfNeeded()
-    let row = selectionAnchor.row
-    guard row > 0 else { return false }
-    return applyFreeze(rows: row, cols: activeSheet.frozenColumns)
+    let rows = selectionRange.normalized.minRow + 1
+    guard rows > 0 else { return false }
+    return applyFreeze(rows: rows, cols: activeSheet.frozenColumns)
   }
 
   @discardableResult
   func freezeColumnsAtSelection() -> Bool {
     commitEditIfNeeded()
-    let col = selectionAnchor.col
-    guard col > 0 else { return false }
-    return applyFreeze(rows: activeSheet.frozenRows, cols: col)
+    let cols = selectionRange.normalized.minCol + 1
+    guard cols > 0 else { return false }
+    return applyFreeze(rows: activeSheet.frozenRows, cols: cols)
   }
 
   func unfreezePanes() {
@@ -841,7 +1097,9 @@ final class SpreadsheetViewModel {
     sheet.frozenRows = rows
     sheet.frozenColumns = cols
     updatedWorkbook.activeSheet = sheet
+    suspendFormulaRebuild = true
     workbook = updatedWorkbook
+    suspendFormulaRebuild = false
     notifyGridRefresh()
     registerFreezeUndo(
       oldRows: oldFrozenRows,
@@ -1058,7 +1316,7 @@ final class SpreadsheetViewModel {
     workbook.namedRanges = next
   }
 
-  private func registerWorkbookStructureUndo(before: Workbook, action: String) {
+  func registerWorkbookStructureUndo(before: Workbook, action: String) {
     let after = workbook
     undoManager?.registerUndo(withTarget: self) { target in
       target.workbook = before
@@ -1071,7 +1329,7 @@ final class SpreadsheetViewModel {
     undoManager?.setActionName(action)
   }
 
-  private func clampSelectionToSheet() {
+  func clampSelectionToSheet() {
     selectionRanges = selectionRanges.map { range in
       CellRange(start: clamp(range.start), end: clamp(range.end))
     }
@@ -1330,10 +1588,15 @@ final class SpreadsheetViewModel {
       var sheet = activeSheet
       var cell = sheet.cell(at: address)
       cell.raw = value
+      applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
       sheet.setCell(cell, at: address)
-      activeSheet = sheet
+      setActiveSheet(sheet, formulaCellsChanged: [address])
       if address == selectionAnchor {
         syncEditTextFromSelection()
+      }
+      if filterState != nil {
+        hiddenRowsCache = nil
+        notifyGridRefresh()
       }
     } else {
       setCellValue(value, at: address)

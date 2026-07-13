@@ -11,10 +11,40 @@ enum CSVCodec {
       for (colIndex, field) in fields.enumerated() {
         let value = field.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { continue }
-        cells[CellAddress(row: rowIndex, col: colIndex)] = Cell(raw: value)
+        var cell = Cell(raw: value)
+        if let format = inferredFormat(for: value) {
+          cell.format = format
+        }
+        cells[CellAddress(row: rowIndex, col: colIndex)] = cell
       }
     }
     return cells
+  }
+
+  /// Detect simple typed literals so display matches what the formula bar shows (e.g. `12.5%`).
+  private static func inferredFormat(for value: String) -> CellFormat? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.hasSuffix("%"),
+       Double(
+         String(trimmed.dropLast())
+           .trimmingCharacters(in: .whitespaces)
+           .replacingOccurrences(of: ",", with: "")
+       ) != nil
+    {
+      var format = CellFormat()
+      format.numberFormat = .percent
+      format.decimalPlaces = 2
+      return format
+    }
+    if trimmed.hasPrefix("$"),
+       Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: "")) != nil
+    {
+      var format = CellFormat()
+      format.numberFormat = .currency
+      format.decimalPlaces = 2
+      return format
+    }
+    return nil
   }
 
   /// Export the active sheet to CSV text.

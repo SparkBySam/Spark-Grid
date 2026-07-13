@@ -222,20 +222,25 @@ final class SpreadsheetPrintNSView: NSView {
       rect.fill()
     }
 
-    guard !cell.raw.isEmpty else { return }
-    let text = formulaEngine.displayString(at: address, sheet: sheet, format: cell.format)
-    let textRect = rect.insetBy(dx: 4, dy: 2)
-    guard textRect.width > 1, textRect.height > 1 else { return }
+    if !cell.raw.isEmpty {
+      let text = formulaEngine.displayString(at: address, sheet: sheet, format: cell.format)
+      let textRect = rect.insetBy(dx: 4, dy: 2)
+      if textRect.width > 1, textRect.height > 1 {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: rect).addClip()
+        CellFormatRenderer.drawSingleLineText(
+          text,
+          in: textRect,
+          format: cell.format,
+          onLightBackground: true
+        )
+        NSGraphicsContext.restoreGraphicsState()
+      }
+    }
 
-    NSGraphicsContext.saveGraphicsState()
-    NSBezierPath(rect: rect).addClip()
-    CellFormatRenderer.drawSingleLineText(
-      text,
-      in: textRect,
-      format: cell.format,
-      onLightBackground: true
-    )
-    NSGraphicsContext.restoreGraphicsState()
+    if let borders = cell.format?.borders, borders.hasAny {
+      CellFormatRenderer.drawBorders(borders, in: rect)
+    }
   }
 
   private func drawCell(_ cell: Cell, at address: CellAddress, in rect: NSRect, gridLine: NSColor) {

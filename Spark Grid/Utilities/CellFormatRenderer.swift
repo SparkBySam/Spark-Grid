@@ -29,7 +29,9 @@ enum CellFormatRenderer {
     case .currency:
       return formatCurrency(number, places: places)
     case .percent:
-      return formatPercent(number, places: places)
+      // parseNumber strips `%`; recover Excel fraction semantics when raw was a percent literal.
+      let value = trimmed.hasSuffix("%") ? number / 100 : number
+      return formatPercent(value, places: places)
     case .scientific:
       return String(format: "%.\(places)e", number)
     case .date, .time:
@@ -47,9 +49,20 @@ enum CellFormatRenderer {
     case .bool, .string:
       return value.displayString
     case .number(let number):
-      guard let format else { return value.displayString }
-      let places = format.decimalPlaces ?? decimalPlaces(for: format.numberFormat)
-      switch format.numberFormat {
+      let trimmed = fallbackRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+      let literalPercent = trimmed.hasSuffix("%") && !trimmed.hasPrefix("=")
+      let resolvedFormat: CellFormat? = {
+        if let format, format.numberFormat != .general { return format }
+        if literalPercent {
+          var inferred = format ?? CellFormat()
+          inferred.numberFormat = .percent
+          return inferred
+        }
+        return format
+      }()
+      guard let resolvedFormat else { return value.displayString }
+      let places = resolvedFormat.decimalPlaces ?? decimalPlaces(for: resolvedFormat.numberFormat)
+      switch resolvedFormat.numberFormat {
       case .general:
         return value.displayString
       case .number:
@@ -163,8 +176,24 @@ enum CellFormatRenderer {
       return
     }
 
-    let size = (text as NSString).size(withAttributes: attrs)
+    // Fast path: left-aligned, no rotation — skip size measurement.
     let alignment = verticalAlign ?? resolved.verticalAlign
+    if resolved.textRotation == 0,
+       resolved.horizontalAlign == .general || resolved.horizontalAlign == .left
+    {
+      let font = attrs[.font] as? NSFont ?? Self.font(for: resolved)
+      let height = font.ascender - font.descender
+      var point = inset.origin
+      switch alignment {
+      case .top: break
+      case .middle: point.y = inset.midY - height / 2
+      case .bottom: point.y = inset.maxY - height
+      }
+      (text as NSString).draw(at: point, withAttributes: attrs)
+      return
+    }
+
+    let size = (text as NSString).size(withAttributes: attrs)
     let point = alignedOrigin(for: size, in: inset, horizontalAlign: resolved.horizontalAlign, verticalAlign: alignment)
 
     if resolved.textRotation != 0 {
@@ -223,11 +252,15 @@ enum CellFormatRenderer {
     return NSPoint(x: x, y: y)
   }
 
+  private static var fontCache: [String: NSFont] = [:]
+
   static func font(for format: CellFormat) -> NSFont {
     let family = format.fontFamily ?? defaultFontFamily
     let size = format.fontSize ?? defaultFontSize
-    var font = NSFont(name: family, size: size) ?? NSFont.systemFont(ofSize: size)
+    let key = "\(family)|\(size)|\(format.bold ? 1 : 0)|\(format.italic ? 1 : 0)"
+    if let cached = fontCache[key] { return cached }
 
+    var font = NSFont(name: family, size: size) ?? NSFont.systemFont(ofSize: size)
     if format.bold && format.italic {
       font = NSFontManager.shared.convert(font, toHaveTrait: [.boldFontMask, .italicFontMask])
     } else if format.bold {
@@ -235,6 +268,7 @@ enum CellFormatRenderer {
     } else if format.italic {
       font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
     }
+    fontCache[key] = font
     return font
   }
 
@@ -288,11 +322,197 @@ enum CellFormatRenderer {
   }
 
   private static func formatPercent(_ value: Double, places: Int) -> String {
-    let normalized = abs(value) <= 1 ? value * 100 : value
-    return String(format: "%.\(places)f%%", normalized)
+    // Excel stores percentages as fractions (0.5 → 50%). Always scale for display.
+    String(format: "%.\(places)f%%", value * 100)
   }
 }
 
 extension CellFormat {
   var isDefault: Bool { self == CellFormat() }
 }
+
+extension CellFormatRenderer {
+  static func borderColor(for edge: BorderEdge) -> NSColor {
+    if let color = edge.color, let ns = nsColor(color) {
+      return ns
+    }
+    return NSColor.labelColor.withAlphaComponent(0.85)
+  }
+
+  static func drawBorders(_ borders: CellBorders, in rect: NSRect, scale: CGFloat = 1) {
+    drawBordersBatch([(borders, rect)], scale: scale)
+  }
+
+  /// Batched border drawing. Shared edges are deduped and collinear runs are merged into
+  /// long spans so a dense “all borders” / double-border grid paints like gridlines
+  /// (O(rows+cols) strokes) instead of O(cells) short segments.
+  static func drawBordersBatch(_ items: [(CellBorders, NSRect)], scale: CGFloat = 1) {
+    guard !items.isEmpty else { return }
+
+    struct LineKey: Hashable {
+      var vertical: Bool
+      var major: Int
+      var style: BorderStyle
+      var colorKey: UInt64
+    }
+
+    // major → list of [start,end] quanta along the line
+    var runs: [LineKey: [(Int, Int)]] = [:]
+    runs.reserveCapacity(min(items.count, 512))
+
+    func colorKey(for edge: BorderEdge) -> UInt64 {
+      guard let c = edge.color else { return 0 }
+      let r = UInt64((c.red * 255).rounded())
+      let g = UInt64((c.green * 255).rounded())
+      let b = UInt64((c.blue * 255).rounded())
+      let a = UInt64((c.alpha * 255).rounded())
+      return (r << 24) | (g << 16) | (b << 8) | a
+    }
+
+    func quantize(_ value: CGFloat) -> Int {
+      Int((value * 2).rounded())
+    }
+
+    func dequantize(_ value: Int) -> CGFloat {
+      CGFloat(value) * 0.5
+    }
+
+    func append(_ edge: BorderEdge?, vertical: Bool, major: CGFloat, from: CGFloat, to: CGFloat) {
+      guard let edge else { return }
+      let a0 = quantize(from)
+      let b0 = quantize(to)
+      let a = min(a0, b0)
+      let b = max(a0, b0)
+      guard b > a else { return }
+      let key = LineKey(
+        vertical: vertical,
+        major: quantize(major),
+        style: edge.style,
+        colorKey: colorKey(for: edge)
+      )
+      runs[key, default: []].append((a, b))
+    }
+
+    for (borders, rect) in items {
+      guard borders.hasAny else { continue }
+      append(borders.top, vertical: false, major: rect.minY, from: rect.minX, to: rect.maxX)
+      append(borders.bottom, vertical: false, major: rect.maxY, from: rect.minX, to: rect.maxX)
+      append(borders.left, vertical: true, major: rect.minX, from: rect.minY, to: rect.maxY)
+      append(borders.right, vertical: true, major: rect.maxX, from: rect.minY, to: rect.maxY)
+    }
+
+    func mergeIntervals(_ intervals: [(Int, Int)]) -> [(Int, Int)] {
+      guard !intervals.isEmpty else { return [] }
+      let sorted = intervals.sorted { lhs, rhs in
+        if lhs.0 != rhs.0 { return lhs.0 < rhs.0 }
+        return lhs.1 < rhs.1
+      }
+      var merged: [(Int, Int)] = []
+      merged.reserveCapacity(sorted.count)
+      var current = sorted[0]
+      for i in 1..<sorted.count {
+        let next = sorted[i]
+        // Allow 1-quantum gaps so adjacent cell edges fuse into one span.
+        if next.0 <= current.1 + 1 {
+          current.1 = max(current.1, next.1)
+        } else {
+          merged.append(current)
+          current = next
+        }
+      }
+      merged.append(current)
+      return merged
+    }
+
+    func strokeColor(for key: LineKey) -> NSColor {
+      if key.colorKey == 0 {
+        return NSColor.labelColor.withAlphaComponent(0.85)
+      }
+      let r = CGFloat((key.colorKey >> 24) & 0xFF) / 255
+      let g = CGFloat((key.colorKey >> 16) & 0xFF) / 255
+      let b = CGFloat((key.colorKey >> 8) & 0xFF) / 255
+      let a = CGFloat(key.colorKey & 0xFF) / 255
+      return NSColor(red: r, green: g, blue: b, alpha: a)
+    }
+
+    guard let cg = NSGraphicsContext.current?.cgContext else { return }
+    cg.saveGState()
+    cg.setShouldAntialias(false)
+
+    for (key, intervals) in runs {
+      let merged = mergeIntervals(intervals)
+      guard !merged.isEmpty else { continue }
+      let color = strokeColor(for: key)
+      cg.setStrokeColor(color.cgColor)
+      let major = dequantize(key.major)
+
+      switch key.style {
+      case .double:
+        let inset = 1.5 * scale
+        cg.setLineWidth(max(0.5, 1 * scale))
+        cg.beginPath()
+        for (a, b) in merged {
+          let start = dequantize(a)
+          let end = dequantize(b)
+          if key.vertical {
+            cg.move(to: CGPoint(x: major - inset, y: start))
+            cg.addLine(to: CGPoint(x: major - inset, y: end))
+            cg.move(to: CGPoint(x: major + inset, y: start))
+            cg.addLine(to: CGPoint(x: major + inset, y: end))
+          } else {
+            cg.move(to: CGPoint(x: start, y: major - inset))
+            cg.addLine(to: CGPoint(x: end, y: major - inset))
+            cg.move(to: CGPoint(x: start, y: major + inset))
+            cg.addLine(to: CGPoint(x: end, y: major + inset))
+          }
+        }
+        cg.strokePath()
+
+      case .dashed, .dotted:
+        // Dashes still use NSBezierPath (CG dash + many spans is awkward here).
+        let path = NSBezierPath()
+        let width = max(0.5, key.style.lineWidth * scale)
+        path.lineWidth = width
+        if key.style == .dashed {
+          path.setLineDash([3 * scale, 2 * scale], count: 2, phase: 0)
+        } else {
+          path.lineCapStyle = .round
+          path.setLineDash([0.5 * scale, 2 * scale], count: 2, phase: 0)
+        }
+        color.setStroke()
+        for (a, b) in merged {
+          let start = dequantize(a)
+          let end = dequantize(b)
+          if key.vertical {
+            path.move(to: NSPoint(x: major, y: start))
+            path.line(to: NSPoint(x: major, y: end))
+          } else {
+            path.move(to: NSPoint(x: start, y: major))
+            path.line(to: NSPoint(x: end, y: major))
+          }
+        }
+        path.stroke()
+
+      case .thin, .medium, .thick:
+        let width = max(0.5, key.style.lineWidth * scale)
+        cg.setLineWidth(max(width, 1.25 * scale))
+        cg.beginPath()
+        for (a, b) in merged {
+          let start = dequantize(a)
+          let end = dequantize(b)
+          if key.vertical {
+            cg.move(to: CGPoint(x: major, y: start))
+            cg.addLine(to: CGPoint(x: major, y: end))
+          } else {
+            cg.move(to: CGPoint(x: start, y: major))
+            cg.addLine(to: CGPoint(x: end, y: major))
+          }
+        }
+        cg.strokePath()
+      }
+    }
+
+    cg.restoreGState()
+  }
+}
+

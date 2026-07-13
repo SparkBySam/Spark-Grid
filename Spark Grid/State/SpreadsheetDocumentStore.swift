@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 @Observable
 @MainActor
@@ -30,6 +32,11 @@ final class SpreadsheetDocumentStore {
     document.workbook.sheets.count > 1
   }
 
+  var isXLSXFile: Bool {
+    guard let fileURL else { return false }
+    return fileURL.pathExtension.lowercased() == "xlsx"
+  }
+
   func newDocument() {
     document = SpreadsheetDocument()
     fileURL = nil
@@ -51,8 +58,13 @@ final class SpreadsheetDocumentStore {
   func save(to url: URL? = nil) throws {
     let destination = url ?? fileURL
     guard let destination else { return }
-    let csv = CSVCodec.exportCSV(from: document.workbook.activeSheet)
-    try csv.write(to: destination, atomically: true, encoding: .utf8)
+    if destination.pathExtension.lowercased() == "xlsx" {
+      let data = try XLSXCodec.exportWorkbook(document.workbook)
+      try data.write(to: destination, options: .atomic)
+    } else {
+      let csv = CSVCodec.exportCSV(from: document.workbook.activeSheet)
+      try csv.write(to: destination, atomically: true, encoding: .utf8)
+    }
     fileURL = destination
     savedFingerprint = fingerprint(of: document.workbook)
     isDirty = false
@@ -99,11 +111,10 @@ final class SpreadsheetDocumentStore {
 
   @discardableResult
   func saveInteractively() -> Bool {
-    if hasMultipleSheets, !confirmActiveSheetOnlySave() {
-      return false
-    }
-
     if let url = fileURL {
+      if !isXLSXFile, hasMultipleSheets, !confirmActiveSheetOnlySave() {
+        return false
+      }
       do {
         try save(to: url)
         return true
@@ -114,10 +125,18 @@ final class SpreadsheetDocumentStore {
     }
 
     let panel = NSSavePanel()
-    panel.allowedContentTypes = [.commaSeparatedText]
+    panel.allowedContentTypes = [.spreadsheetML, .commaSeparatedText]
     panel.nameFieldStringValue = suggestedSaveFilename()
     panel.canCreateDirectories = true
+    panel.allowsOtherFileTypes = false
+    panel.isExtensionHidden = false
+    panel.title = "Save Spreadsheet"
+    panel.message = "Choose Excel Workbook (.xlsx) to keep all sheets, or CSV for the active sheet only."
     guard panel.runModal() == .OK, let url = panel.url else { return false }
+
+    if url.pathExtension.lowercased() != "xlsx", hasMultipleSheets, !confirmActiveSheetOnlySave() {
+      return false
+    }
 
     do {
       try save(to: url)
@@ -173,11 +192,11 @@ final class SpreadsheetDocumentStore {
   }
 
   private func suggestedSaveFilename() -> String {
-    let sheetName = document.workbook.activeSheet.name
     if let fileURL {
       return fileURL.lastPathComponent
     }
-    return "\(sheetName).csv"
+    let sheetName = document.workbook.activeSheet.name
+    return "\(sheetName).xlsx"
   }
 
   private func confirmActiveSheetOnlySave() -> Bool {
@@ -200,6 +219,3 @@ final class SpreadsheetDocumentStore {
     alert.runModal()
   }
 }
-
-import AppKit
-import UniformTypeIdentifiers

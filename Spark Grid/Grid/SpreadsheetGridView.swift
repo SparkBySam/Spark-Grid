@@ -16,6 +16,8 @@ struct SpreadsheetGridView: NSViewRepresentable {
     context.coordinator.lastSelectionEnd = viewModel.selectionEnd
     context.coordinator.lastSelectionRevision = viewModel.selectionRevision
     context.coordinator.lastFormulaHighlightRevision = viewModel.formulaHighlightRevision
+    context.coordinator.lastScrollRequestToken = viewModel.scrollRequestToken
+    context.coordinator.lastZoomScale = viewModel.zoomScale
     context.coordinator.scheduleInitialFocus(for: view)
     return view
   }
@@ -33,9 +35,12 @@ struct SpreadsheetGridView: NSViewRepresentable {
       context.coordinator.lastContentRevision = viewModel.contentRevision
       context.coordinator.lastGridRefreshToken = viewModel.gridRefreshToken
       nsView.syncDisplay()
-    } else if viewModel.gridRefreshToken != context.coordinator.lastGridRefreshToken {
+    } else if viewModel.gridRefreshToken != context.coordinator.lastGridRefreshToken
+      || viewModel.zoomScale != context.coordinator.lastZoomScale
+    {
       context.coordinator.lastGridRefreshToken = viewModel.gridRefreshToken
-      nsView.applyFreezePanesLayout()
+      context.coordinator.lastZoomScale = viewModel.zoomScale
+      nsView.reloadContent(resetScrollPosition: false)
     } else if viewModel.selectionRevision != context.coordinator.lastSelectionRevision
       || viewModel.selectionAnchor != context.coordinator.lastSelectionAnchor
       || viewModel.selectionEnd != context.coordinator.lastSelectionEnd
@@ -47,8 +52,12 @@ struct SpreadsheetGridView: NSViewRepresentable {
       nsView.refreshSelectionDisplay()
     } else if viewModel.formulaHighlightRevision != context.coordinator.lastFormulaHighlightRevision {
       context.coordinator.lastFormulaHighlightRevision = viewModel.formulaHighlightRevision
-      // Redraw ref borders; refresh in-cell colored tokens when focus changes.
       nsView.refreshFormulaHighlights()
+    }
+
+    if viewModel.scrollRequestToken != context.coordinator.lastScrollRequestToken {
+      context.coordinator.lastScrollRequestToken = viewModel.scrollRequestToken
+      nsView.scrollSelectionIntoView()
     }
   }
 
@@ -60,6 +69,8 @@ struct SpreadsheetGridView: NSViewRepresentable {
     var lastSelectionAnchor = CellAddress.origin
     var lastSelectionEnd = CellAddress.origin
     var lastFormulaHighlightRevision = 0
+    var lastScrollRequestToken = 0
+    var lastZoomScale: CGFloat = 1
     private var didScheduleInitialFocus = false
 
     func scheduleInitialFocus(for gridView: SpreadsheetGridNSView) {

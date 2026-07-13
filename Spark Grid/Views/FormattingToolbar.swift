@@ -8,7 +8,9 @@ struct FormattingToolbar: View {
 
   @State private var textColor: Color = .primary
   @State private var fillColor: Color = .clear
+  @State private var borderColor: Color = .primary
   @State private var fontSizeText = "12"
+  @State private var showBorderPopover = false
 
   private var showLabels: Bool { settings.showToolbarLabels }
   private var toolbarHeight: CGFloat { 58 }
@@ -45,6 +47,8 @@ struct FormattingToolbar: View {
       styleGroup
       toolbarDivider
       colorGroup
+      toolbarDivider
+      borderGroup
       toolbarDivider
       alignGroup
     }
@@ -192,6 +196,63 @@ struct FormattingToolbar: View {
     }
   }
 
+  private var borderGroup: some View {
+    HStack(spacing: 4) {
+      Button {
+        showBorderPopover.toggle()
+      } label: {
+        VStack(spacing: 2) {
+          Image(systemName: "square.split.2x2")
+            .font(.system(size: 13))
+            .overlay(alignment: .bottom) {
+              BorderStylePreview(style: viewModel.borderStyle, color: borderColor)
+                .frame(height: 3)
+                .padding(.horizontal, 2)
+                .offset(y: 3)
+            }
+            .frame(width: showLabels ? 48 : 32, height: showLabels ? 24 : 32)
+
+          if showLabels {
+            Text("Borders")
+              .font(.system(size: 9))
+              .lineLimit(1)
+              .minimumScaleFactor(0.8)
+          }
+        }
+        .frame(minWidth: 40)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Borders")
+      .popover(isPresented: $showBorderPopover, arrowEdge: .bottom) {
+        BorderPopoverContent(
+          viewModel: viewModel,
+          borderColor: borderColor,
+          onApplyPreset: { preset in
+            viewModel.applyBorderPreset(preset)
+            showBorderPopover = false
+          }
+        )
+        .padding(10)
+        .frame(width: 220)
+      }
+
+      ToolbarColorPicker(
+        title: "Border",
+        showLabel: showLabels,
+        label: {
+          Image(systemName: "pencil.tip")
+            .font(.system(size: 13))
+            .foregroundStyle(borderColor == .clear ? Color(nsColor: .labelColor) : borderColor)
+        },
+        selection: $borderColor
+      ) { color in
+        let codable = CellFormatRenderer.codableColor(from: NSColor(color))
+        viewModel.setBorderColor(codable)
+      }
+    }
+  }
+
   private var alignGroup: some View {
     HStack(spacing: 4) {
       ToolbarMenuButton(title: "Align", showLabel: showLabels, width: 32) {
@@ -265,6 +326,18 @@ struct FormattingToolbar: View {
       fillColor = Color(nsColor: ns)
     } else {
       fillColor = .clear
+    }
+    if let border = viewModel.borderColor, let ns = CellFormatRenderer.nsColor(border) {
+      borderColor = Color(nsColor: ns)
+    } else if let edgeColor = format.borders.top?.color
+      ?? format.borders.bottom?.color
+      ?? format.borders.left?.color
+      ?? format.borders.right?.color,
+      let ns = CellFormatRenderer.nsColor(edgeColor)
+    {
+      borderColor = Color(nsColor: ns)
+    } else {
+      borderColor = Color(nsColor: .labelColor)
     }
   }
 
@@ -356,6 +429,120 @@ private final class ClickToFocusTextField: NSTextField {
 }
 
 // MARK: - Toolbar controls
+
+private struct BorderPopoverContent: View {
+  @Bindable var viewModel: SpreadsheetViewModel
+  var borderColor: Color
+  var onApplyPreset: (BorderPreset) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Line Style")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      VStack(spacing: 2) {
+        ForEach(BorderStyle.allCases, id: \.self) { style in
+          Button {
+            viewModel.setBorderStyle(style)
+          } label: {
+            HStack(spacing: 8) {
+              BorderStylePreview(style: style, color: borderColor)
+                .frame(width: 56, height: 12)
+              Text(style.title)
+                .foregroundStyle(Color(nsColor: .labelColor))
+              Spacer(minLength: 0)
+              if viewModel.borderStyle == style {
+                Image(systemName: "checkmark")
+                  .foregroundStyle(Color.accentColor)
+              }
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+            .background(
+              viewModel.borderStyle == style
+                ? Color.accentColor.opacity(0.12)
+                : Color.clear,
+              in: RoundedRectangle(cornerRadius: 4)
+            )
+          }
+          .buttonStyle(.plain)
+        }
+      }
+
+      Divider()
+
+      Text("Borders")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      VStack(spacing: 2) {
+        ForEach(BorderPreset.allCases, id: \.self) { preset in
+          Button {
+            onApplyPreset(preset)
+          } label: {
+            Label(preset.title, systemImage: preset.systemImage)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .contentShape(Rectangle())
+              .padding(.horizontal, 6)
+              .padding(.vertical, 5)
+          }
+          .buttonStyle(.plain)
+        }
+      }
+    }
+  }
+}
+
+private struct BorderStylePreview: View {
+  var style: BorderStyle
+  var color: Color
+
+  var body: some View {
+    Canvas { context, size in
+      let stroke = color == .clear ? Color(nsColor: .labelColor) : color
+      let y = size.height / 2
+      var path = Path()
+
+      switch style {
+      case .thin, .medium, .thick:
+        path.move(to: CGPoint(x: 0, y: y))
+        path.addLine(to: CGPoint(x: size.width, y: y))
+        context.stroke(
+          path,
+          with: .color(stroke),
+          style: StrokeStyle(lineWidth: style == .thin ? 1 : (style == .medium ? 1.5 : 2.5))
+        )
+      case .dashed:
+        path.move(to: CGPoint(x: 0, y: y))
+        path.addLine(to: CGPoint(x: size.width, y: y))
+        context.stroke(
+          path,
+          with: .color(stroke),
+          style: StrokeStyle(lineWidth: 1.2, dash: [4, 2])
+        )
+      case .dotted:
+        path.move(to: CGPoint(x: 0, y: y))
+        path.addLine(to: CGPoint(x: size.width, y: y))
+        context.stroke(
+          path,
+          with: .color(stroke),
+          style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [0.5, 2.5])
+        )
+      case .double:
+        var top = Path()
+        top.move(to: CGPoint(x: 0, y: y - 1.5))
+        top.addLine(to: CGPoint(x: size.width, y: y - 1.5))
+        var bottom = Path()
+        bottom.move(to: CGPoint(x: 0, y: y + 1.5))
+        bottom.addLine(to: CGPoint(x: size.width, y: y + 1.5))
+        context.stroke(top, with: .color(stroke), lineWidth: 1)
+        context.stroke(bottom, with: .color(stroke), lineWidth: 1)
+      }
+    }
+  }
+}
 
 private struct RotateToolbarMenu: View {
   @Bindable var viewModel: SpreadsheetViewModel

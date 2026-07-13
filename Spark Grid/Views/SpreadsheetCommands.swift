@@ -58,6 +58,21 @@ struct SpreadsheetCommands: Commands {
 
       Divider()
 
+      Button("Find…") { viewModel?.showFindBar(replace: false) }
+        .keyboardShortcut("f", modifiers: .command)
+        .disabled(viewModel == nil)
+      Button("Find and Replace…") { viewModel?.showFindBar(replace: true) }
+        .keyboardShortcut("f", modifiers: [.command, .option])
+        .disabled(viewModel == nil)
+      Button("Find Next") { viewModel?.findNext() }
+        .keyboardShortcut("g", modifiers: .command)
+        .disabled(viewModel == nil)
+      Button("Find Previous") { viewModel?.findPrevious() }
+        .keyboardShortcut("g", modifiers: [.command, .shift])
+        .disabled(viewModel == nil)
+
+      Divider()
+
       Button("Bold") { viewModel?.toggleBold() }
         .keyboardShortcut(settings.keyEquivalent(for: .bold), modifiers: settings.eventModifiers(for: .bold))
       Button("Italic") { viewModel?.toggleItalic() }
