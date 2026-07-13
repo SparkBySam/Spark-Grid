@@ -48,19 +48,45 @@ struct SpreadsheetFileCommands: Commands {
   private func saveAsPanel() {
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.spreadsheetML, .commaSeparatedText]
-    panel.nameFieldStringValue = store.fileURL?.lastPathComponent
-      ?? "\(store.document.workbook.activeSheet.name).xlsx"
+    let baseName = store.fileURL?.deletingPathExtension().lastPathComponent
+      ?? store.document.workbook.activeSheet.name
+    // Default to Excel so formatting/CF/filters survive round-trip.
+    panel.nameFieldStringValue = "\(baseName).xlsx"
     panel.canCreateDirectories = true
     panel.isExtensionHidden = false
-    // Format popup lists UTI descriptions: Excel Workbook vs Comma Separated Values.
+    if #available(macOS 12.0, *) {
+      panel.currentContentType = .spreadsheetML
+    }
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    if url.pathExtension.lowercased() != "xlsx",
+    let destination = normalizedSaveURL(url, panel: panel)
+    if destination.pathExtension.lowercased() != "xlsx",
        store.hasMultipleSheets,
        !confirmCSVOnly()
     {
       return
     }
-    try? store.save(to: url)
+    try? store.save(to: destination)
+  }
+
+  /// Fixes macOS Save panel appending `.csv` onto names that already end in `.xlsx`.
+  private func normalizedSaveURL(_ url: URL, panel: NSSavePanel) -> URL {
+    var destination = url
+    let lower = destination.lastPathComponent.lowercased()
+    if lower.hasSuffix(".xlsx.csv") || lower.contains(".xlsx.") {
+      let trimmed = destination.lastPathComponent
+        .replacingOccurrences(of: ".xlsx.csv", with: ".xlsx", options: .caseInsensitive)
+        .replacingOccurrences(of: ".xlsx.xlsx", with: ".xlsx", options: .caseInsensitive)
+      destination = destination.deletingLastPathComponent().appendingPathComponent(trimmed)
+    }
+    if #available(macOS 12.0, *),
+       let type = panel.currentContentType,
+       type.conforms(to: .spreadsheetML) || type.identifier == UTType.spreadsheetML.identifier
+    {
+      if destination.pathExtension.lowercased() != "xlsx" {
+        destination = destination.deletingPathExtension().appendingPathExtension("xlsx")
+      }
+    }
+    return destination
   }
 
   private func confirmCSVOnly() -> Bool {

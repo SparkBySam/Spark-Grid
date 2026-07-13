@@ -1243,7 +1243,8 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
-    if let fill = CellFormatRenderer.fillColor(for: cell.format) {
+    let paintFormat = viewModel.resolvedFormat(at: address)
+    if let fill = CellFormatRenderer.fillColor(for: paintFormat) {
       fill.setFill()
       rect.fill()
     }
@@ -1259,7 +1260,7 @@ final class SpreadsheetGridNSView: NSView {
 
     NSGraphicsContext.saveGraphicsState()
     NSBezierPath(rect: rect).addClip()
-    var drawFormat = cell.format ?? CellFormat()
+    var drawFormat = paintFormat ?? CellFormat()
     let baseSize = drawFormat.fontSize ?? CellFormatRenderer.defaultFontSize
     drawFormat.fontSize = baseSize * zoomScale
     if value.isError {
