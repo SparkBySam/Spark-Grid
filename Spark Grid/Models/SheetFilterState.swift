@@ -1,7 +1,8 @@
 import Foundation
 
-/// Session-only filter on the active sheet (not persisted to xlsx/csv).
-struct SheetFilterState: Equatable, Sendable {
+/// AutoFilter on a sheet. Persisted with the workbook; xlsx round-trip keeps the range
+/// (selected values may reset when reopening Excel-authored files).
+struct SheetFilterState: Codable, Equatable, Sendable {
   /// Inclusive data range including the header row.
   var range: CellRange
   /// Per-column selected display values. Missing key = all values visible for that column.

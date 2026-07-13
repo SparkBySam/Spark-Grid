@@ -9,6 +9,9 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     var rowHeights: [Int: CGFloat]
     var frozenRows: Int
     var frozenColumns: Int
+    var conditionalFormats: [ConditionalFormatRule]
+    /// Persisted AutoFilter; criteria may be empty after xlsx round-trip (range-only).
+    var autoFilter: SheetFilterState?
 
     init(
         id: UUID = UUID(),
@@ -17,7 +20,9 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         columnWidths: [Int: CGFloat] = [:],
         rowHeights: [Int: CGFloat] = [:],
         frozenRows: Int = 0,
-        frozenColumns: Int = 0
+        frozenColumns: Int = 0,
+        conditionalFormats: [ConditionalFormatRule] = [],
+        autoFilter: SheetFilterState? = nil
     ) {
         self.id = id
         self.name = name
@@ -26,6 +31,39 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         self.rowHeights = rowHeights
         self.frozenRows = frozenRows
         self.frozenColumns = frozenColumns
+        self.conditionalFormats = conditionalFormats
+        self.autoFilter = autoFilter
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, cells, columnWidths, rowHeights
+        case frozenRows, frozenColumns, conditionalFormats, autoFilter
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        cells = try c.decodeIfPresent([CellAddress: Cell].self, forKey: .cells) ?? [:]
+        columnWidths = try c.decodeIfPresent([Int: CGFloat].self, forKey: .columnWidths) ?? [:]
+        rowHeights = try c.decodeIfPresent([Int: CGFloat].self, forKey: .rowHeights) ?? [:]
+        frozenRows = try c.decodeIfPresent(Int.self, forKey: .frozenRows) ?? 0
+        frozenColumns = try c.decodeIfPresent(Int.self, forKey: .frozenColumns) ?? 0
+        conditionalFormats = try c.decodeIfPresent([ConditionalFormatRule].self, forKey: .conditionalFormats) ?? []
+        autoFilter = try c.decodeIfPresent(SheetFilterState.self, forKey: .autoFilter)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(cells, forKey: .cells)
+        try c.encode(columnWidths, forKey: .columnWidths)
+        try c.encode(rowHeights, forKey: .rowHeights)
+        try c.encode(frozenRows, forKey: .frozenRows)
+        try c.encode(frozenColumns, forKey: .frozenColumns)
+        try c.encode(conditionalFormats, forKey: .conditionalFormats)
+        try c.encodeIfPresent(autoFilter, forKey: .autoFilter)
     }
 
     func cell(at address: CellAddress) -> Cell {

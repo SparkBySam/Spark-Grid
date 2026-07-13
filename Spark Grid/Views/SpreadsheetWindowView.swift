@@ -97,6 +97,7 @@ struct SpreadsheetWindowView: View {
       viewModel.workbook = newValue
       viewModel.isEditing = false
       viewModel.syncEditTextFromSelection()
+      viewModel.restoreFilterFromActiveSheet()
       // File/load sync only — don't mark dirty.
     }
     .onAppear {
@@ -105,6 +106,7 @@ struct SpreadsheetWindowView: View {
         viewModel.workbook = store.document.workbook
         viewModel.syncEditTextFromSelection()
       }
+      viewModel.restoreFilterFromActiveSheet()
       registerWithAppDelegate()
     }
     .task {

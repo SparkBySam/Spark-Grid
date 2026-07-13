@@ -231,7 +231,8 @@ final class SpreadsheetPrintNSView: NSView {
   }
 
   private func drawCellContent(_ cell: Cell, at address: CellAddress, in rect: NSRect) {
-    if let fill = CellFormatRenderer.fillColor(for: cell.format) {
+    let paintFormat = resolvedFormat(at: address, cell: cell)
+    if let fill = CellFormatRenderer.fillColor(for: paintFormat) {
       fill.setFill()
       rect.fill()
     }
@@ -245,21 +246,39 @@ final class SpreadsheetPrintNSView: NSView {
         CellFormatRenderer.drawSingleLineText(
           text,
           in: textRect,
-          format: cell.format,
+          format: paintFormat,
           onLightBackground: true
         )
         NSGraphicsContext.restoreGraphicsState()
       }
     }
 
-    if let borders = cell.format?.borders, borders.hasAny {
+    if let borders = paintFormat?.borders, borders.hasAny {
       CellFormatRenderer.drawBorders(borders, in: rect)
     }
   }
 
+  private func resolvedFormat(at address: CellAddress, cell: Cell) -> CellFormat? {
+    let rules = sheet.conditionalFormats
+    guard !rules.isEmpty else { return cell.format }
+    let value = formulaEngine.displayValue(at: address, sheet: sheet)
+    let text = formulaEngine.displayString(at: address, sheet: sheet, format: cell.format)
+    return ConditionalFormatEvaluator.resolvedFormat(
+      at: address,
+      base: cell.format,
+      rules: rules,
+      value: value,
+      displayString: text,
+      evaluateFormula: { [formulaEngine, sheet] raw, addr, origin in
+        formulaEngine.evaluateConditionalFormula(raw, at: addr, relativeTo: origin, sheet: sheet)
+      }
+    )
+  }
+
   private func drawCell(_ cell: Cell, at address: CellAddress, in rect: NSRect, gridLine: NSColor) {
+    let paintFormat = resolvedFormat(at: address, cell: cell)
     drawCellContent(cell, at: address, in: rect)
-    if showGridlines || !cell.raw.isEmpty || cell.format?.fillColor != nil {
+    if showGridlines || !cell.raw.isEmpty || paintFormat?.fillColor != nil {
       gridLine.setStroke()
       NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5)).stroke()
     }

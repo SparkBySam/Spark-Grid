@@ -138,7 +138,7 @@ enum BorderPreset: String, CaseIterable, Sendable {
 }
 
 /// Serializable color for document persistence.
-struct CodableColor: Codable, Equatable, Sendable {
+struct CodableColor: Codable, Equatable, Hashable, Sendable {
   var red: Double
   var green: Double
   var blue: Double

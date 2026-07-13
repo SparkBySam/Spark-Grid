@@ -1117,16 +1117,18 @@ final class SpreadsheetGridNSView: NSView {
   ) {
     let rect = rectForCell(row: address.row, col: address.col)
     guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { return }
-    let hasBorders = cell.format?.borders.hasAny == true
-    if cell.raw.isEmpty && cell.format?.fillColor == nil && !hasBorders { return }
+    let paintFormat = viewModel.resolvedFormat(at: address)
+    let hasBorders = paintFormat?.borders.hasAny == true || cell.format?.borders.hasAny == true
+    let hasFill = paintFormat?.fillColor != nil
+    if cell.raw.isEmpty && !hasFill && !hasBorders { return }
     if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive {
-      if drawBorders, let borders = cell.format?.borders, borders.hasAny {
+      if drawBorders, let borders = paintFormat?.borders ?? cell.format?.borders, borders.hasAny {
         CellFormatRenderer.drawBorders(borders, in: rect, scale: zoomScale)
       }
       return
     }
 
-    if let fill = CellFormatRenderer.fillColor(for: cell.format) {
+    if let fill = CellFormatRenderer.fillColor(for: paintFormat) {
       fill.setFill()
       rect.fill()
     }
@@ -1140,7 +1142,7 @@ final class SpreadsheetGridNSView: NSView {
       if textRect.width > 1, textRect.height > 1 {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: rect).addClip()
-        var drawFormat = cell.format ?? CellFormat()
+        var drawFormat = paintFormat ?? CellFormat()
         let baseSize = drawFormat.fontSize ?? CellFormatRenderer.defaultFontSize
         drawFormat.fontSize = baseSize * zoomScale
         if value.isError {
@@ -1153,7 +1155,7 @@ final class SpreadsheetGridNSView: NSView {
       }
     }
 
-    if drawBorders, let borders = cell.format?.borders, borders.hasAny {
+    if drawBorders, let borders = paintFormat?.borders, borders.hasAny {
       CellFormatRenderer.drawBorders(borders, in: rect, scale: zoomScale)
     }
   }

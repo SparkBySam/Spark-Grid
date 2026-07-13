@@ -27,6 +27,7 @@ struct Spark_GridApp: App {
     .defaultSize(width: 1280, height: 800)
     .commands {
       SpreadsheetCommands()
+      SpreadsheetFormatCommands()
       SpreadsheetStructureCommands()
       SpreadsheetDataCommands()
       SpreadsheetViewCommands()

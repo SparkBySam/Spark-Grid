@@ -364,6 +364,11 @@ enum CellFormatRenderer {
 
 extension CellFormat {
   var isDefault: Bool { self == CellFormat() }
+
+  /// Merges a conditional-format overlay onto a base format (fill / text / bold only).
+  static func merging(_ base: CellFormat?, overlay: ConditionalFormatStyle) -> CellFormat {
+    overlay.applying(to: base ?? CellFormat())
+  }
 }
 
 extension CellFormatRenderer {

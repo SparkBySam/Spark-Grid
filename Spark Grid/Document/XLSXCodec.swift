@@ -33,6 +33,8 @@ enum XLSXCodec {
   private static func importWorkbook(from file: XLSXFile, archiveData: Data) throws -> Workbook {
     let sharedStrings = try? file.parseSharedStrings()
     let styles = try? file.parseStyles()
+    let dxfs = importDifferentialFormats(archiveData: archiveData)
+    let underlinedFonts = underlinedFontIndices(archiveData: archiveData)
     var sheets: [Sheet] = []
 
     for wbk in try file.parseWorkbooks() {
@@ -43,11 +45,20 @@ enum XLSXCodec {
           from: worksheet,
           into: &sheet,
           sharedStrings: sharedStrings,
-          styles: styles
+          styles: styles,
+          underlinedFontIds: underlinedFonts
         )
         expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
         importColumnWidths(from: worksheet, into: &sheet)
         importRowHeights(from: worksheet, into: &sheet)
+        importFreezePanes(from: worksheet, into: &sheet)
+        importAutoFilter(into: &sheet, archiveData: archiveData, worksheetPath: path)
+        importConditionalFormatting(
+          into: &sheet,
+          archiveData: archiveData,
+          worksheetPath: path,
+          dxfs: dxfs
+        )
         sheets.append(sheet)
       }
     }
@@ -136,7 +147,7 @@ enum XLSXCodec {
     }
   }
 
-  private static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
+  static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
     let normalized = entryPath.hasPrefix("/") ? String(entryPath.dropFirst()) : entryPath
     guard let archive = try? Archive(data: archiveData, accessMode: .read) else { return nil }
     let candidates = [normalized, normalized.hasPrefix("xl/") ? normalized : "xl/\(normalized)"]
@@ -157,7 +168,7 @@ enum XLSXCodec {
     return nil
   }
 
-  private static func decodeXMLEntities(_ string: String) -> String {
+  static func decodeXMLEntities(_ string: String) -> String {
     string
       .replacingOccurrences(of: "&amp;", with: "&")
       .replacingOccurrences(of: "&lt;", with: "<")
@@ -175,7 +186,8 @@ enum XLSXCodec {
     from worksheet: Worksheet,
     into sheet: inout Sheet,
     sharedStrings: SharedStrings?,
-    styles: Styles?
+    styles: Styles?,
+    underlinedFontIds: Set<Int>
   ) {
     for row in worksheet.data?.rows ?? [] {
       for cell in row.cells {
@@ -183,7 +195,11 @@ enum XLSXCodec {
         let raw = cellRawValue(cell, sharedStrings: sharedStrings)
         guard !raw.isEmpty || cell.styleIndex != nil else { continue }
         var model = Cell(raw: raw)
-        if let styles, let format = cellFormat(from: cell, styles: styles) {
+        if let styles, let format = cellFormat(
+          from: cell,
+          styles: styles,
+          underlinedFontIds: underlinedFontIds
+        ) {
           model.format = format
         }
         sheet.setCell(model, at: address)
@@ -204,7 +220,11 @@ enum XLSXCodec {
     return cell.value ?? ""
   }
 
-  private static func cellFormat(from cell: CoreXLSX.Cell, styles: Styles) -> CellFormat? {
+  private static func cellFormat(
+    from cell: CoreXLSX.Cell,
+    styles: Styles,
+    underlinedFontIds: Set<Int>
+  ) -> CellFormat? {
     var format = CellFormat()
     var changed = false
 
@@ -233,6 +253,11 @@ enum XLSXCodec {
         format.textColor = color
         changed = true
       }
+    }
+
+    if let fontId = cell.format(in: styles)?.fontId, underlinedFontIds.contains(fontId) {
+      format.underline = true
+      changed = true
     }
 
     if let fillId = cell.format(in: styles)?.fillId,
@@ -363,13 +388,38 @@ enum XLSXCodec {
   }
 
   private static func codableColor(from color: Color?) -> CodableColor? {
-    guard let rgb = color?.rgb, rgb.count >= 6 else { return nil }
-    let hex = rgb.count == 8 ? String(rgb.suffix(6)) : rgb
-    guard let value = UInt32(hex, radix: 16) else { return nil }
-    let r = Double((value >> 16) & 0xFF) / 255
-    let g = Double((value >> 8) & 0xFF) / 255
-    let b = Double(value & 0xFF) / 255
-    return CodableColor(red: r, green: g, blue: b, alpha: 1)
+    if let rgb = color?.rgb, rgb.count >= 6 {
+      let hex = rgb.count == 8 ? String(rgb.suffix(6)) : rgb
+      guard let value = UInt32(hex, radix: 16) else { return nil }
+      let r = Double((value >> 16) & 0xFF) / 255
+      let g = Double((value >> 8) & 0xFF) / 255
+      let b = Double(value & 0xFF) / 255
+      return CodableColor(red: r, green: g, blue: b, alpha: 1)
+    }
+    if let indexed = color?.indexed, let rgb = indexedColorRGB(indexed) {
+      return CodableColor(red: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+    }
+    return nil
+  }
+
+  /// Standard ECMA-376 indexed color palette (subset; unknown indexes fall back to black/white).
+  private static func indexedColorRGB(_ index: Int) -> (Double, Double, Double)? {
+    let palette: [(Double, Double, Double)] = [
+      (0, 0, 0), (1, 1, 1), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (1, 0, 1), (0, 1, 1),
+      (0, 0, 0), (1, 1, 1), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (1, 0, 1), (0, 1, 1),
+      (0.5, 0, 0), (0, 0.5, 0), (0, 0, 0.5), (0.5, 0.5, 0), (0.5, 0, 0.5), (0, 0.5, 0.5),
+      (0.75, 0.75, 0.75), (0.5, 0.5, 0.5),
+      (0.6, 0.8, 1), (0.6, 0.6, 1), (0.8, 0.6, 1), (1, 0.6, 1), (1, 0.6, 0.8), (1, 0.6, 0.6),
+      (1, 0.8, 0.6), (1, 1, 0.6), (0.8, 1, 0.6), (0.6, 1, 0.6), (0.6, 1, 0.8), (0.6, 1, 1),
+      (0, 0, 0.5), (0.4, 0, 0.6), (0.6, 0, 0.6), (0.6, 0, 0.4), (0.6, 0, 0), (0.6, 0.4, 0),
+      (0.4, 0.6, 0), (0, 0.6, 0), (0, 0.6, 0.4), (0, 0.6, 0.6), (0, 0.4, 0.6), (0, 0, 0.6),
+      (0.2, 0.2, 0.4), (0.4, 0.2, 0.6), (0.6, 0.2, 0.6), (0.6, 0.2, 0.4), (0.6, 0.2, 0.2),
+      (0.6, 0.4, 0.2), (0.4, 0.6, 0.2), (0.2, 0.6, 0.2), (0.2, 0.6, 0.4), (0.2, 0.6, 0.6),
+      (0.2, 0.4, 0.6), (0.2, 0.2, 0.6), (0.4, 0.4, 0.6), (0.6, 0.4, 0.6), (0.6, 0.4, 0.4),
+    ]
+    if index == 64 || index == 65 { return (0, 0, 0) }
+    guard index >= 0, index < palette.count else { return nil }
+    return palette[index]
   }
 
   private static func importColumnWidths(from worksheet: Worksheet, into sheet: inout Sheet) {
@@ -424,6 +474,16 @@ enum XLSXCodec {
       return index
     }
 
+    var dxfCatalog: [ConditionalFormatStyle: Int] = [:]
+    var dxfList: [ConditionalFormatStyle] = []
+    func dxfIndex(for style: ConditionalFormatStyle) -> Int {
+      if let existing = dxfCatalog[style] { return existing }
+      let index = dxfList.count
+      dxfList.append(style)
+      dxfCatalog[style] = index
+      return index
+    }
+
     var files: [String: Data] = [:]
     files["[Content_Types].xml"] = contentTypesXML(sheetCount: workbook.sheets.count)
     files["_rels/.rels"] = rootRelsXML
@@ -434,13 +494,14 @@ enum XLSXCodec {
       let sheetXML = worksheetXML(
         sheet,
         intern: intern,
-        styleIndex: styleIndex
+        styleIndex: styleIndex,
+        dxfIndex: dxfIndex
       )
       files["xl/worksheets/sheet\(index + 1).xml"] = sheetXML
     }
 
     files["xl/sharedStrings.xml"] = sharedStringsXML(sharedStrings)
-    files["xl/styles.xml"] = stylesXML(styleList)
+    files["xl/styles.xml"] = stylesXML(styleList, dxfs: dxfList)
 
     guard let data = MinimalZip.archive(files: files) else {
       throw CodecError.writeFailed
@@ -532,7 +593,8 @@ enum XLSXCodec {
   private static func worksheetXML(
     _ sheet: Sheet,
     intern: (String) -> Int,
-    styleIndex: (CellFormat?) -> Int
+    styleIndex: (CellFormat?) -> Int,
+    dxfIndex: (ConditionalFormatStyle) -> Int
   ) -> Data {
     var colsXML = ""
     if !sheet.columnWidths.isEmpty {
@@ -574,11 +636,18 @@ enum XLSXCodec {
       sheetData += #"<row r="\#(row + 1)"\#(heightAttr)>\#(cellsXML)</row>"#
     }
 
+    let viewsXML = sheetViewsXML(frozenRows: sheet.frozenRows, frozenColumns: sheet.frozenColumns)
+    let filterXML = autoFilterXML(sheet.autoFilter)
+    let cfXML = conditionalFormattingXML(sheet.conditionalFormats, dxfIndex: dxfIndex)
+
     let xml = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    \(viewsXML)
     \(colsXML)
     <sheetData>\(sheetData)</sheetData>
+    \(filterXML)
+    \(cfXML)
     </worksheet>
     """
     return Data(xml.utf8)
@@ -595,7 +664,7 @@ enum XLSXCodec {
     return Data(xml.utf8)
   }
 
-  private static func stylesXML(_ styles: [StyleKey]) -> Data {
+  private static func stylesXML(_ styles: [StyleKey], dxfs: [ConditionalFormatStyle] = []) -> Data {
     var fonts = ""
     var fills = #"<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>"#
     var bordersXML = #"<border><left/><right/><top/><bottom/><diagonal/></border>"#
@@ -657,12 +726,13 @@ enum XLSXCodec {
     <borders count="\(borderCount)">\(bordersXML)</borders>
     <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
     <cellXfs count="\(styles.count)">\(cellXfs)</cellXfs>
+    \(dxfsXML(dxfs))
     </styleSheet>
     """
     return Data(xml.utf8)
   }
 
-  private static func escapeXML(_ string: String) -> String {
+  static func escapeXML(_ string: String) -> String {
     string
       .replacingOccurrences(of: "&", with: "&amp;")
       .replacingOccurrences(of: "<", with: "&lt;")

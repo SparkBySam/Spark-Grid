@@ -35,6 +35,39 @@ final class FormulaEngine {
     return CellFormatRenderer.displayText(for: value, format: format, fallbackRaw: sheet.cell(at: address).raw)
   }
 
+  /// Evaluates a conditional-formatting formula relative to `origin` as if entered at `address`.
+  func evaluateConditionalFormula(
+    _ raw: String,
+    at address: CellAddress,
+    relativeTo origin: CellAddress,
+    sheet: Sheet
+  ) -> CellValue {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return .blank }
+    let withEquals = trimmed.hasPrefix("=") ? trimmed : "=\(trimmed)"
+    let adjusted = FormulaRewriter.adjust(
+      withEquals,
+      rowDelta: address.row - origin.row,
+      colDelta: address.col - origin.col
+    )
+    guard let expr = try? FormulaParser.parse(adjusted) else { return .error(.error) }
+
+    var evaluator = FormulaEvaluator { [weak self] ref in
+      guard let self else { return .blank }
+      return self.resolve(ref, activeSheet: sheet, localEval: { addr in
+        _ = self.displayValue(at: addr, sheet: sheet)
+      })
+    }
+    evaluator.namedRangeLookup = { [weak self] name in
+      self?.namedRangeExpr(named: name)
+    }
+    evaluator.sheetExtent = { [weak self] sheetName in
+      guard let self else { return (999, 25) }
+      return self.extent(for: sheetName ?? self.activeSheetName)
+    }
+    return evaluator.evaluate(expr)
+  }
+
   /// Full rebuild for the workbook's active sheet (also enables cross-sheet lookups).
   func rebuild(workbook: Workbook) {
     clear()

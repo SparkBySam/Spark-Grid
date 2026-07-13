@@ -12,6 +12,8 @@ final class SpreadsheetViewModel {
     didSet {
       contentRevision &+= 1
       hiddenRowsCache = nil
+      conditionalFormatCache.removeAll(keepingCapacity: true)
+      conditionalFormatCacheRevision = -1
       if !suspendFormulaRebuild {
         formulaEngine.rebuild(workbook: workbook)
       }
@@ -48,10 +50,19 @@ final class SpreadsheetViewModel {
   var filterState: SheetFilterState? {
     didSet {
       hiddenRowsCache = nil
+      // Keep sheet-backed AutoFilter in sync for save / xlsx export.
+      if !isRestoringFilterFromSheet {
+        syncAutoFilterToActiveSheet()
+      }
     }
   }
   /// Cached rows hidden by the active filter (invalidated on filter/content changes).
   var hiddenRowsCache: Set<Int>?
+  /// Avoid write-back loops when restoring filter from the sheet.
+  var isRestoringFilterFromSheet = false
+  /// Cache for conditional-format overlays (invalidated with contentRevision).
+  var conditionalFormatCache: [CellAddress: CellFormat?] = [:]
+  var conditionalFormatCacheRevision: Int = -1
   /// View zoom (0.5…2.0). Scales cell geometry in the grid.
   var zoomScale: CGFloat = 1.0 {
     didSet {
@@ -69,7 +80,7 @@ final class SpreadsheetViewModel {
   weak var undoManager: UndoManager?
 
   /// Evaluates `=` formulas; display helpers use this cache.
-  private let formulaEngine = FormulaEngine()
+  let formulaEngine = FormulaEngine()
 
   /// Colored references for the formula being edited, or the selected cell's formula (preview).
   var formulaReferenceHighlights: [FormulaRefHighlight] {
@@ -242,7 +253,7 @@ final class SpreadsheetViewModel {
   }
 
   /// Format-only sheet writes — avoids re-parsing every formula on the sheet.
-  private func setActiveSheetPreservingFormulas(_ sheet: Sheet) {
+  func setActiveSheetPreservingFormulas(_ sheet: Sheet) {
     suspendFormulaRebuild = true
     workbook.activeSheet = sheet
     suspendFormulaRebuild = false
@@ -699,7 +710,7 @@ final class SpreadsheetViewModel {
     commitEditIfNeeded()
     guard index >= 0, index < workbook.sheets.count else { return }
     workbook.activeSheetIndex = index
-    filterState = nil
+    restoreFilterFromActiveSheet()
     invalidateFindMatches()
     selection = .origin
     syncEditTextFromSelection()
@@ -715,6 +726,7 @@ final class SpreadsheetViewModel {
     workbook.sheets.remove(at: index)
     if wasActive {
       workbook.activeSheetIndex = min(index, workbook.sheets.count - 1)
+      restoreFilterFromActiveSheet()
     } else if index < workbook.activeSheetIndex {
       workbook.activeSheetIndex -= 1
     }
