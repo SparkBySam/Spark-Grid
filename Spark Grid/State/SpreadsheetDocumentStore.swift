@@ -47,17 +47,37 @@ final class SpreadsheetDocumentStore {
   }
 
   func load(from url: URL) throws {
+    let accessing = url.startAccessingSecurityScopedResource()
+    defer {
+      if accessing {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
     document = try SpreadsheetDocument.load(from: url)
     fileURL = url
     savedFingerprint = fingerprint(of: document.workbook)
     isDirty = false
     isAutosaving = false
     noteRecent(url)
+    // Remount / viewModel sync can write the workbook back once on the next turn.
+    // Re-baseline so a clean open doesn't show "Edited".
+    let loadedURL = url
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.fileURL == loadedURL else { return }
+      self.savedFingerprint = self.fingerprint(of: self.document.workbook)
+      self.isDirty = false
+    }
   }
 
   func save(to url: URL? = nil) throws {
     let destination = url ?? fileURL
     guard let destination else { return }
+    let accessing = destination.startAccessingSecurityScopedResource()
+    defer {
+      if accessing {
+        destination.stopAccessingSecurityScopedResource()
+      }
+    }
     if destination.pathExtension.lowercased() == "xlsx" {
       let data = try XLSXCodec.exportWorkbook(document.workbook)
       try data.write(to: destination, options: .atomic)

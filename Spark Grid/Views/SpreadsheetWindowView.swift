@@ -97,8 +97,7 @@ struct SpreadsheetWindowView: View {
       viewModel.workbook = newValue
       viewModel.isEditing = false
       viewModel.syncEditTextFromSelection()
-      // Keep current selection — file loads remount via .id(fileURL) anyway.
-      onDocumentChanged()
+      // File/load sync only — don't mark dirty.
     }
     .onAppear {
       viewModel.undoManager = undoManager

@@ -819,10 +819,12 @@ final class SpreadsheetViewModel {
     let n = range.normalized
     switch preset {
     case .none:
-      updateFormat(in: range) { $0.borders = .none }
+      applyBorderMutation(in: range) { _, borders in
+        borders = .none
+      }
     case .all:
-      updateFormat(in: range) {
-        $0.borders = CellBorders(top: edge, bottom: edge, left: edge, right: edge)
+      applyBorderMutation(in: range) { _, borders in
+        borders = CellBorders(top: edge, bottom: edge, left: edge, right: edge)
       }
     case .outside:
       applyBorderMutation(in: range) { address, borders in
@@ -869,8 +871,6 @@ final class SpreadsheetViewModel {
     in range: CellRange,
     mutate: (CellAddress, inout CellBorders) -> Void
   ) {
-    let n = range.normalized
-    let cellCount = (n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1)
     var sheet = activeSheet
     var changed = false
 
@@ -886,17 +886,9 @@ final class SpreadsheetViewModel {
       changed = true
     }
 
-    if cellCount > 2_000 {
-      for address in sheet.cells.keys where range.contains(address) {
-        mutateAddress(address)
-      }
-      if range.contains(selectionAnchor), sheet.cells[selectionAnchor] == nil {
-        mutateAddress(selectionAnchor)
-      }
-    } else {
-      for address in range.allAddresses() {
-        mutateAddress(address)
-      }
+    // Always visit every address so empty cells get outside/all borders.
+    for address in range.allAddresses() {
+      mutateAddress(address)
     }
 
     if changed {

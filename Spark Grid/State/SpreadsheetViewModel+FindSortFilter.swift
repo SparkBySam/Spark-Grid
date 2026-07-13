@@ -232,6 +232,7 @@ extension SpreadsheetViewModel {
       var cells: [Int: Cell]
       var height: CGFloat?
       var sortKey: String
+      var sortNumber: Double?
     }
 
     var packs: [RowPack] = []
@@ -243,17 +244,33 @@ extension SpreadsheetViewModel {
           cells[col] = cell
         }
       }
-      let key = displayString(at: CellAddress(row: row, col: column))
+      let address = CellAddress(row: row, col: column)
+      let key = displayString(at: address)
+      let number = displayValue(at: address).asNumber
+        ?? Double(key.replacingOccurrences(of: ",", with: "")
+          .replacingOccurrences(of: "%", with: "")
+          .replacingOccurrences(of: "$", with: "")
+          .trimmingCharacters(in: .whitespacesAndNewlines))
       packs.append(RowPack(
         rowIndex: row,
         cells: cells,
         height: activeSheet.rowHeights[row],
-        sortKey: key
+        sortKey: key,
+        sortNumber: number
       ))
     }
 
     packs.sort { lhs, rhs in
-      let cmp = lhs.sortKey.localizedStandardCompare(rhs.sortKey)
+      let cmp: ComparisonResult
+      if let ln = lhs.sortNumber, let rn = rhs.sortNumber {
+        cmp = ln == rn ? .orderedSame : (ln < rn ? .orderedAscending : .orderedDescending)
+      } else if lhs.sortNumber != nil {
+        cmp = .orderedAscending
+      } else if rhs.sortNumber != nil {
+        cmp = .orderedDescending
+      } else {
+        cmp = lhs.sortKey.localizedStandardCompare(rhs.sortKey)
+      }
       if cmp == .orderedSame {
         return lhs.rowIndex < rhs.rowIndex
       }

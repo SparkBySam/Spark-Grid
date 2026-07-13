@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		1FB811D616374329B98005D5 /* CoreXLSX in Frameworks */ = {isa = PBXBuildFile; productRef = 63EA0DF84EA14C72B3DAF40A /* CoreXLSX */; };
+		A7C4E91F2B8D4E6A9F012345 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1FB811D616374329B98005D5 /* CoreXLSX in Frameworks */,
+				A7C4E91F2B8D4E6A9F012345 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +73,7 @@
 			name = "Spark Grid";
 			packageProductDependencies = (
 				63EA0DF84EA14C72B3DAF40A /* CoreXLSX */,
+				B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */,
 			);
 			productName = "Spark Grid";
 			productReference = 3480D7B92FF1BB4B00719DD6 /* Spark Grid.app */;
@@ -102,6 +105,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */,
+				C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3480D7BA2FF1BB4B00719DD6 /* Products */;
@@ -352,6 +356,14 @@
 				minimumVersion = 0.14.1;
 			};
 		};
+		C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.9.20;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -359,6 +371,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */;
 			productName = CoreXLSX;
+		};
+		B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

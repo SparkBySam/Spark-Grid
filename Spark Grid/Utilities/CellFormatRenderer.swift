@@ -73,8 +73,10 @@ enum CellFormatRenderer {
         return formatPercent(number, places: places)
       case .scientific:
         return String(format: "%.\(places)e", number)
-      case .date, .time:
-        return value.displayString
+      case .date:
+        return formatDate(number)
+      case .time:
+        return formatTime(number)
       }
     }
   }
@@ -324,6 +326,39 @@ enum CellFormatRenderer {
   private static func formatPercent(_ value: Double, places: Int) -> String {
     // Excel stores percentages as fractions (0.5 → 50%). Always scale for display.
     String(format: "%.\(places)f%%", value * 100)
+  }
+
+  private static let dateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "M/d/yyyy"
+    return formatter
+  }()
+
+  private static let timeFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "h:mm:ss a"
+    return formatter
+  }()
+
+  private static func formatDate(_ serial: Double) -> String {
+    guard let date = ExcelDate.date(from: serial) else {
+      return String(serial)
+    }
+    return dateFormatter.string(from: date)
+  }
+
+  private static func formatTime(_ serial: Double) -> String {
+    // Excel times are day fractions; full datetimes still show the time component.
+    let fraction = serial.truncatingRemainder(dividingBy: 1)
+    let dayFraction = fraction < 0 ? fraction + 1 : fraction
+    guard let date = ExcelDate.date(from: dayFraction) else {
+      return String(serial)
+    }
+    return timeFormatter.string(from: date)
   }
 }
 

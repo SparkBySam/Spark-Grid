@@ -22,16 +22,61 @@ extension EnvironmentValues {
 }
 
 final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-  var onOpenFile: ((URL) -> Void)?
-  weak var documentStore: SpreadsheetDocumentStore?
+  var onOpenFile: ((URL) -> Void)? {
+    didSet { flushPendingOpenURL() }
+  }
+  weak var documentStore: SpreadsheetDocumentStore? {
+    didSet { flushPendingOpenURL() }
+  }
   var spreadsheetViewModel: SpreadsheetViewModel?
+  private var pendingOpenURL: URL?
 
   private var printingResponder: PrintingResponder?
   private var printKeyMonitor: Any?
 
   func application(_ application: NSApplication, open urls: [URL]) {
     guard let url = urls.first else { return }
-    onOpenFile?(url)
+    openExternalFile(url)
+  }
+
+  private func openExternalFile(_ url: URL) {
+    if let onOpenFile {
+      onOpenFile(url)
+    } else if let documentStore {
+      do {
+        try documentStore.load(from: url)
+      } catch {
+        pendingOpenURL = url
+        let alert = NSAlert()
+        alert.messageText = "Couldn't Open File"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+      }
+    } else {
+      pendingOpenURL = url
+    }
+  }
+
+  private func flushPendingOpenURL() {
+    guard let pending = pendingOpenURL else { return }
+    if let onOpenFile {
+      pendingOpenURL = nil
+      onOpenFile(pending)
+    } else if let documentStore {
+      pendingOpenURL = nil
+      do {
+        try documentStore.load(from: pending)
+      } catch {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't Open File"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+      }
+    }
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {

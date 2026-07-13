@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreXLSX
 import Foundation
+import ZIPFoundation
 
 enum XLSXCodec {
   enum CodecError: LocalizedError {
@@ -21,17 +22,15 @@ enum XLSXCodec {
 
   static func importWorkbook(from data: Data) throws -> Workbook {
     let file = try XLSXFile(data: data)
-    return try importWorkbook(from: file)
+    return try importWorkbook(from: file, archiveData: data)
   }
 
   static func importWorkbook(from url: URL) throws -> Workbook {
-    guard let file = XLSXFile(filepath: url.path) else {
-      throw CodecError.unreadable
-    }
-    return try importWorkbook(from: file)
+    let data = try Data(contentsOf: url)
+    return try importWorkbook(from: data)
   }
 
-  private static func importWorkbook(from file: XLSXFile) throws -> Workbook {
+  private static func importWorkbook(from file: XLSXFile, archiveData: Data) throws -> Workbook {
     let sharedStrings = try? file.parseSharedStrings()
     let styles = try? file.parseStyles()
     var sheets: [Sheet] = []
@@ -46,6 +45,7 @@ enum XLSXCodec {
           sharedStrings: sharedStrings,
           styles: styles
         )
+        expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
         importColumnWidths(from: worksheet, into: &sheet)
         importRowHeights(from: worksheet, into: &sheet)
         sheets.append(sheet)
@@ -55,6 +55,120 @@ enum XLSXCodec {
     guard !sheets.isEmpty else { throw CodecError.emptyWorkbook }
     // Defined names are not exposed by CoreXLSX Workbook model — skip without failing.
     return Workbook(sheets: sheets, activeSheetIndex: 0)
+  }
+
+  /// CoreXLSX drops shared-formula followers (`<f t="shared" si="…"/>`). Expand them from sheet XML.
+  private static func expandSharedFormulas(
+    into sheet: inout Sheet,
+    archiveData: Data,
+    worksheetPath: String
+  ) {
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
+
+    struct SharedMaster {
+      var address: CellAddress
+      var formula: String
+    }
+
+    var masters: [Int: SharedMaster] = [:]
+    var followers: [(CellAddress, Int)] = []
+
+    // Match <c r="E2"…>…<f t="shared" …>…</f> or self-closing <f …/>
+    let cellPattern = #"<c\b([^>]*)>(.*?)</c>"#
+    let cellRegex = try? NSRegularExpression(pattern: cellPattern, options: [.dotMatchesLineSeparators])
+    let nsxml = xml as NSString
+    let full = NSRange(location: 0, length: nsxml.length)
+    guard let cellRegex else { return }
+
+    for match in cellRegex.matches(in: xml, options: [], range: full) {
+      let attrs = nsxml.substring(with: match.range(at: 1))
+      let body = nsxml.substring(with: match.range(at: 2))
+      guard let rAttrRange = attrs.range(of: #"r="[^"]+""#, options: .regularExpression) else { continue }
+      let rAttr = String(attrs[rAttrRange])
+      guard let q1 = rAttr.firstIndex(of: "\""),
+            let q2 = rAttr.lastIndex(of: "\""),
+            q1 < q2
+      else { continue }
+      let ref = String(rAttr[rAttr.index(after: q1)..<q2])
+      guard let address = address(fromA1: ref) else { continue }
+
+      guard let fRange = body.range(
+        of: #"<f\b[^>]*(?:/>|>[\s\S]*?</f>)"#,
+        options: .regularExpression
+      ) else { continue }
+      let fTag = String(body[fRange])
+      guard fTag.contains(#"t="shared""#) || fTag.contains("t='shared'") else { continue }
+
+      var si: Int?
+      if let siMatch = fTag.range(of: #"si="\d+""#, options: .regularExpression) {
+        si = Int(String(fTag[siMatch]).filter(\.isNumber))
+      }
+      guard let sharedIndex = si else { continue }
+
+      if let open = fTag.range(of: ">"), fTag.contains("</f>") {
+        let after = fTag[open.upperBound...]
+        if let close = after.range(of: "</f>") {
+          let formula = decodeXMLEntities(
+            String(after[..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+          )
+          if !formula.isEmpty {
+            masters[sharedIndex] = SharedMaster(address: address, formula: formula)
+            let raw = formula.hasPrefix("=") ? formula : "=\(formula)"
+            var cell = sheet.cell(at: address)
+            cell.raw = raw
+            sheet.setCell(cell, at: address)
+            continue
+          }
+        }
+      }
+      followers.append((address, sharedIndex))
+    }
+
+    for (address, sharedIndex) in followers {
+      guard let master = masters[sharedIndex] else { continue }
+      let rowDelta = address.row - master.address.row
+      let colDelta = address.col - master.address.col
+      let base = master.formula.hasPrefix("=") ? master.formula : "=\(master.formula)"
+      let adjusted = FormulaRewriter.adjust(base, rowDelta: rowDelta, colDelta: colDelta)
+      var cell = sheet.cell(at: address)
+      cell.raw = adjusted
+      sheet.setCell(cell, at: address)
+    }
+  }
+
+  private static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
+    let normalized = entryPath.hasPrefix("/") ? String(entryPath.dropFirst()) : entryPath
+    guard let archive = try? Archive(data: archiveData, accessMode: .read) else { return nil }
+    let candidates = [normalized, normalized.hasPrefix("xl/") ? normalized : "xl/\(normalized)"]
+    for path in candidates {
+      guard let entry = archive[path] else { continue }
+      var data = Data()
+      do {
+        _ = try archive.extract(entry) { chunk in
+          data.append(chunk)
+        }
+      } catch {
+        continue
+      }
+      if let text = String(data: data, encoding: .utf8) {
+        return text
+      }
+    }
+    return nil
+  }
+
+  private static func decodeXMLEntities(_ string: String) -> String {
+    string
+      .replacingOccurrences(of: "&amp;", with: "&")
+      .replacingOccurrences(of: "&lt;", with: "<")
+      .replacingOccurrences(of: "&gt;", with: ">")
+      .replacingOccurrences(of: "&quot;", with: "\"")
+      .replacingOccurrences(of: "&apos;", with: "'")
+  }
+
+  private static func address(fromA1 ref: String) -> CellAddress? {
+    guard let parsed = A1Reference.parseAddress(ref) else { return nil }
+    return CellAddress(row: parsed.row, col: parsed.col)
   }
 
   private static func importCells(
@@ -163,10 +277,12 @@ enum XLSXCodec {
     }
     switch id {
     case 1, 2, 3, 4: return .number
+    case 5, 6, 7, 8: return .currency
     case 9, 10: return .percent
     case 11: return .scientific
     case 14, 15, 16, 17: return .date
     case 18, 19, 20, 21: return .time
+    case 22: return .date // m/d/yy h:mm
     default: return nil
     }
   }
