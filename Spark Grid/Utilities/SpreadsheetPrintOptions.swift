@@ -87,6 +87,8 @@ struct SpreadsheetPrintPage: Equatable {
   let sheet: Sheet
   let range: CellRange
   var title: String?
+  /// Filter-hidden rows to collapse when printing (matches on-screen view).
+  var hiddenRows: Set<Int> = []
 }
 
 struct SpreadsheetPrintOptions: Equatable {
@@ -125,25 +127,28 @@ struct SpreadsheetPrintOptions: Equatable {
   }
 
   func pages(for viewModel: SpreadsheetViewModel) -> [SpreadsheetPrintPage] {
+    let activeHidden = viewModel.hiddenRowsForPrint()
     switch scope {
     case .selectedCells:
       return [
         SpreadsheetPrintPage(
           sheet: viewModel.activeSheet,
-          range: viewModel.selectionRange
+          range: viewModel.selectionRange,
+          hiddenRows: activeHidden
         ),
       ]
     case .populatedCells:
       let sheet = viewModel.activeSheet
       let range = sheet.populatedBounds ?? sheet.populatedRangeFromOrigin
-      return [SpreadsheetPrintPage(sheet: sheet, range: range)]
+      return [SpreadsheetPrintPage(sheet: sheet, range: range, hiddenRows: activeHidden)]
     case .wholeSheet:
       let sheet = viewModel.activeSheet
-      return [SpreadsheetPrintPage(sheet: sheet, range: sheet.wholeSheetRange())]
+      return [SpreadsheetPrintPage(sheet: sheet, range: sheet.wholeSheetRange(), hiddenRows: activeHidden)]
     case .workbook:
       return viewModel.workbook.sheets.compactMap { sheet in
         guard let bounds = sheet.populatedBounds else { return nil }
-        return SpreadsheetPrintPage(sheet: sheet, range: bounds, title: sheet.name)
+        let hidden = sheet.id == viewModel.activeSheet.id ? activeHidden : []
+        return SpreadsheetPrintPage(sheet: sheet, range: bounds, title: sheet.name, hiddenRows: hidden)
       }
     }
   }

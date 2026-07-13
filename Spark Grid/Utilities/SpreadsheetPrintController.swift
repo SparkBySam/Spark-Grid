@@ -23,7 +23,8 @@ final class SpreadsheetPrintNSView: NSView {
     range: CellRange,
     showGridlines: Bool = true,
     previewRowCap: Int? = nil,
-    workbook: Workbook? = nil
+    workbook: Workbook? = nil,
+    hiddenRows: Set<Int> = []
   ) {
     self.sheet = sheet
     let engine = FormulaEngine()
@@ -65,7 +66,9 @@ final class SpreadsheetPrintNSView: NSView {
     var rowYs: [CGFloat] = []
     var y = Self.headerHeight
     for row in normalized.minRow...maxRow {
-      let height = sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
+      let height = hiddenRows.contains(row)
+        ? 0
+        : sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
       rowYs.append(y)
       rowHeights.append(height)
       y += height
@@ -117,6 +120,7 @@ final class SpreadsheetPrintNSView: NSView {
         address.col <= normalized.maxCol
       else { continue }
       let rowIndex = address.row - normalized.minRow
+      guard rowHeights[rowIndex] > 0 else { continue }
       let colIndex = address.col - normalized.minCol
       let rect = NSRect(
         x: columnXs[colIndex],
@@ -160,6 +164,7 @@ final class SpreadsheetPrintNSView: NSView {
 
     for row in normalized.minRow...maxRow {
       let rowIndex = row - normalized.minRow
+      guard rowHeights[rowIndex] > 0 else { continue }
       let header = NSRect(
         x: 0,
         y: rowYs[rowIndex],
@@ -185,10 +190,19 @@ final class SpreadsheetPrintNSView: NSView {
     guard
       let firstColX = columnXs.first,
       let lastColX = columnXs.last,
-      let lastColW = columnWidths.last,
-      let firstRowY = rowYs.first,
-      let lastRowY = rowYs.last,
-      let lastRowH = rowHeights.last
+      let lastColW = columnWidths.last
+    else { return }
+
+    let visibleRowYs = zip(rowYs, rowHeights).compactMap { y, h -> CGFloat? in h > 0 ? y : nil }
+    var lastVisibleY: CGFloat?
+    var lastVisibleH: CGFloat?
+    for (y, h) in zip(rowYs, rowHeights) where h > 0 {
+      lastVisibleY = y
+      lastVisibleH = h
+    }
+    guard let firstRowY = visibleRowYs.first ?? rowYs.first,
+          let lastRowY = lastVisibleY,
+          let lastRowH = lastVisibleH
     else { return }
 
     let gridMinX = firstColX
@@ -207,7 +221,7 @@ final class SpreadsheetPrintNSView: NSView {
     path.move(to: NSPoint(x: gridMaxX + 0.5, y: gridMinY))
     path.line(to: NSPoint(x: gridMaxX + 0.5, y: gridMaxY))
 
-    for y in rowYs {
+    for y in visibleRowYs {
       path.move(to: NSPoint(x: gridMinX, y: y + 0.5))
       path.line(to: NSPoint(x: gridMaxX, y: y + 0.5))
     }
@@ -253,7 +267,8 @@ final class SpreadsheetPrintNSView: NSView {
 
   static func contentSize(
     for sheet: Sheet,
-    range: (minRow: Int, maxRow: Int, minCol: Int, maxCol: Int)
+    range: (minRow: Int, maxRow: Int, minCol: Int, maxCol: Int),
+    hiddenRows: Set<Int> = []
   ) -> NSSize {
     var width = headerWidth
     for col in range.minCol...range.maxCol {
@@ -261,6 +276,7 @@ final class SpreadsheetPrintNSView: NSView {
     }
     var height = headerHeight
     for row in range.minRow...range.maxRow {
+      if hiddenRows.contains(row) { continue }
       height += sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
     }
     return NSSize(
@@ -456,7 +472,8 @@ final class SpreadsheetPrintStackNSView: NSView {
         sheet: page.sheet,
         range: page.range,
         showGridlines: showGridlines,
-        workbook: workbook
+        workbook: workbook,
+        hiddenRows: page.hiddenRows
       )
       views.append(view)
       titles.append(page.title)
@@ -595,7 +612,8 @@ enum SpreadsheetPrintController {
         sheet: page.sheet,
         range: page.range,
         showGridlines: options.showGridlines,
-        workbook: viewModel.workbook
+        workbook: viewModel.workbook,
+        hiddenRows: page.hiddenRows
       )
       paginatedView = SpreadsheetPrintPaginatedView(
         gridView: gridView,

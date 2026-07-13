@@ -249,15 +249,90 @@ enum XLSXCodec {
       }
     }
 
-    if let numFmtId = cell.format(in: styles)?.numberFormatId {
-      // Prefer explicit number formats even when applyNumberFormat is omitted (common in Excel exports).
-      if let mapped = numberFormat(for: numFmtId, styles: styles) {
+    if let xf = cell.format(in: styles) {
+      if let mapped = numberFormat(for: xf.numberFormatId, styles: styles) {
+        // Prefer explicit number formats even when applyNumberFormat is omitted (common in Excel exports).
         format.numberFormat = mapped
         changed = true
+      }
+
+      if let borderId = xf.borderId,
+         let borders = styles.borders?.items,
+         borderId >= 0,
+         borderId < borders.count
+      {
+        let imported = cellBorders(from: borders[borderId])
+        if imported.hasAny {
+          format.borders = imported
+          changed = true
+        }
+      }
+
+      if let alignment = xf.alignment {
+        if let horizontal = horizontalAlign(from: alignment.horizontal) {
+          format.horizontalAlign = horizontal
+          changed = true
+        }
+        if let vertical = verticalAlign(from: alignment.vertical) {
+          format.verticalAlign = vertical
+          changed = true
+        }
+        if alignment.wrapText == true {
+          format.wrapText = true
+          changed = true
+        }
       }
     }
 
     return changed ? format : nil
+  }
+
+  private static func cellBorders(from border: Border) -> CellBorders {
+    CellBorders(
+      top: borderEdge(from: border.top),
+      bottom: borderEdge(from: border.bottom),
+      left: borderEdge(from: border.left),
+      right: borderEdge(from: border.right)
+    )
+  }
+
+  private static func borderEdge(from value: Border.Value?) -> BorderEdge? {
+    guard let value, let style = borderStyle(from: value.style) else { return nil }
+    return BorderEdge(style: style, color: codableColor(from: value.color))
+  }
+
+  private static func borderStyle(from raw: String?) -> BorderStyle? {
+    guard let raw, !raw.isEmpty else { return nil }
+    switch raw {
+    case "thin": return .thin
+    case "medium": return .medium
+    case "thick": return .thick
+    case "dashed", "mediumDashed", "dashDot", "mediumDashDot",
+         "dashDotDot", "mediumDashDotDot", "slantDashDot":
+      return .dashed
+    case "dotted", "hair": return .dotted
+    case "double": return .double
+    default: return .thin
+    }
+  }
+
+  private static func horizontalAlign(from raw: String?) -> CellFormat.HorizontalAlign? {
+    switch raw {
+    case "left": return .left
+    case "center", "centerContinuous": return .center
+    case "right": return .right
+    case "general": return .general
+    default: return nil
+    }
+  }
+
+  private static func verticalAlign(from raw: String?) -> CellFormat.VerticalAlign? {
+    switch raw {
+    case "top": return .top
+    case "center": return .middle
+    case "bottom": return .bottom
+    default: return nil
+    }
   }
 
   private static func numberFormat(for id: Int, styles: Styles) -> CellFormat.NumberFormat? {
@@ -523,8 +598,11 @@ enum XLSXCodec {
   private static func stylesXML(_ styles: [StyleKey]) -> Data {
     var fonts = ""
     var fills = #"<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>"#
+    var bordersXML = #"<border><left/><right/><top/><bottom/><diagonal/></border>"#
     var cellXfs = ""
     var fillCount = 2
+    var borderCount = 1
+    var borderIndexByKey: [StyleBorderKey: Int] = [.none: 0]
 
     for (fontId, style) in styles.enumerated() {
       let bold = style.bold ? "<b/>" : ""
@@ -543,6 +621,16 @@ enum XLSXCodec {
         fillCount += 1
       }
 
+      let borderId: Int
+      if let existing = borderIndexByKey[style.borders] {
+        borderId = existing
+      } else {
+        bordersXML += style.borders.xml
+        borderId = borderCount
+        borderIndexByKey[style.borders] = borderId
+        borderCount += 1
+      }
+
       let numFmtId: Int
       switch style.numberFormat {
       case .general: numFmtId = 0
@@ -554,7 +642,10 @@ enum XLSXCodec {
       case .time: numFmtId = 21
       }
 
-      cellXfs += #"<xf numFmtId="\#(numFmtId)" fontId="\#(fontId)" fillId="\#(fillId)" borderId="0" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1"/>"#
+      let alignmentXML = style.alignmentXML
+      let applyBorder = borderId == 0 ? "0" : "1"
+      let applyAlignment = alignmentXML.isEmpty ? "0" : "1"
+      cellXfs += #"<xf numFmtId="\#(numFmtId)" fontId="\#(fontId)" fillId="\#(fillId)" borderId="\#(borderId)" xfId="0" applyFont="1" applyFill="1" applyBorder="\#(applyBorder)" applyAlignment="\#(applyAlignment)" applyNumberFormat="1">\#(alignmentXML)</xf>"#
     }
 
     let xml = """
@@ -563,7 +654,7 @@ enum XLSXCodec {
     <numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts>
     <fonts count="\(styles.count)">\(fonts)</fonts>
     <fills count="\(fillCount)">\(fills)</fills>
-    <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+    <borders count="\(borderCount)">\(bordersXML)</borders>
     <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
     <cellXfs count="\(styles.count)">\(cellXfs)</cellXfs>
     </styleSheet>
@@ -583,6 +674,44 @@ enum XLSXCodec {
 
 // MARK: - Style key
 
+private struct StyleBorderEdgeKey: Hashable {
+  var style: String
+  var rgb: String?
+
+  init?(_ edge: BorderEdge?) {
+    guard let edge else { return nil }
+    style = edge.style.rawValue
+    rgb = edge.color.map(StyleKey.rgbHex)
+  }
+}
+
+private struct StyleBorderKey: Hashable {
+  var top: StyleBorderEdgeKey?
+  var bottom: StyleBorderEdgeKey?
+  var left: StyleBorderEdgeKey?
+  var right: StyleBorderEdgeKey?
+
+  static let none = StyleBorderKey()
+
+  init(_ borders: CellBorders = .none) {
+    top = StyleBorderEdgeKey(borders.top)
+    bottom = StyleBorderEdgeKey(borders.bottom)
+    left = StyleBorderEdgeKey(borders.left)
+    right = StyleBorderEdgeKey(borders.right)
+  }
+
+  var xml: String {
+    func side(_ name: String, _ edge: StyleBorderEdgeKey?) -> String {
+      guard let edge else { return "<\(name)/>" }
+      if let rgb = edge.rgb {
+        return #"<\#(name) style="\#(edge.style)"><color rgb="FF\#(rgb)"/></\#(name)>"#
+      }
+      return #"<\#(name) style="\#(edge.style)"/>"#
+    }
+    return "<border>\(side("left", left))\(side("right", right))\(side("top", top))\(side("bottom", bottom))<diagonal/></border>"
+  }
+}
+
 private struct StyleKey: Hashable {
   var bold = false
   var italic = false
@@ -593,6 +722,11 @@ private struct StyleKey: Hashable {
   var textRGB: String?
   var fillRGB: String?
   var numberFormat: CellFormat.NumberFormat = .general
+  var borders = StyleBorderKey.none
+  var horizontalAlign: CellFormat.HorizontalAlign = .general
+  var verticalAlign: CellFormat.VerticalAlign = .bottom
+  var wrapText = false
+  var textRotation = 0
 
   static let `default` = StyleKey()
 
@@ -607,9 +741,33 @@ private struct StyleKey: Hashable {
     textRGB = format.textColor.map(Self.rgbHex)
     fillRGB = format.fillColor.map(Self.rgbHex)
     numberFormat = format.numberFormat
+    borders = StyleBorderKey(format.borders)
+    horizontalAlign = format.horizontalAlign
+    verticalAlign = format.verticalAlign
+    wrapText = format.wrapText
+    textRotation = format.textRotation
   }
 
-  private static func rgbHex(_ color: CodableColor) -> String {
+  var alignmentXML: String {
+    var attrs: [String] = []
+    switch horizontalAlign {
+    case .general: break
+    case .left: attrs.append(#"horizontal="left""#)
+    case .center: attrs.append(#"horizontal="center""#)
+    case .right: attrs.append(#"horizontal="right""#)
+    }
+    switch verticalAlign {
+    case .bottom: break
+    case .top: attrs.append(#"vertical="top""#)
+    case .middle: attrs.append(#"vertical="center""#)
+    }
+    if wrapText { attrs.append(#"wrapText="1""#) }
+    if textRotation != 0 { attrs.append(#"textRotation="\#(textRotation)""#) }
+    guard !attrs.isEmpty else { return "" }
+    return "<alignment \(attrs.joined(separator: " "))/>"
+  }
+
+  static func rgbHex(_ color: CodableColor) -> String {
     let r = Int((color.red * 255).rounded())
     let g = Int((color.green * 255).rounded())
     let b = Int((color.blue * 255).rounded())

@@ -460,6 +460,15 @@ extension SpreadsheetViewModel {
     return hiddenRowsCache?.contains(row) ?? false
   }
 
+  /// Rows collapsed by the active filter; empty when no filter is applied.
+  func hiddenRowsForPrint() -> Set<Int> {
+    guard filterState != nil else { return [] }
+    if hiddenRowsCache == nil {
+      hiddenRowsCache = rebuildHiddenRowsCache()
+    }
+    return hiddenRowsCache ?? []
+  }
+
   private func rebuildHiddenRowsCache() -> Set<Int> {
     guard let filterState else { return [] }
     let n = filterState.range.normalized

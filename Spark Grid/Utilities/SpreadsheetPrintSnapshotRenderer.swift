@@ -38,6 +38,7 @@ struct SpreadsheetPrintPreviewContent: Equatable {
       options.repeatFrozenColumns ? "1" : "0",
       "\(range.minRow)-\(range.maxRow)-\(range.minCol)-\(range.maxCol)",
       String(page.sheet.cells.count),
+      String(page.hiddenRows.count),
     ].joined(separator: "|")
   }
 }
@@ -59,7 +60,8 @@ enum SpreadsheetPrintSnapshotRenderer {
       sheet: page.sheet,
       range: page.range,
       showGridlines: options.showGridlines,
-      workbook: content.workbook
+      workbook: content.workbook,
+      hiddenRows: page.hiddenRows
     )
 
     let pageView = SpreadsheetPrintPaginatedView(
@@ -87,7 +89,11 @@ enum SpreadsheetPrintSnapshotRenderer {
     let printableWidth = options.pageSize.width - margin * 2
 
     let normalized = page.range.normalized
-    let naturalSize = SpreadsheetPrintNSView.contentSize(for: page.sheet, range: normalized)
+    let naturalSize = SpreadsheetPrintNSView.contentSize(
+      for: page.sheet,
+      range: normalized,
+      hiddenRows: page.hiddenRows
+    )
     let fitScale = options.fitScale(forContent: naturalSize)
     let scaledWidth = naturalSize.width * fitScale
     let scaledHeight = naturalSize.height * fitScale
