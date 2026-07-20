@@ -1009,8 +1009,10 @@ private struct RotateToolbarMenu: View {
   var showLabel: Bool
   var iconHeight: CGFloat
 
+  private var isActive: Bool { viewModel.selectedFormat.textRotation != 0 }
+
   var body: some View {
-    Menu {
+    ToolbarMenuButton(title: "Rotate", showLabel: showLabel, width: 32) {
       Button("None") { viewModel.setTextRotation(0) }
       Divider()
       Button("Tilt up") { viewModel.setTextRotation(-45) }
@@ -1019,57 +1021,14 @@ private struct RotateToolbarMenu: View {
       Button("Rotate up") { viewModel.setTextRotation(-90) }
       Button("Rotate down") { viewModel.setTextRotation(90) }
     } label: {
-      VStack(spacing: 2) {
-        TiltTextToolbarIcon(active: viewModel.selectedFormat.textRotation != 0, embedded: true)
-          .frame(width: 32, height: showLabel ? iconHeight : 32)
-        if showLabel {
-          Text("Rotate")
-            .font(.system(size: 9))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .foregroundStyle(Color(nsColor: .labelColor))
-        }
-      }
-      .frame(minWidth: 40)
-      .contentShape(Rectangle())
+      Image(systemName: "arrow.trianglehead.counterclockwise.rotate.90")
+        .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+          isActive ? Color.accentColor.opacity(0.22) : Color.clear,
+          in: RoundedRectangle(cornerRadius: 4)
+        )
     }
-    .menuStyle(.borderlessButton)
-    .buttonStyle(.plain)
-    .help("Text rotation")
-  }
-}
-
-private struct TiltTextToolbarIcon: View {
-  var active: Bool
-  var embedded = false
-
-  var body: some View {
-    HStack(spacing: 1) {
-      tiltedDashWithArrows
-      Text("A")
-        .font(.system(size: 12, weight: .semibold))
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(backgroundColor, in: RoundedRectangle(cornerRadius: 4))
-    .contentShape(Rectangle())
-  }
-
-  private var backgroundColor: Color {
-    guard !embedded, active else { return .clear }
-    return Color.accentColor.opacity(0.22)
-  }
-
-  private var tiltedDashWithArrows: some View {
-    HStack(spacing: 0) {
-      Image(systemName: "arrowtriangle.left.fill")
-        .font(.system(size: 4.5))
-      Rectangle()
-        .frame(width: 7, height: 1.2)
-      Image(systemName: "arrowtriangle.right.fill")
-        .font(.system(size: 4.5))
-    }
-    .rotationEffect(.degrees(-50))
-    .offset(y: 1)
   }
 }
 

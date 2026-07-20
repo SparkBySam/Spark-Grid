@@ -8,7 +8,7 @@ final class SpreadsheetGridNSView: NSView {
   static let defaultRowHeight = Workbook.defaultRowHeight
   /// Mid-contrast hairline that reads on both dark empty cells and light fills.
   private static let darkModeGridLine = NSColor(calibratedWhite: 0.54, alpha: 0.30)
-  private static let lightModeGridLine = NSColor(white: 0, alpha: 0.14)
+  private static let lightModeGridLine = NSColor(white: 0, alpha: 0.24)
 
   var viewModel: SpreadsheetViewModel? {
     didSet {
@@ -157,9 +157,11 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func configureEditor() {
-    editor.isBordered = true
-    editor.isBezeled = true
-    editor.bezelStyle = .squareBezel
+    editor.isBordered = false
+    editor.isBezeled = false
+    editor.focusRingType = .none
+    editor.drawsBackground = false
+    editor.backgroundColor = .clear
     editor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
     editor.delegate = self
     editor.isHidden = true
@@ -1218,7 +1220,8 @@ final class SpreadsheetGridNSView: NSView {
 
   private static func selectedCellTextColor(over fill: NSColor?, isDarkMode: Bool) -> NSColor {
     let washed = selectedCellBackground(over: fill, isDarkMode: isDarkMode)
-    return luminance(of: washed) < 0.58 ? .white : .labelColor
+    // Pick contrast against the washed fill — not labelColor (white in dark mode on white fills).
+    return luminance(of: washed) < 0.58 ? .white : .black
   }
 
   private static func luminance(of color: NSColor) -> CGFloat {
@@ -1673,6 +1676,7 @@ final class SpreadsheetGridNSView: NSView {
     lastAppliedFormulaHighlightKey = ""
     editor.stringValue = viewModel.editText
     applyEditorFormat(from: viewModel.selectedCell.format)
+    styleFieldEditor(for: viewModel.selectedCell.format)
     updateEditorFrame()
     editor.isHidden = false
     window?.makeFirstResponder(editor)
@@ -1704,11 +1708,41 @@ final class SpreadsheetGridNSView: NSView {
     let baseSize = scaledFormat.fontSize ?? CellFormatRenderer.defaultFontSize
     scaledFormat.fontSize = baseSize * zoomScale
     editor.font = CellFormatRenderer.font(for: scaledFormat)
-    if let color = CellFormatRenderer.nsColor(format?.textColor) {
-      editor.textColor = color
-    } else {
-      editor.textColor = NSColor.labelColor
+    let colors = editorColors(for: format)
+    editor.textColor = colors.foreground
+    styleFieldEditor(for: format)
+  }
+
+  /// Match the in-cell editor surface to the cell fill with readable text/selection colors.
+  private func editorColors(for format: CellFormat?) -> (background: NSColor, foreground: NSColor) {
+    let background = CellFormatRenderer.fillColor(for: format) ?? NSColor.textBackgroundColor
+    let bgRGB = background.usingColorSpace(.deviceRGB) ?? background
+    if let explicit = CellFormatRenderer.nsColor(format?.textColor) {
+      return (background, explicit)
     }
+    let fg = Self.luminance(of: bgRGB) > 0.65 ? NSColor.black : NSColor.white
+    return (background, fg)
+  }
+
+  private func styleFieldEditor(for format: CellFormat?) {
+    guard let textView = editor.currentEditor() as? NSTextView else { return }
+    let colors = editorColors(for: format)
+    textView.drawsBackground = true
+    textView.backgroundColor = colors.background
+    textView.textColor = colors.foreground
+    textView.insertionPointColor = colors.foreground
+    let selectionForeground = Self.luminance(of: colors.background.usingColorSpace(.deviceRGB) ?? colors.background) > 0.65
+      ? NSColor.black
+      : NSColor.white
+    textView.selectedTextAttributes = [
+      .backgroundColor: NSColor.selectedTextBackgroundColor,
+      .foregroundColor: selectionForeground,
+    ]
+    textView.typingAttributes = [
+      .font: editor.font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+      .foregroundColor: colors.foreground,
+      .backgroundColor: NSColor.clear,
+    ]
   }
 
   private func applyInCellFormulaAttributes(preserveSelection: Bool) {
@@ -1726,13 +1760,13 @@ final class SpreadsheetGridNSView: NSView {
     defer { isApplyingFormulaAttributes = false }
 
     let font = editor.font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
-    let baseColor = editor.textColor ?? .labelColor
+    let colors = editorColors(for: viewModel.selectedCell.format)
     let attributed = FormulaReferenceScanner.attributedFormula(
       editor.stringValue,
       highlights: viewModel.formulaReferenceHighlights,
       focusedIndex: viewModel.focusedFormulaHighlightIndex,
       baseFont: font,
-      baseColor: baseColor
+      baseColor: colors.foreground
     )
     var selected: NSRange?
     if preserveSelection, let textView = editor.currentEditor() as? NSTextView {
