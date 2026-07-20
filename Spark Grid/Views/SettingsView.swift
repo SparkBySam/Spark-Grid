@@ -8,6 +8,16 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
+      Section("About") {
+        LabeledContent("Spark Grid") {
+          Text(versionLabel)
+            .foregroundStyle(.secondary)
+        }
+        Text("Native Mac spreadsheet for Excel (.xlsx) and CSV files.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+
       Section("Autosave") {
         Toggle("Enable autosave", isOn: $settings.autosaveEnabled)
 
@@ -49,9 +59,15 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 460, height: 520)
+    .frame(width: 460, height: 560)
     .padding()
     .onDisappear { stopRecording() }
+  }
+
+  private var versionLabel: String {
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    return "Version \(version) (\(build))"
   }
 
   private func beginRecording(_ action: HotkeyAction) {

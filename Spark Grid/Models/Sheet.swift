@@ -10,8 +10,12 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     var frozenRows: Int
     var frozenColumns: Int
     var conditionalFormats: [ConditionalFormatRule]
-    /// Persisted AutoFilter; criteria may be empty after xlsx round-trip (range-only).
+    /// Persisted AutoFilter including selected values when present.
     var autoFilter: SheetFilterState?
+    /// Merged cell ranges (inclusive). Top-left is the anchor.
+    var mergedRanges: [CellRange]
+    /// Embedded charts (Spark-native; also stored in a custom xlsx part).
+    var charts: [SheetChart]
 
     init(
         id: UUID = UUID(),
@@ -22,7 +26,9 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         frozenRows: Int = 0,
         frozenColumns: Int = 0,
         conditionalFormats: [ConditionalFormatRule] = [],
-        autoFilter: SheetFilterState? = nil
+        autoFilter: SheetFilterState? = nil,
+        mergedRanges: [CellRange] = [],
+        charts: [SheetChart] = []
     ) {
         self.id = id
         self.name = name
@@ -33,11 +39,14 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         self.frozenColumns = frozenColumns
         self.conditionalFormats = conditionalFormats
         self.autoFilter = autoFilter
+        self.mergedRanges = mergedRanges
+        self.charts = charts
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, cells, columnWidths, rowHeights
         case frozenRows, frozenColumns, conditionalFormats, autoFilter
+        case mergedRanges, charts
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +60,8 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         frozenColumns = try c.decodeIfPresent(Int.self, forKey: .frozenColumns) ?? 0
         conditionalFormats = try c.decodeIfPresent([ConditionalFormatRule].self, forKey: .conditionalFormats) ?? []
         autoFilter = try c.decodeIfPresent(SheetFilterState.self, forKey: .autoFilter)
+        mergedRanges = try c.decodeIfPresent([CellRange].self, forKey: .mergedRanges) ?? []
+        charts = try c.decodeIfPresent([SheetChart].self, forKey: .charts) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -64,6 +75,8 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         try c.encode(frozenColumns, forKey: .frozenColumns)
         try c.encode(conditionalFormats, forKey: .conditionalFormats)
         try c.encodeIfPresent(autoFilter, forKey: .autoFilter)
+        try c.encode(mergedRanges, forKey: .mergedRanges)
+        try c.encode(charts, forKey: .charts)
     }
 
     func cell(at address: CellAddress) -> Cell {
@@ -133,5 +146,53 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     /// Grid column count — at least the default, expands when data exceeds it.
     var effectiveColumnCount: Int {
         max(Workbook.defaultColumnCount, maxPopulatedColumn + 1)
+    }
+
+    // MARK: - Merges
+
+    func mergeContaining(_ address: CellAddress) -> CellRange? {
+        mergedRanges.first { $0.contains(address) }
+    }
+
+    func isMergeAnchor(_ address: CellAddress) -> Bool {
+        guard let merge = mergeContaining(address) else { return true }
+        let n = merge.normalized
+        return address.row == n.minRow && address.col == n.minCol
+    }
+
+    /// Non-anchor cells covered by a merge (should not paint content).
+    func isCoveredByMerge(_ address: CellAddress) -> Bool {
+        guard let merge = mergeContaining(address) else { return false }
+        let n = merge.normalized
+        return !(address.row == n.minRow && address.col == n.minCol)
+    }
+
+    /// Expands a single cell (or range) to include any intersecting merges.
+    func selectionExpandedForMerges(_ range: CellRange) -> CellRange {
+        var n = range.normalized
+        var changed = true
+        while changed {
+            changed = false
+            for merge in mergedRanges {
+                let m = merge.normalized
+                let intersects = n.minRow <= m.maxRow && n.maxRow >= m.minRow
+                    && n.minCol <= m.maxCol && n.maxCol >= m.minCol
+                guard intersects else { continue }
+                let next = (
+                    minRow: min(n.minRow, m.minRow),
+                    maxRow: max(n.maxRow, m.maxRow),
+                    minCol: min(n.minCol, m.minCol),
+                    maxCol: max(n.maxCol, m.maxCol)
+                )
+                if next != n {
+                    n = next
+                    changed = true
+                }
+            }
+        }
+        return CellRange(
+            start: CellAddress(row: n.minRow, col: n.minCol),
+            end: CellAddress(row: n.maxRow, col: n.maxCol)
+        )
     }
 }

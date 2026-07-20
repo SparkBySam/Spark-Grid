@@ -33,7 +33,9 @@ enum XLSXCodec {
   private static func importWorkbook(from file: XLSXFile, archiveData: Data) throws -> Workbook {
     let sharedStrings = try? file.parseSharedStrings()
     let styles = try? file.parseStyles()
-    let dxfs = importDifferentialFormats(archiveData: archiveData)
+    let themeScheme = importThemeScheme(archiveData: archiveData)
+    let themeStyleColors = importThemeStyleColors(archiveData: archiveData, scheme: themeScheme)
+    let dxfs = importDifferentialFormats(archiveData: archiveData, themeScheme: themeScheme)
     let underlinedFonts = underlinedFontIndices(archiveData: archiveData)
     var sheets: [Sheet] = []
 
@@ -46,19 +48,23 @@ enum XLSXCodec {
           into: &sheet,
           sharedStrings: sharedStrings,
           styles: styles,
-          underlinedFontIds: underlinedFonts
+          underlinedFontIds: underlinedFonts,
+          themeStyleColors: themeStyleColors
         )
         expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
         importColumnWidths(from: worksheet, into: &sheet)
         importRowHeights(from: worksheet, into: &sheet)
         importFreezePanes(from: worksheet, into: &sheet)
+        importMergeCells(from: worksheet, into: &sheet)
         importAutoFilter(into: &sheet, archiveData: archiveData, worksheetPath: path)
         importConditionalFormatting(
           into: &sheet,
           archiveData: archiveData,
           worksheetPath: path,
-          dxfs: dxfs
+          dxfs: dxfs,
+          themeScheme: themeScheme
         )
+        importSparkCharts(into: &sheet, archiveData: archiveData, sheetIndex: sheets.count)
         sheets.append(sheet)
       }
     }
@@ -187,7 +193,8 @@ enum XLSXCodec {
     into sheet: inout Sheet,
     sharedStrings: SharedStrings?,
     styles: Styles?,
-    underlinedFontIds: Set<Int>
+    underlinedFontIds: Set<Int>,
+    themeStyleColors: ThemeResolvedStyleColors
   ) {
     for row in worksheet.data?.rows ?? [] {
       for cell in row.cells {
@@ -198,7 +205,8 @@ enum XLSXCodec {
         if let styles, let format = cellFormat(
           from: cell,
           styles: styles,
-          underlinedFontIds: underlinedFontIds
+          underlinedFontIds: underlinedFontIds,
+          themeStyleColors: themeStyleColors
         ) {
           model.format = format
         }
@@ -223,7 +231,8 @@ enum XLSXCodec {
   private static func cellFormat(
     from cell: CoreXLSX.Cell,
     styles: Styles,
-    underlinedFontIds: Set<Int>
+    underlinedFontIds: Set<Int>,
+    themeStyleColors: ThemeResolvedStyleColors
   ) -> CellFormat? {
     var format = CellFormat()
     var changed = false
@@ -255,9 +264,15 @@ enum XLSXCodec {
       }
     }
 
-    if let fontId = cell.format(in: styles)?.fontId, underlinedFontIds.contains(fontId) {
-      format.underline = true
-      changed = true
+    if let fontId = cell.format(in: styles)?.fontId {
+      if underlinedFontIds.contains(fontId) {
+        format.underline = true
+        changed = true
+      }
+      if format.textColor == nil, let themed = themeStyleColors.fontColorsById[fontId] {
+        format.textColor = themed
+        changed = true
+      }
     }
 
     if let fillId = cell.format(in: styles)?.fillId,
@@ -266,11 +281,14 @@ enum XLSXCodec {
        fillId < fills.count
     {
       let pattern = fills[fillId].patternFill
-      if pattern.patternType != "none",
-         let color = codableColor(from: pattern.foregroundColor ?? pattern.backgroundColor)
-      {
-        format.fillColor = color
-        changed = true
+      if pattern.patternType != "none" {
+        if let color = codableColor(from: pattern.foregroundColor ?? pattern.backgroundColor) {
+          format.fillColor = color
+          changed = true
+        } else if let themed = themeStyleColors.fillColorsById[fillId] {
+          format.fillColor = themed
+          changed = true
+        }
       }
     }
 
@@ -498,6 +516,9 @@ enum XLSXCodec {
         dxfIndex: dxfIndex
       )
       files["xl/worksheets/sheet\(index + 1).xml"] = sheetXML
+      if let chartsData = sparkChartsJSON(sheet.charts) {
+        files["xl/sparkGrid/charts\(index + 1).json"] = chartsData
+      }
     }
 
     files["xl/sharedStrings.xml"] = sharedStringsXML(sharedStrings)
@@ -527,6 +548,7 @@ enum XLSXCodec {
     <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Default Extension="xml" ContentType="application/xml"/>
+    <Default Extension="json" ContentType="application/json"/>
     \(overrides)
     </Types>
     """
@@ -637,6 +659,7 @@ enum XLSXCodec {
     }
 
     let viewsXML = sheetViewsXML(frozenRows: sheet.frozenRows, frozenColumns: sheet.frozenColumns)
+    let mergeXML = mergeCellsXML(sheet.mergedRanges)
     let filterXML = autoFilterXML(sheet.autoFilter)
     let cfXML = conditionalFormattingXML(sheet.conditionalFormats, dxfIndex: dxfIndex)
 
@@ -646,6 +669,7 @@ enum XLSXCodec {
     \(viewsXML)
     \(colsXML)
     <sheetData>\(sheetData)</sheetData>
+    \(mergeXML)
     \(filterXML)
     \(cfXML)
     </worksheet>

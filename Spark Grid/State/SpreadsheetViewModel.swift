@@ -288,14 +288,18 @@ final class SpreadsheetViewModel {
 
   func selectRange(from start: CellAddress, to end: CellAddress) {
     commitEditIfNeeded()
-    replaceSelection(with: CellRange(start: start, end: end))
+    let expanded = activeSheet.selectionExpandedForMerges(CellRange(start: start, end: end))
+    replaceSelection(with: expanded)
     syncEditTextFromSelection()
     isEditing = false
   }
 
   func extendSelection(to end: CellAddress) {
     selectionEnd = clamp(end)
-    setPrimaryRange(from: selectionAnchor, to: selectionEnd)
+    let expanded = activeSheet.selectionExpandedForMerges(
+      CellRange(start: selectionAnchor, end: selectionEnd)
+    )
+    setPrimaryRange(from: expanded.start, to: expanded.end)
   }
 
   /// ⌘-click a cell to add/remove it from a discontinuous selection.

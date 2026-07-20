@@ -24,6 +24,11 @@ extension SpreadsheetViewModel {
       rules: rules,
       value: value,
       displayString: text,
+      numberFormat: cell.format?.numberFormat,
+      numericValuesInRange: { [weak self] range in
+        guard let self else { return [] }
+        return self.numericValues(in: range)
+      },
       evaluateFormula: { [weak self] raw, addr, origin in
         guard let self else { return .blank }
         return self.formulaEngine.evaluateConditionalFormula(
@@ -36,6 +41,19 @@ extension SpreadsheetViewModel {
     )
     conditionalFormatCache[address] = resolved
     return resolved
+  }
+
+  private func numericValues(in range: CellRange) -> [Double] {
+    let n = range.normalized
+    var values: [Double] = []
+    for row in n.minRow...n.maxRow {
+      for col in n.minCol...n.maxCol {
+        if let number = displayValue(at: CellAddress(row: row, col: col)).asNumber {
+          values.append(number)
+        }
+      }
+    }
+    return values
   }
 
   func addConditionalFormatRule(_ rule: ConditionalFormatRule) {

@@ -79,6 +79,20 @@ struct SpreadsheetWindowView: View {
       }
       .frame(maxWidth: .infinity)
       .background(Color(nsColor: .controlBackgroundColor))
+
+      if !viewModel.activeSheet.charts.isEmpty {
+        HStack {
+          Spacer()
+          SpreadsheetChartsPanel(viewModel: viewModel)
+            .padding(.top, SpreadsheetChrome.topHeight(
+              showLabels: settings.showToolbarLabels,
+              showingFormulaError: showingFormulaError,
+              showingFindBar: viewModel.isFindBarVisible
+            ) + 8)
+            .padding(.trailing, 8)
+        }
+        .allowsHitTesting(true)
+      }
     }
     .focusedValue(\.spreadsheetViewModel, viewModel)
     .onChange(of: store.displayTitle) { _, title in

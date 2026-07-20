@@ -56,6 +56,22 @@ struct SpreadsheetStructureCommands: Commands {
 
       Divider()
 
+      Button("Merge Cells") { viewModel?.mergeSelection() }
+        .disabled(viewModel == nil)
+      Button("Unmerge Cells") { viewModel?.unmergeSelection() }
+        .disabled(viewModel == nil || viewModel?.canUnmergeSelection != true)
+
+      Divider()
+
+      Menu("Insert Chart") {
+        Button("Bar Chart") { viewModel?.insertChart(kind: .bar) }
+        Button("Line Chart") { viewModel?.insertChart(kind: .line) }
+        Button("Area Chart") { viewModel?.insertChart(kind: .area) }
+      }
+      .disabled(viewModel == nil)
+
+      Divider()
+
       Button("Define Named Range…") {
         Self.promptDefineNamedRange(viewModel: viewModel)
       }

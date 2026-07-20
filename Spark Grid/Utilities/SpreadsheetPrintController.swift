@@ -269,6 +269,22 @@ final class SpreadsheetPrintNSView: NSView {
       rules: rules,
       value: value,
       displayString: text,
+      numberFormat: cell.format?.numberFormat,
+      numericValuesInRange: { [sheet, formulaEngine] range in
+        let n = range.normalized
+        var values: [Double] = []
+        for row in n.minRow...n.maxRow {
+          for col in n.minCol...n.maxCol {
+            if let number = formulaEngine.displayValue(
+              at: CellAddress(row: row, col: col),
+              sheet: sheet
+            ).asNumber {
+              values.append(number)
+            }
+          }
+        }
+        return values
+      },
       evaluateFormula: { [formulaEngine, sheet] raw, addr, origin in
         formulaEngine.evaluateConditionalFormula(raw, at: addr, relativeTo: origin, sheet: sheet)
       }

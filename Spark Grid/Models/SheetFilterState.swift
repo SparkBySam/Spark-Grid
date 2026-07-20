@@ -1,7 +1,6 @@
 import Foundation
 
-/// AutoFilter on a sheet. Persisted with the workbook; xlsx round-trip keeps the range
-/// (selected values may reset when reopening Excel-authored files).
+/// AutoFilter on a sheet. Persisted with the workbook; xlsx round-trip keeps range and selected values.
 struct SheetFilterState: Codable, Equatable, Sendable {
   /// Inclusive data range including the header row.
   var range: CellRange

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SpreadsheetCommands: Commands {
@@ -5,6 +6,12 @@ struct SpreadsheetCommands: Commands {
   @FocusedValue(\.spreadsheetViewModel) private var viewModel: SpreadsheetViewModel?
 
   var body: some Commands {
+    CommandGroup(replacing: .appInfo) {
+      Button("About Spark Grid") {
+        Self.showAbout()
+      }
+    }
+
     CommandGroup(replacing: .undoRedo) {
       Button("Undo") { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
         .keyboardShortcut(settings.keyEquivalent(for: .undo), modifiers: settings.eventModifiers(for: .undo))
@@ -81,9 +88,18 @@ struct SpreadsheetCommands: Commands {
         .keyboardShortcut(settings.keyEquivalent(for: .underline), modifiers: settings.eventModifiers(for: .underline))
     }
   }
-}
 
-import AppKit
+  private static func showAbout() {
+    let alert = NSAlert()
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    alert.messageText = "Spark Grid"
+    alert.informativeText = "Version \(version) (\(build))\n\nA native Mac spreadsheet for opening, editing, and saving Excel workbooks and CSV files."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
+  }
+}
 
 private struct SpreadsheetViewModelFocusedValueKey: FocusedValueKey {
   typealias Value = SpreadsheetViewModel

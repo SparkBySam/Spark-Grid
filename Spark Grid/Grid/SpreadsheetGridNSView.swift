@@ -423,6 +423,18 @@ final class SpreadsheetGridNSView: NSView {
     )
   }
 
+  /// Paint rect for a cell, spanning merges at the anchor. Returns nil for covered (non-anchor) cells.
+  private func paintRect(for address: CellAddress, sheet: Sheet) -> NSRect? {
+    if sheet.isCoveredByMerge(address) { return nil }
+    if let merge = sheet.mergeContaining(address) {
+      let n = merge.normalized
+      let topLeft = rectForCell(row: n.minRow, col: n.minCol)
+      let bottomRight = rectForCell(row: n.maxRow, col: n.maxCol)
+      return topLeft.union(bottomRight)
+    }
+    return rectForCell(row: address.row, col: address.col)
+  }
+
   private func fillHandleRect() -> NSRect? {
     guard let viewModel, !viewModel.isEditing, !isEditorActive else { return nil }
     guard !viewModel.hasMultipleSelectionRanges else { return nil }
@@ -1189,11 +1201,17 @@ final class SpreadsheetGridNSView: NSView {
     for row in rowRange where row >= frozenRows {
       for col in colRange where col >= frozenCols {
         let address = CellAddress(row: row, col: col)
-        guard let cell = sheet.cells[address] else { continue }
-        let rect = rectForCell(row: row, col: col)
+        if sheet.isCoveredByMerge(address) { continue }
+        let hasCell = sheet.cells[address] != nil
+        let isMergeAnchor = sheet.mergeContaining(address) != nil
+        guard hasCell || isMergeAnchor else { continue }
+        let cell = sheet.cell(at: address)
+        guard let rect = paintRect(for: address, sheet: sheet) else { continue }
         guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
         drawCellContent(cell, at: address, rect: rect, viewModel: viewModel)
-        if let borders = cell.format?.borders, borders.hasAny {
+        if let borders = viewModel.resolvedFormat(at: address)?.borders ?? cell.format?.borders,
+           borders.hasAny
+        {
           borderItems.append((borders, rect))
         }
       }
@@ -1219,11 +1237,17 @@ final class SpreadsheetGridNSView: NSView {
     for row in rowRange {
       for col in colRange {
         let address = CellAddress(row: row, col: col)
-        guard let cell = sheet.cells[address] else { continue }
-        let rect = rectForCell(row: row, col: col)
+        if sheet.isCoveredByMerge(address) { continue }
+        let hasCell = sheet.cells[address] != nil
+        let isMergeAnchor = sheet.mergeContaining(address) != nil
+        guard hasCell || isMergeAnchor else { continue }
+        let cell = sheet.cell(at: address)
+        guard let rect = paintRect(for: address, sheet: sheet) else { continue }
         guard dirtyRect.intersects(rect) else { continue }
         drawCellContent(cell, at: address, rect: rect, viewModel: viewModel)
-        if let borders = cell.format?.borders, borders.hasAny {
+        if let borders = viewModel.resolvedFormat(at: address)?.borders ?? cell.format?.borders,
+           borders.hasAny
+        {
           borderItems.append((borders, rect))
         }
       }

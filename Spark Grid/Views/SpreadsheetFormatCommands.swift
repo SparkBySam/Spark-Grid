@@ -17,6 +17,11 @@ struct SpreadsheetFormatCommands: Commands {
         }
         .disabled(viewModel == nil)
 
+        Button("Color Scale…") {
+          presentColorScaleDialog()
+        }
+        .disabled(viewModel == nil)
+
         Divider()
 
         Button("Clear Rules from Selection") {
@@ -152,6 +157,42 @@ struct SpreadsheetFormatCommands: Commands {
       range: viewModel.selectionRange,
       predicate: predicate,
       style: style
+    )
+    viewModel.addConditionalFormatRule(rule)
+  }
+
+  private func presentColorScaleDialog() {
+    guard let viewModel else { return }
+    let alert = NSAlert()
+    alert.messageText = "Color Scale"
+    alert.informativeText = "Apply a 3-color scale across the selection (low → mid → high)."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Apply")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+    let stops = [
+      ColorScaleStop(
+        type: .min,
+        value: nil,
+        color: CodableColor(red: 0.99, green: 0.72, blue: 0.72, alpha: 1)
+      ),
+      ColorScaleStop(
+        type: .percentile,
+        value: 50,
+        color: CodableColor(red: 1.0, green: 0.95, blue: 0.7, alpha: 1)
+      ),
+      ColorScaleStop(
+        type: .max,
+        value: nil,
+        color: CodableColor(red: 0.72, green: 0.9, blue: 0.72, alpha: 1)
+      ),
+    ]
+    let rule = ConditionalFormatRule(
+      range: viewModel.selectionRange,
+      stopIfTrue: false,
+      predicate: .colorScale(stops),
+      style: ConditionalFormatStyle()
     )
     viewModel.addConditionalFormatRule(rule)
   }
