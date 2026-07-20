@@ -1203,17 +1203,44 @@ final class SpreadsheetGridNSView: NSView {
     tri.fill()
   }
 
-  /// Dark-mode selection wash darkens the cell; force white text only when the
-  /// effective fill (or default background) is already dark enough that labelColor would fail.
-  private static func selectionNeedsLightText(over fill: NSColor?) -> Bool {
+  /// Effective background after the selection wash that will be drawn under text.
+  private static func selectedCellBackground(over fill: NSColor?, isDarkMode: Bool) -> NSColor {
     let base = (fill ?? NSColor.windowBackgroundColor)
       .usingColorSpace(.deviceRGB) ?? fill ?? .windowBackgroundColor
-    let luminance =
-      0.2126 * base.redComponent
-      + 0.7152 * base.greenComponent
-      + 0.0722 * base.blueComponent
-    // Light fills keep dark/label text; dark fills need white for contrast under the wash.
-    return luminance < 0.55
+    let washAlpha: CGFloat = isDarkMode ? 0.4 : 0.12
+    return blendedColor(
+      base,
+      overlay: NSColor.selectedContentBackgroundColor,
+      overlayFraction: washAlpha
+    )
+  }
+
+  private static func selectedCellTextColor(over fill: NSColor?, isDarkMode: Bool) -> NSColor {
+    let washed = selectedCellBackground(over: fill, isDarkMode: isDarkMode)
+    return luminance(of: washed) < 0.58 ? .white : .labelColor
+  }
+
+  private static func luminance(of color: NSColor) -> CGFloat {
+    let c = color.usingColorSpace(.deviceRGB) ?? color
+    return 0.2126 * c.redComponent
+      + 0.7152 * c.greenComponent
+      + 0.0722 * c.blueComponent
+  }
+
+  private static func blendedColor(
+    _ base: NSColor,
+    overlay: NSColor,
+    overlayFraction: CGFloat
+  ) -> NSColor {
+    let b = base.usingColorSpace(.deviceRGB) ?? base
+    let o = overlay.usingColorSpace(.deviceRGB) ?? overlay
+    let t = min(max(overlayFraction, 0), 1)
+    return NSColor(
+      red: o.redComponent * t + b.redComponent * (1 - t),
+      green: o.greenComponent * t + b.greenComponent * (1 - t),
+      blue: o.blueComponent * t + b.blueComponent * (1 - t),
+      alpha: 1
+    )
   }
 
   private func filterAffordanceRect(forCell rect: NSRect) -> NSRect {
@@ -1320,6 +1347,14 @@ final class SpreadsheetGridNSView: NSView {
       rect.fill()
     }
 
+    let isSelected = viewModel.isAddressSelected(address)
+    let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    if isSelected {
+      let washAlpha: CGFloat = isDarkMode ? 0.4 : 0.12
+      NSColor.selectedContentBackgroundColor.withAlphaComponent(washAlpha).setFill()
+      rect.fill()
+    }
+
     if let fraction = paint.dataBarFraction, let color = paint.dataBarColor {
       drawDataBar(fraction: fraction, color: color, in: rect)
     }
@@ -1353,12 +1388,10 @@ final class SpreadsheetGridNSView: NSView {
           drawFormat.fontSize = baseSize * zoomScale
           if value.isError {
             drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
-          } else if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                    viewModel.isAddressSelected(address),
-                    Self.selectionNeedsLightText(over: fillColor)
-          {
-            // Only force white when the effective fill is dark enough that labelColor fails contrast.
-            drawFormat.textColor = CellFormatRenderer.codableColor(from: .white)
+          } else if isSelected {
+            drawFormat.textColor = CellFormatRenderer.codableColor(
+              from: Self.selectedCellTextColor(over: fillColor, isDarkMode: isDarkMode)
+            )
           }
           CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
           NSGraphicsContext.restoreGraphicsState()
@@ -1518,8 +1551,6 @@ final class SpreadsheetGridNSView: NSView {
 
   private func drawSelection(in dirtyRect: NSRect) {
     guard let viewModel else { return }
-    let visibleRows = visibleRowRange()
-    let visibleCols = visibleColumnRange()
     let ranges = viewModel.selectionRanges
     let isMulti = ranges.count > 1
 
@@ -1533,27 +1564,6 @@ final class SpreadsheetGridNSView: NSView {
         width: fullBottomRight.maxX - fullTopLeft.minX,
         height: fullBottomRight.maxY - fullTopLeft.minY
       )
-
-      let startRow = max(n.minRow, visibleRows.lowerBound)
-      let endRow = min(n.maxRow, visibleRows.upperBound)
-      let startCol = max(n.minCol, visibleCols.lowerBound)
-      let endCol = min(n.maxCol, visibleCols.upperBound)
-      if startRow <= endRow, startCol <= endCol {
-        let topLeft = rectForCell(row: startRow, col: startCol)
-        let bottomRight = rectForCell(row: endRow, col: endCol)
-        let fillRect = NSRect(
-          x: topLeft.minX,
-          y: topLeft.minY,
-          width: bottomRight.maxX - topLeft.minX,
-          height: bottomRight.maxY - topLeft.minY
-        )
-        if isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) {
-          let selectionAlpha: CGFloat =
-            effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? 0.4 : 0.12
-          NSColor.selectedContentBackgroundColor.withAlphaComponent(selectionAlpha).setFill()
-          fillRect.fill()
-        }
-      }
 
       // Full selection outline (Excel-familiar), not an L-anchor on the active cell.
       if isCellRectInContentArea(fullRect), dirtyRect.intersects(fullRect) {

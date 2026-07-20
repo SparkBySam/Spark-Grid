@@ -4,6 +4,7 @@ import Foundation
 /// Only non-nil fields are applied (Excel dxf semantics).
 struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
   var bold: Bool?
+  var italic: Bool?
   var textColor: CodableColor?
   var fillColor: CodableColor?
 
@@ -38,13 +39,14 @@ struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
   func applying(to base: CellFormat) -> CellFormat {
     var result = base
     if let bold { result.bold = bold }
+    if let italic { result.italic = italic }
     if let textColor { result.textColor = textColor }
     if let fillColor { result.fillColor = fillColor }
     return result
   }
 
   var hasAny: Bool {
-    bold != nil || textColor != nil || fillColor != nil
+    bold != nil || italic != nil || textColor != nil || fillColor != nil
   }
 }
 
@@ -134,7 +136,9 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
   case greaterOrEqual(Double)
   case lessOrEqual(Double)
   case equal(Double)
+  case notEqual(Double)
   case between(Double, Double)
+  case notBetween(Double, Double)
   case textContains(String)
   case blanks
   case nonBlanks
@@ -152,7 +156,9 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
     case .greaterOrEqual(let v): return "Cell value ≥ \(formatNumber(v))"
     case .lessOrEqual(let v): return "Cell value ≤ \(formatNumber(v))"
     case .equal(let v): return "Cell value = \(formatNumber(v))"
+    case .notEqual(let v): return "Cell value ≠ \(formatNumber(v))"
     case .between(let a, let b): return "Cell value between \(formatNumber(a)) and \(formatNumber(b))"
+    case .notBetween(let a, let b): return "Cell value not between \(formatNumber(a)) and \(formatNumber(b))"
     case .textContains(let s): return "Text contains “\(s)”"
     case .blanks: return "Blanks"
     case .nonBlanks: return "Non-blanks"
@@ -337,6 +343,9 @@ enum ConditionalFormatEvaluator {
     case .equal(let n):
       guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
       return abs(v.cell - v.threshold) < 1e-9
+    case .notEqual(let n):
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      return abs(v.cell - v.threshold) >= 1e-9
     case .between(let a, let b):
       guard let loPair = compareNumber(value, threshold: a, numberFormat: numberFormat),
             let hiPair = compareNumber(value, threshold: b, numberFormat: numberFormat)
@@ -344,6 +353,13 @@ enum ConditionalFormatEvaluator {
       let lo = min(loPair.threshold, hiPair.threshold)
       let hi = max(loPair.threshold, hiPair.threshold)
       return loPair.cell >= lo && loPair.cell <= hi
+    case .notBetween(let a, let b):
+      guard let loPair = compareNumber(value, threshold: a, numberFormat: numberFormat),
+            let hiPair = compareNumber(value, threshold: b, numberFormat: numberFormat)
+      else { return false }
+      let lo = min(loPair.threshold, hiPair.threshold)
+      let hi = max(loPair.threshold, hiPair.threshold)
+      return loPair.cell < lo || loPair.cell > hi
     case .formula(let raw):
       let result = evaluateFormula(raw, address, origin)
       if case .error = result { return false }

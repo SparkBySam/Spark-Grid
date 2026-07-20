@@ -9,6 +9,7 @@ struct SpreadsheetRootView: View {
       store.documentDidChange()
     }
     .id(store.fileURL?.absoluteString ?? "untitled")
+    .preferredColorScheme(settings.appearanceMode.colorScheme)
     .onChange(of: store.displayTitle) { _, title in
       WindowTitleUpdater.apply(title: title)
     }

@@ -1,6 +1,31 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
+
+enum AppearanceMode: String, CaseIterable, Identifiable, Codable {
+  case system
+  case light
+  case dark
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .system: return "System"
+    case .light: return "Light"
+    case .dark: return "Dark"
+    }
+  }
+
+  var colorScheme: ColorScheme? {
+    switch self {
+    case .system: return nil
+    case .light: return .light
+    case .dark: return .dark
+    }
+  }
+}
 
 enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
   case copy
@@ -71,6 +96,7 @@ final class AppSettings {
   private let defaults = UserDefaults.standard
   private let invertScrollKey = "invertScrollDirection"
   private let toolbarLabelsKey = "showToolbarLabels"
+  private let appearanceModeKey = "appearanceMode"
   private let autosaveEnabledKey = "autosaveEnabled"
   private let autosaveIntervalKey = "autosaveIntervalSeconds"
   private let shortcutsKey = "keyboardShortcuts"
@@ -83,6 +109,10 @@ final class AppSettings {
 
   var showToolbarLabels: Bool {
     didSet { defaults.set(showToolbarLabels, forKey: toolbarLabelsKey) }
+  }
+
+  var appearanceMode: AppearanceMode {
+    didSet { defaults.set(appearanceMode.rawValue, forKey: appearanceModeKey) }
   }
 
   var autosaveEnabled: Bool {
@@ -98,6 +128,13 @@ final class AppSettings {
   private init() {
     invertScrollDirection = defaults.bool(forKey: invertScrollKey)
     showToolbarLabels = defaults.bool(forKey: toolbarLabelsKey)
+    if let raw = defaults.string(forKey: appearanceModeKey),
+       let mode = AppearanceMode(rawValue: raw)
+    {
+      appearanceMode = mode
+    } else {
+      appearanceMode = .system
+    }
     if defaults.object(forKey: autosaveEnabledKey) != nil {
       autosaveEnabled = defaults.bool(forKey: autosaveEnabledKey)
     } else {
@@ -195,8 +232,6 @@ final class AppSettings {
     .underline: StoredShortcut(key: "u", modifiers: NSEvent.ModifierFlags.command.rawValue),
   ]
 }
-
-import SwiftUI
 
 extension StoredShortcut {
   static func from(event: NSEvent) -> StoredShortcut? {

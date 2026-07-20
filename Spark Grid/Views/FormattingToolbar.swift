@@ -11,9 +11,10 @@ struct FormattingToolbar: View {
   @State private var fillColor: Color = .clear
   @State private var borderColor: Color = .primary
   @State private var fontSizeText = "12"
-  @State private var showTextPopover = false
   @State private var showFillPopover = false
   @State private var showBorderPopover = false
+  @State private var bandHasHeader = true
+  @State private var bandColor = Color(nsColor: NSColor.systemBlue.withAlphaComponent(0.22))
   /// Prevents ColorPicker `onChange` from writing synced swatch values back onto the selection.
   @State private var suppressColorApply = false
   /// Bumped on each sync so delayed clear only applies to the latest suppress cycle.
@@ -176,24 +177,24 @@ struct FormattingToolbar: View {
 
   private var colorGroup: some View {
     HStack(spacing: 6) {
-      ToolbarSwatchDisclosure(
+      // Text color: swatch alone opens the system ColorPicker (no redundant chevron).
+      ToolbarColorSwatch(
         title: "Text",
         showLabel: showLabels,
         selection: $textColor,
-        isPopoverPresented: $showTextPopover,
         suppressColorApply: suppressColorApply,
         onColorChange: { color in
-          viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(color)))
-        },
-        icon: {
-          Text("A")
-            .font(.system(size: 15, weight: .semibold))
-            .underline(true, color: textColor)
-        },
-        popoverContent: {
-          ColorPicker("Color", selection: textColorBinding, supportsOpacity: false)
+          if color == .clear {
+            viewModel.setTextColor(nil)
+          } else {
+            viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+          }
         }
-      )
+      ) {
+        Text("A")
+          .font(.system(size: 15, weight: .semibold))
+          .underline(true, color: textColor)
+      }
 
       ToolbarSwatchDisclosure(
         title: "Fill",
@@ -215,18 +216,24 @@ struct FormattingToolbar: View {
             }
         },
         popoverContent: {
-          VStack(alignment: .leading, spacing: 12) {
-            ColorPicker("Color", selection: fillColorBinding, supportsOpacity: false)
-
-            Button("No Fill") {
+          FillToolbarPopoverContent(
+            bandHasHeader: $bandHasHeader,
+            bandColor: $bandColor,
+            onNoFill: {
               beginColorApplySuppress()
               fillColor = .clear
               viewModel.setFillColor(nil)
               scheduleColorApplySuppressClear()
               showFillPopover = false
+            },
+            onApplyBands: {
+              viewModel.applyAlternatingRowColors(
+                bandColor: CellFormatRenderer.codableColor(from: NSColor(bandColor)),
+                hasHeader: bandHasHeader
+              )
+              showFillPopover = false
             }
-            .buttonStyle(.bordered)
-          }
+          )
         }
       )
 
@@ -236,8 +243,13 @@ struct FormattingToolbar: View {
         selection: $borderColor,
         isPopoverPresented: $showBorderPopover,
         suppressColorApply: suppressColorApply,
+        chartOnLeading: false,
         onColorChange: { color in
-          viewModel.setBorderColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+          if color == .clear {
+            viewModel.setBorderColor(nil)
+          } else {
+            viewModel.setBorderColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+          }
         },
         icon: {
           Image(systemName: "square.split.2x2")
@@ -346,27 +358,6 @@ struct FormattingToolbar: View {
     Binding(
       get: { viewModel.selectedFormat.fontFamily ?? CellFormatRenderer.defaultFontFamily },
       set: { viewModel.setFontFamily($0) }
-    )
-  }
-
-  private var textColorBinding: Binding<Color> {
-    Binding(
-      get: { textColor },
-      set: { newColor in
-        textColor = newColor
-        guard !suppressColorApply else { return }
-        viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(newColor)))
-      }
-    )
-  }
-
-  private var fillColorBinding: Binding<Color> {
-    Binding(
-      get: { fillColor },
-      set: { newColor in
-        fillColor = newColor
-        applyFillColor(newColor)
-      }
     )
   }
 
@@ -519,48 +510,87 @@ private final class ClickToFocusTextField: NSTextField {
 
 // MARK: - Toolbar controls
 
-/// Shared Text / Fill / Borders pattern: color swatch + disclosure popover.
+/// Text color: icon opens the color chart; custom color is secondary.
+private struct ToolbarColorSwatch<Icon: View>: View {
+  let title: String
+  var showLabel = false
+  @Binding var selection: Color
+  var suppressColorApply = false
+  let onColorChange: (Color) -> Void
+  @ViewBuilder var icon: () -> Icon
+
+  private var controlHeight: CGFloat { showLabel ? 24 : 32 }
+  private let swatchWidth: CGFloat = 30
+
+  var body: some View {
+    VStack(spacing: 2) {
+      ToolbarColorChartButton(
+        selection: $selection,
+        suppressColorApply: suppressColorApply,
+        onColorChange: onColorChange,
+        width: swatchWidth,
+        height: controlHeight
+      ) {
+        icon()
+      }
+      .overlay(
+        RoundedRectangle(cornerRadius: 5)
+          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+      )
+
+      if showLabel {
+        Text(title)
+          .font(.system(size: 9))
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+      }
+    }
+    .frame(minWidth: 40)
+    .help(title)
+    .accessibilityLabel(title)
+  }
+}
+
+/// Fill / Borders: split control — chart + disclosure (layout flips for Borders).
 private struct ToolbarSwatchDisclosure<Icon: View, PopoverContent: View>: View {
   let title: String
   var showLabel = false
   @Binding var selection: Color
   @Binding var isPopoverPresented: Bool
   var suppressColorApply = false
+  /// Fill: icon = chart, chevron = extras. Borders: icon = extras, chevron = chart.
+  var chartOnLeading = true
   let onColorChange: (Color) -> Void
   @ViewBuilder var icon: () -> Icon
   @ViewBuilder var popoverContent: () -> PopoverContent
 
+  private var controlHeight: CGFloat { showLabel ? 24 : 32 }
+  private let swatchWidth: CGFloat = 30
+  private let chevronWidth: CGFloat = 14
+
   var body: some View {
     VStack(spacing: 2) {
       HStack(spacing: 0) {
-        ColorPicker("", selection: $selection, supportsOpacity: false)
-          .labelsHidden()
-          .frame(width: 28, height: showLabel ? 24 : 32)
-          .overlay {
-            icon()
-              .allowsHitTesting(false)
-          }
-          .onChange(of: selection) { _, color in
-            guard !suppressColorApply else { return }
-            onColorChange(color)
-          }
-
-        Button {
-          isPopoverPresented.toggle()
-        } label: {
-          Image(systemName: "chevron.down")
-            .font(.system(size: 8, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 14, height: showLabel ? 24 : 32)
-            .contentShape(Rectangle())
+        if chartOnLeading {
+          chartSegment
+          segmentDivider
+          optionsSegment
+        } else {
+          optionsSegment
+          segmentDivider
+          chartSegment
         }
-        .buttonStyle(.plain)
-        .help("\(title) options")
-        .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
-          popoverContent()
-            .padding(12)
-            .frame(minWidth: 200)
-        }
+      }
+      .frame(width: swatchWidth + 1 + chevronWidth, height: controlHeight)
+      .overlay(
+        RoundedRectangle(cornerRadius: 5)
+          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+      )
+      .clipShape(RoundedRectangle(cornerRadius: 5))
+      .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
+        popoverContent()
+          .padding(12)
+          .frame(minWidth: 220)
       }
 
       if showLabel {
@@ -574,6 +604,287 @@ private struct ToolbarSwatchDisclosure<Icon: View, PopoverContent: View>: View {
     .help(title)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(title)
+  }
+
+  private var chartSegment: some View {
+    Group {
+      if chartOnLeading {
+        ToolbarColorChartButton(
+          selection: $selection,
+          suppressColorApply: suppressColorApply,
+          onColorChange: onColorChange,
+          width: swatchWidth,
+          height: controlHeight
+        ) {
+          icon()
+        }
+      } else {
+        ToolbarColorChartButton(
+          selection: $selection,
+          suppressColorApply: suppressColorApply,
+          onColorChange: onColorChange,
+          width: chevronWidth,
+          height: controlHeight,
+          showsChevronLabel: true
+        ) {
+          EmptyView()
+        }
+      }
+    }
+  }
+
+  private var optionsSegment: some View {
+    Group {
+      if chartOnLeading {
+        Button {
+          isPopoverPresented.toggle()
+        } label: {
+          Image(systemName: "chevron.down")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(.secondary)
+            .frame(width: chevronWidth, height: controlHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(title) options")
+      } else {
+        Button {
+          isPopoverPresented.toggle()
+        } label: {
+          icon()
+            .frame(width: swatchWidth, height: controlHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(title) styles")
+      }
+    }
+  }
+
+  private var segmentDivider: some View {
+    Rectangle()
+      .fill(Color(nsColor: .separatorColor).opacity(0.55))
+      .frame(width: 1, height: controlHeight - 8)
+  }
+}
+
+private struct ToolbarColorChartButton<Label: View>: View {
+  @Binding var selection: Color
+  var suppressColorApply = false
+  let onColorChange: (Color) -> Void
+  var width: CGFloat
+  var height: CGFloat
+  var showsChevronLabel = false
+  @ViewBuilder var label: () -> Label
+  @State private var showChart = false
+
+  var body: some View {
+    Button { showChart = true } label: {
+      Group {
+        if showsChevronLabel {
+          Image(systemName: "chevron.down")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(.secondary)
+        } else {
+          label()
+        }
+      }
+      .frame(width: width, height: height)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(suppressColorApply)
+    .help(showsChevronLabel ? "Border color" : "Color")
+    .popover(isPresented: $showChart, arrowEdge: .bottom) {
+      ToolbarColorChartPopover(
+        selection: $selection,
+        onPick: { color in
+          showChart = false
+          if color == .clear {
+            selection = .clear
+          } else {
+            selection = color
+          }
+          guard !suppressColorApply else { return }
+          onColorChange(color)
+        },
+        onCustomColor: {
+          showChart = false
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            ToolbarColorPanel.present(color: NSColor(selection)) { newColor in
+              selection = Color(nsColor: newColor)
+              guard !suppressColorApply else { return }
+              onColorChange(Color(nsColor: newColor))
+            }
+          }
+        }
+      )
+    }
+  }
+}
+
+private struct ToolbarColorChartPopover: View {
+  @Binding var selection: Color
+  let onPick: (Color) -> Void
+  let onCustomColor: () -> Void
+
+  private let columns = Array(repeating: GridItem(.fixed(22), spacing: 5), count: 10)
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      LazyVGrid(columns: columns, spacing: 5) {
+        Button {
+          onPick(.clear)
+        } label: {
+          ToolbarNoColorSwatch()
+        }
+        .buttonStyle(.plain)
+        .help("No color")
+
+        ForEach(Array(ToolbarColorChart.swatches.enumerated()), id: \.offset) { _, swatch in
+          Button {
+            onPick(swatch)
+          } label: {
+            RoundedRectangle(cornerRadius: 3)
+              .fill(swatch)
+              .frame(width: 22, height: 22)
+              .overlay {
+                RoundedRectangle(cornerRadius: 3)
+                  .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+              }
+          }
+          .buttonStyle(.plain)
+        }
+      }
+
+      Button("Pick Custom Color…", action: onCustomColor)
+        .buttonStyle(.link)
+        .font(.caption)
+        .frame(width: ToolbarColorChart.gridWidth, alignment: .center)
+    }
+    .padding(12)
+    .frame(width: ToolbarColorChart.gridWidth + 24)
+  }
+}
+
+private struct ToolbarNoColorSwatch: View {
+  var body: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 3)
+        .fill(Color(nsColor: .windowBackgroundColor))
+      RoundedRectangle(cornerRadius: 3)
+        .strokeBorder(Color.primary.opacity(0.18), lineWidth: 0.5)
+      GeometryReader { geo in
+        Path { path in
+          path.move(to: CGPoint(x: 3, y: geo.size.height - 3))
+          path.addLine(to: CGPoint(x: geo.size.width - 3, y: 3))
+        }
+        .stroke(Color.red.opacity(0.85), lineWidth: 1.5)
+      }
+    }
+    .frame(width: 22, height: 22)
+  }
+}
+
+/// 7×10 grid: row 1 = no-color + 9 grays, rows 2–7 = spectrum.
+private enum ToolbarColorChart {
+  static let graySwatches: [Color] = [
+    .white,
+    Color(white: 0.9),
+    Color(white: 0.8),
+    Color(white: 0.7),
+    Color(white: 0.6),
+    Color(white: 0.5),
+    Color(white: 0.4),
+    Color(white: 0.28),
+    .black,
+  ]
+
+  static let spectrum: [Color] = {
+    let hues: [CGFloat] = [0, 0.04, 0.08, 0.15, 0.33, 0.55, 0.58, 0.66, 0.75, 0.83]
+    let levels: [CGFloat] = [0.94, 0.80, 0.66, 0.52, 0.38, 0.26]
+    var colors: [Color] = []
+    colors.reserveCapacity(60)
+    for level in levels {
+      for hue in hues {
+        colors.append(Color(hue: hue, saturation: 0.68, brightness: level))
+      }
+    }
+    return colors
+  }()
+
+  static var swatches: [Color] {
+    graySwatches + spectrum
+  }
+
+  static let gridWidth: CGFloat = CGFloat(10) * 22 + CGFloat(9) * 5
+}
+
+/// Full color panel for custom picks from the chart popover.
+@MainActor
+private enum ToolbarColorPanel {
+  private static let coordinator = Coordinator()
+  private static var onChange: ((NSColor) -> Void)?
+
+  static func present(color: NSColor, onChange: @escaping (NSColor) -> Void) {
+    self.onChange = onChange
+    let panel = NSColorPanel.shared
+    panel.setTarget(coordinator)
+    panel.setAction(#selector(Coordinator.changed(_:)))
+    panel.isContinuous = true
+    panel.color = color
+    panel.orderFront(nil)
+  }
+
+  private final class Coordinator: NSObject {
+    @objc func changed(_ sender: Any?) {
+      ToolbarColorPanel.onChange?(NSColorPanel.shared.color)
+    }
+  }
+}
+
+private struct FillToolbarPopoverContent: View {
+  @Binding var bandHasHeader: Bool
+  @Binding var bandColor: Color
+  var onNoFill: () -> Void
+  var onApplyBands: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Button("No Fill", action: onNoFill)
+        .buttonStyle(.bordered)
+
+      Divider()
+
+      Text("Alternating Row Colors")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      Toggle("First row is header", isOn: $bandHasHeader)
+
+      HStack(spacing: 8) {
+        Text("Band color")
+          .font(.caption)
+        ColorPicker("", selection: $bandColor, supportsOpacity: false)
+          .labelsHidden()
+      }
+
+      HStack(spacing: 8) {
+        bandPresetButton("Blue", color: Color(nsColor: .systemBlue).opacity(0.22))
+        bandPresetButton("Gray", color: Color(nsColor: .systemGray).opacity(0.22))
+        bandPresetButton("Green", color: Color(nsColor: .systemGreen).opacity(0.22))
+      }
+
+      Button("Apply to Selection", action: onApplyBands)
+        .buttonStyle(.borderedProminent)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+  }
+
+  private func bandPresetButton(_ title: String, color: Color) -> some View {
+    Button(title) { bandColor = color }
+      .buttonStyle(.bordered)
+      .font(.caption)
   }
 }
 

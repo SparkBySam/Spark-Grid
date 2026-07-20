@@ -814,6 +814,39 @@ final class SpreadsheetViewModel {
     updateSelectedFormat { $0.fillColor = color }
   }
 
+  /// Banded rows: even data rows get `bandColor`, odd rows clear fill. Header row is skipped when requested.
+  func applyAlternatingRowColors(bandColor: CodableColor, hasHeader: Bool) {
+    commitEditIfNeeded()
+    undoManager?.beginUndoGrouping()
+    for range in selectionRanges {
+      applyAlternatingRowColors(bandColor: bandColor, hasHeader: hasHeader, to: range)
+    }
+    undoManager?.endUndoGrouping()
+    undoManager?.setActionName("Alternating Row Colors")
+    notifyGridRefresh()
+  }
+
+  private func applyAlternatingRowColors(
+    bandColor: CodableColor,
+    hasHeader: Bool,
+    to range: CellRange
+  ) {
+    let n = range.normalized
+    guard n.maxRow >= n.minRow else { return }
+    for row in n.minRow...n.maxRow {
+      if hasHeader, row == n.minRow { continue }
+      let relativeIndex = hasHeader ? row - n.minRow - 1 : row - n.minRow
+      let isBand = relativeIndex % 2 == 0
+      let rowRange = CellRange(
+        start: CellAddress(row: row, col: n.minCol),
+        end: CellAddress(row: row, col: n.maxCol)
+      )
+      applyFormat(to: rowRange) { format in
+        format.fillColor = isBand ? bandColor : nil
+      }
+    }
+  }
+
   func setHorizontalAlign(_ align: CellFormat.HorizontalAlign) {
     updateSelectedFormat { $0.horizontalAlign = align }
   }

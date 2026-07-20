@@ -60,6 +60,33 @@ struct SpreadsheetFormatCommands: Commands {
         Button("Light Orange") { viewModel?.setFillColor(Self.fill(.systemOrange, alpha: 0.35)) }
         Button("Light Purple") { viewModel?.setFillColor(Self.fill(.systemPurple, alpha: 0.3)) }
         Button("Light Gray") { viewModel?.setFillColor(Self.fill(.systemGray, alpha: 0.3)) }
+        Divider()
+        Menu("Alternating Row Colors") {
+          Button("Light Blue (with header)") {
+            viewModel?.applyAlternatingRowColors(
+              bandColor: Self.fill(.systemBlue, alpha: 0.22),
+              hasHeader: true
+            )
+          }
+          Button("Light Blue (no header)") {
+            viewModel?.applyAlternatingRowColors(
+              bandColor: Self.fill(.systemBlue, alpha: 0.22),
+              hasHeader: false
+            )
+          }
+          Button("Light Gray (with header)") {
+            viewModel?.applyAlternatingRowColors(
+              bandColor: Self.fill(.systemGray, alpha: 0.22),
+              hasHeader: true
+            )
+          }
+          Button("Light Gray (no header)") {
+            viewModel?.applyAlternatingRowColors(
+              bandColor: Self.fill(.systemGray, alpha: 0.22),
+              hasHeader: false
+            )
+          }
+        }
       }
       .disabled(viewModel == nil)
 

@@ -196,6 +196,9 @@ extension XLSXCodec {
       if body.contains("<b") || body.contains("<b/>") || body.contains("<b ") {
         style.bold = true
       }
+      if body.contains("<i") || body.contains("<i/>") || body.contains("<i ") {
+        style.italic = true
+      }
       if let fill = firstColor(in: body, near: "fgColor", themeScheme: themeScheme)
         ?? firstColor(in: body, near: "patternFill", themeScheme: themeScheme)
       {
@@ -324,9 +327,15 @@ extension XLSXCodec {
         case .equal(let v):
           let dxfId = dxfIndex(rule.style)
           xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="equal"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+        case .notEqual(let v):
+          let dxfId = dxfIndex(rule.style)
+          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="notEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .between(let a, let b):
           let dxfId = dxfIndex(rule.style)
           xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="between"><formula>\#(escapeXML(stringFromNumber(a)))</formula><formula>\#(escapeXML(stringFromNumber(b)))</formula></cfRule>"#
+        case .notBetween(let a, let b):
+          let dxfId = dxfIndex(rule.style)
+          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="notBetween"><formula>\#(escapeXML(stringFromNumber(a)))</formula><formula>\#(escapeXML(stringFromNumber(b)))</formula></cfRule>"#
         case .textContains(let text):
           let dxfId = dxfIndex(rule.style)
           xml += #"<cfRule type="containsText" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="containsText" text="\#(escapeXML(text))"><formula>NOT(ISERROR(SEARCH("\#(escapeXML(text))",A1)))</formula></cfRule>"#
@@ -378,6 +387,7 @@ extension XLSXCodec {
     for style in dxfs {
       var font = ""
       if style.bold == true { font += "<b/>" }
+      if style.italic == true { font += "<i/>" }
       if let rgb = style.textColor.map(rgbHex) {
         font += #"<color rgb="FF\#(rgb)"/>"#
       }
@@ -503,9 +513,15 @@ extension XLSXCodec {
     case "equal":
       guard let v = values.first else { return nil }
       return .equal(v)
+    case "notEqual":
+      guard let v = values.first else { return nil }
+      return .notEqual(v)
     case "between":
       guard values.count >= 2 else { return nil }
       return .between(values[0], values[1])
+    case "notBetween":
+      guard values.count >= 2 else { return nil }
+      return .notBetween(values[0], values[1])
     default:
       return nil
     }
