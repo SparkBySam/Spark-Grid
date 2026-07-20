@@ -48,6 +48,10 @@ enum BugBashRunner {
     results.append(excelChartParts())
     results.append(worksheetElementOrder())
     results.append(enterpriseFilterImport())
+    results.append(MainActor.assumeIsolated { findScopePersistsAfterJump() })
+    results.append(MainActor.assumeIsolated { largeEmptyFormatApply() })
+    results.append(cfParseNumber())
+    results.append(MainActor.assumeIsolated { sortRemapsMerge() })
     return results
   }
 
@@ -483,6 +487,154 @@ enum BugBashRunner {
       return Result(name: "merge anchor snap", passed: false, detail: "B1 anchor should be A1")
     }
     return Result(name: "merge selection expand", passed: true, detail: "ok")
+  }
+
+  // MARK: - Focused regression tests
+
+  @MainActor
+  private static func findScopePersistsAfterJump() -> Result {
+    var sheet = Sheet(name: "Find")
+    sheet.setCell(Cell(raw: "alpha"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "alpha"), at: CellAddress(row: 1, col: 1))
+    sheet.setCell(Cell(raw: "alpha"), at: CellAddress(row: 2, col: 2))
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    vm.selectRange(from: .origin, to: CellAddress(row: 2, col: 2))
+    vm.findScope = .selection
+    vm.findQuery = "alpha"
+    vm.showFindBar(replace: false)
+    let initialCount = vm.findMatches.count
+    guard initialCount == 3 else {
+      return Result(name: "find scope capture", passed: false, detail: "expected 3 matches, got \(initialCount)")
+    }
+    guard let scope = vm.findScopeRange else {
+      return Result(name: "find scope capture", passed: false, detail: "findScopeRange not set")
+    }
+    let sn = scope.normalized
+    guard sn.minRow == 0, sn.maxRow == 2, sn.minCol == 0, sn.maxCol == 2 else {
+      return Result(name: "find scope capture", passed: false, detail: "bad scope \(sn)")
+    }
+    // Jump shrinks live selection to one cell; captured scope must remain.
+    vm.select(CellAddress(row: 1, col: 1))
+    vm.refreshFindMatches()
+    guard vm.findMatches.count == 3 else {
+      return Result(
+        name: "find scope after jump",
+        passed: false,
+        detail: "expected 3 matches after select shrink, got \(vm.findMatches.count)"
+      )
+    }
+    return Result(name: "find scope after jump", passed: true, detail: "scope held 3 matches")
+  }
+
+  @MainActor
+  private static func largeEmptyFormatApply() -> Result {
+    let sheet = Sheet(name: "Format")
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    // 100×26 = 2600 > large-apply threshold; previously only existing cells were formatted.
+    let end = CellAddress(row: 99, col: Workbook.defaultColumnCount - 1)
+    vm.selectRange(from: .origin, to: end)
+    let fill = CodableColor(red: 1, green: 0, blue: 0, alpha: 1)
+    vm.setFillColor(fill)
+    let sampleEmpty = CellAddress(row: 50, col: 12)
+    guard vm.activeSheet.cell(at: sampleEmpty).format?.fillColor == fill,
+          vm.activeSheet.cell(at: end).format?.fillColor == fill,
+          vm.activeSheet.cell(at: .origin).format?.fillColor == fill
+    else {
+      let mid = vm.activeSheet.cell(at: sampleEmpty).format?.fillColor
+      let far = vm.activeSheet.cell(at: end).format?.fillColor
+      let origin = vm.activeSheet.cell(at: .origin).format?.fillColor
+      return Result(
+        name: "large empty format",
+        passed: false,
+        detail: "missing fill mid=\(String(describing: mid)) end=\(String(describing: far)) origin=\(String(describing: origin))"
+      )
+    }
+    return Result(name: "large empty format", passed: true, detail: "2600 cells filled")
+  }
+
+  private static func cfParseNumber() -> Result {
+    let cases: [(String, Double?)] = [
+      (" 1,234.5 ", 1234.5),
+      ("$50", 50),
+      ("25%", 0.25),
+      ("  12% ", 0.12),
+      ("", nil),
+      ("abc", nil),
+    ]
+    for (input, expected) in cases {
+      let parsed = ConditionalFormattingSheet.parseNumber(input)
+      switch (parsed, expected) {
+      case (nil, nil):
+        continue
+      case let (value?, exp?):
+        guard abs(value - exp) < 0.000_001 else {
+          return Result(name: "CF parseNumber", passed: false, detail: "\(input) -> \(value), expected \(exp)")
+        }
+      default:
+        return Result(
+          name: "CF parseNumber",
+          passed: false,
+          detail: "\(input) -> \(String(describing: parsed)), expected \(String(describing: expected))"
+        )
+      }
+    }
+    return Result(name: "CF parseNumber", passed: true, detail: "ok")
+  }
+
+  @MainActor
+  private static func sortRemapsMerge() -> Result {
+    var sheet = Sheet(name: "Sort")
+    // Header + three data rows; merge spans two data rows in col A.
+    sheet.setCell(Cell(raw: "Name"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "Val"), at: CellAddress(row: 0, col: 1))
+    sheet.setCell(Cell(raw: "C"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "3"), at: CellAddress(row: 1, col: 1))
+    sheet.setCell(Cell(raw: "A"), at: CellAddress(row: 2, col: 0))
+    sheet.setCell(Cell(raw: "1"), at: CellAddress(row: 2, col: 1))
+    sheet.setCell(Cell(raw: "B"), at: CellAddress(row: 3, col: 0))
+    sheet.setCell(Cell(raw: "2"), at: CellAddress(row: 3, col: 1))
+    // Single-row merge in data (safe rectangular remap).
+    sheet.mergedRanges = [
+      CellRange(start: CellAddress(row: 2, col: 0), end: CellAddress(row: 2, col: 1)),
+    ]
+    sheet.conditionalFormats = [
+      ConditionalFormatRule(
+        range: CellRange(start: CellAddress(row: 1, col: 1), end: CellAddress(row: 3, col: 1)),
+        predicate: .greaterThan(0),
+        style: .redFill
+      ),
+    ]
+    sheet.charts = [
+      SheetChart(
+        kind: .bar,
+        title: "Vals",
+        dataRange: CellRange(start: CellAddress(row: 1, col: 1), end: CellAddress(row: 3, col: 1)),
+        anchorRow: 5,
+        anchorCol: 3
+      ),
+    ]
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    vm.selectRange(from: .origin, to: CellAddress(row: 3, col: 1))
+    vm.sortRange(column: 1, direction: .ascending, hasHeader: true)
+    // Ascending by Val: row2(A/1) → first data, row3(B/2) → second, row1(C/3) → third.
+    // Merge was on old row 2 → new row 1 (firstDataRow=1).
+    let merges = vm.activeSheet.mergedRanges
+    guard merges.count == 1 else {
+      return Result(name: "sort remap merge", passed: false, detail: "merge count \(merges.count)")
+    }
+    let mn = merges[0].normalized
+    guard mn.minRow == 1, mn.maxRow == 1, mn.minCol == 0, mn.maxCol == 1 else {
+      return Result(name: "sort remap merge", passed: false, detail: "merge at \(mn)")
+    }
+    let cf = vm.activeSheet.conditionalFormats.first?.range.normalized
+    guard let cf, cf.minRow == 1, cf.maxRow == 3, cf.minCol == 1, cf.maxCol == 1 else {
+      return Result(name: "sort remap CF", passed: false, detail: "CF range \(String(describing: cf))")
+    }
+    let chartRange = vm.activeSheet.charts.first?.dataRange.normalized
+    guard let chartRange, chartRange.minRow == 1, chartRange.maxRow == 3 else {
+      return Result(name: "sort remap chart", passed: false, detail: "chart \(String(describing: chartRange))")
+    }
+    return Result(name: "sort remap merge/CF/chart", passed: true, detail: "rows remapped")
   }
 }
 #endif

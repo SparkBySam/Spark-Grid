@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FindReplaceBar: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  @State private var findQueryDebounceTask: Task<Void, Never>?
 
   var body: some View {
     HStack(spacing: 8) {
@@ -22,7 +23,12 @@ struct FindReplaceBar: View {
         .frame(minWidth: 140, maxWidth: 220)
         .onSubmit { viewModel.findNext() }
         .onChange(of: viewModel.findQuery) { _, _ in
-          viewModel.refreshFindMatches(selectCurrent: true)
+          findQueryDebounceTask?.cancel()
+          findQueryDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 175_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.refreshFindMatches(selectCurrent: true)
+          }
         }
 
       if viewModel.isFindReplaceMode {
@@ -86,7 +92,12 @@ struct FindReplaceBar: View {
       .onChange(of: viewModel.findEntireCell) { _, _ in
         viewModel.refreshFindMatches(selectCurrent: true)
       }
-      .onChange(of: viewModel.findScope) { _, _ in
+      .onChange(of: viewModel.findScope) { _, newScope in
+        if newScope == .selection {
+          viewModel.captureFindScopeRange()
+        } else {
+          viewModel.findScopeRange = nil
+        }
         viewModel.refreshFindMatches(selectCurrent: true)
       }
 
@@ -108,6 +119,9 @@ struct FindReplaceBar: View {
     .frame(height: SpreadsheetChrome.findBarHeight)
     .background(Color(nsColor: .controlBackgroundColor))
     .foregroundStyle(Color(nsColor: .labelColor))
+    .onDisappear {
+      findQueryDebounceTask?.cancel()
+    }
   }
 
   private var matchLabel: String {

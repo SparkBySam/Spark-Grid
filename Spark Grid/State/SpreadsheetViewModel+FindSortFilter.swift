@@ -7,13 +7,20 @@ extension SpreadsheetViewModel {
   func showFindBar(replace: Bool) {
     isFindReplaceMode = replace
     isFindBarVisible = true
+    if findScope == .selection {
+      captureFindScopeRange()
+    }
     refreshFindMatches(selectCurrent: true)
   }
 
-  /// ⌘F / ⌥⌘F: open when hidden, close when already visible.
+  /// ⌘F / ⌥⌘F: open when hidden; switch mode when the other is requested; close on same-mode toggle.
   func toggleFindBar(replace: Bool) {
     if isFindBarVisible {
-      hideFindBar()
+      if isFindReplaceMode != replace {
+        isFindReplaceMode = replace
+      } else {
+        hideFindBar()
+      }
     } else {
       showFindBar(replace: replace)
     }
@@ -23,6 +30,7 @@ extension SpreadsheetViewModel {
     isFindBarVisible = false
     findMatches = []
     findMatchIndex = -1
+    findScopeRange = nil
   }
 
   /// Drop cached matches when the active sheet or filter set changes.
@@ -34,7 +42,25 @@ extension SpreadsheetViewModel {
     }
   }
 
+  /// Capture the current selection as a stable Find-in-Selection range.
+  func captureFindScopeRange() {
+    guard findScope == .selection else {
+      findScopeRange = nil
+      return
+    }
+    if selectionRanges.count > 1 {
+      findScopeRange = Self.boundingUnion(of: selectionRanges)
+    } else {
+      findScopeRange = selectionRange.normalizedRange
+    }
+  }
+
   func refreshFindMatches(selectCurrent: Bool = false) {
+    if findScope == .selection, findScopeRange == nil {
+      captureFindScopeRange()
+    } else if findScope != .selection {
+      findScopeRange = nil
+    }
     findMatches = collectFindMatches()
     if findMatches.isEmpty {
       findMatchIndex = -1
@@ -133,7 +159,7 @@ extension SpreadsheetViewModel {
     case .sheet:
       range = activeSheet.populatedRangeFromOrigin
     case .selection:
-      range = selectionRange.normalizedRange
+      range = findScopeRange ?? selectionRange.normalizedRange
     }
     let n = range.normalized
     var matches: [CellAddress] = []
@@ -310,6 +336,47 @@ extension SpreadsheetViewModel {
       }
     }
 
+    var rowMap: [Int: Int] = [:]
+    for (offset, pack) in packs.enumerated() {
+      rowMap[pack.rowIndex] = firstDataRow + offset
+    }
+
+    func remapFullyContained(_ range: CellRange) -> CellRange? {
+      let rn = range.normalized
+      guard rn.minCol >= n.minCol, rn.maxCol <= n.maxCol,
+            rn.minRow >= firstDataRow, rn.maxRow <= n.maxRow
+      else { return nil }
+      var mappedRows: [Int] = []
+      mappedRows.reserveCapacity(rn.maxRow - rn.minRow + 1)
+      for row in rn.minRow...rn.maxRow {
+        guard let mapped = rowMap[row] else { return nil }
+        mappedRows.append(mapped)
+      }
+      guard let newMin = mappedRows.min(), let newMax = mappedRows.max() else { return nil }
+      return CellRange(
+        start: CellAddress(row: newMin, col: rn.minCol),
+        end: CellAddress(row: newMax, col: rn.maxCol)
+      )
+    }
+
+    sheet.mergedRanges = sheet.mergedRanges.map { merge in
+      remapFullyContained(merge) ?? merge
+    }
+    sheet.conditionalFormats = sheet.conditionalFormats.map { rule in
+      var next = rule
+      if let remapped = remapFullyContained(rule.range) {
+        next.range = remapped
+      }
+      return next
+    }
+    sheet.charts = sheet.charts.map { chart in
+      var next = chart
+      if let remapped = remapFullyContained(chart.dataRange) {
+        next.dataRange = remapped
+      }
+      return next
+    }
+
     activeSheet = sheet
     registerWorkbookStructureUndo(before: snapshot, action: "Sort Range")
     notifyGridRefresh()
@@ -352,7 +419,15 @@ extension SpreadsheetViewModel {
         n = range.normalized
       }
     }
-    guard n.maxRow > n.minRow else { return }
+    guard n.maxRow > n.minRow else {
+      let alert = NSAlert()
+      alert.messageText = "Select at least two rows to create a filter."
+      alert.informativeText = "Filters need a header row and at least one data row."
+      alert.alertStyle = .informational
+      alert.addButton(withTitle: "OK")
+      alert.runModal()
+      return
+    }
     filterState = SheetFilterState(range: range, selectedValuesByColumn: [:])
     notifyGridRefresh()
   }
@@ -585,5 +660,20 @@ private extension CellRange {
       start: CellAddress(row: n.minRow, col: n.minCol),
       end: CellAddress(row: n.maxRow, col: n.maxCol)
     )
+  }
+}
+
+extension SpreadsheetViewModel {
+  static func boundingUnion(of ranges: [CellRange]) -> CellRange {
+    guard var result = ranges.first?.normalizedRange else { return .singleOrigin }
+    for range in ranges.dropFirst() {
+      let a = result.normalized
+      let b = range.normalized
+      result = CellRange(
+        start: CellAddress(row: min(a.minRow, b.minRow), col: min(a.minCol, b.minCol)),
+        end: CellAddress(row: max(a.maxRow, b.maxRow), col: max(a.maxCol, b.maxCol))
+      )
+    }
+    return result
   }
 }

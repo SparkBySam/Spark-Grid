@@ -16,6 +16,8 @@ struct FormattingToolbar: View {
   @State private var showBorderPopover = false
   /// Prevents ColorPicker `onChange` from writing synced swatch values back onto the selection.
   @State private var suppressColorApply = false
+  /// Bumped on each sync so delayed clear only applies to the latest suppress cycle.
+  @State private var colorSyncGeneration = 0
 
   private var showLabels: Bool { settings.showToolbarLabels }
   private var toolbarHeight: CGFloat { SpreadsheetChrome.toolbarHeight(showLabels: showLabels) }
@@ -217,10 +219,10 @@ struct FormattingToolbar: View {
             ColorPicker("Color", selection: fillColorBinding, supportsOpacity: false)
 
             Button("No Fill") {
-              suppressColorApply = true
+              beginColorApplySuppress()
               fillColor = .clear
               viewModel.setFillColor(nil)
-              DispatchQueue.main.async { suppressColorApply = false }
+              scheduleColorApplySuppressClear()
               showFillPopover = false
             }
             .buttonStyle(.bordered)
@@ -377,7 +379,7 @@ struct FormattingToolbar: View {
   }
 
   private func syncColorsFromSelection() {
-    suppressColorApply = true
+    beginColorApplySuppress()
     let format = viewModel.selectedFormat
     if let text = format.textColor, let ns = CellFormatRenderer.nsColor(text) {
       textColor = Color(nsColor: ns)
@@ -401,8 +403,20 @@ struct FormattingToolbar: View {
     } else {
       borderColor = Color(nsColor: .labelColor)
     }
-    // ColorPicker onChange runs after the binding update; clear on the next turn.
-    DispatchQueue.main.async {
+    // ColorPicker can fire after the binding update; clear only after a short delay,
+    // and only if no newer sync started.
+    scheduleColorApplySuppressClear()
+  }
+
+  private func beginColorApplySuppress() {
+    colorSyncGeneration &+= 1
+    suppressColorApply = true
+  }
+
+  private func scheduleColorApplySuppressClear() {
+    let generation = colorSyncGeneration
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      guard colorSyncGeneration == generation else { return }
       suppressColorApply = false
     }
   }

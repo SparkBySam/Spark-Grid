@@ -434,7 +434,7 @@ final class SpreadsheetGridNSView: NSView {
   private func fillHandleRect() -> NSRect? {
     guard let viewModel, !viewModel.isEditing, !isEditorActive else { return nil }
     guard !viewModel.hasMultipleSelectionRanges else { return nil }
-    let range = viewModel.selectionRange.normalized
+    let range = (viewModel.selectionRanges.last ?? viewModel.selectionRange).normalized
     // Filter chip owns the SE corner on header cells — hide the handle so they don't fight.
     if viewModel.isFilterHeaderCell(row: range.maxRow, col: range.maxCol) { return nil }
     guard visibleRowRange().contains(range.maxRow),
@@ -1203,6 +1203,19 @@ final class SpreadsheetGridNSView: NSView {
     tri.fill()
   }
 
+  /// Dark-mode selection wash darkens the cell; force white text only when the
+  /// effective fill (or default background) is already dark enough that labelColor would fail.
+  private static func selectionNeedsLightText(over fill: NSColor?) -> Bool {
+    let base = (fill ?? NSColor.windowBackgroundColor)
+      .usingColorSpace(.deviceRGB) ?? fill ?? .windowBackgroundColor
+    let luminance =
+      0.2126 * base.redComponent
+      + 0.7152 * base.greenComponent
+      + 0.0722 * base.blueComponent
+    // Light fills keep dark/label text; dark fills need white for contrast under the wash.
+    return luminance < 0.55
+  }
+
   private func filterAffordanceRect(forCell rect: NSRect) -> NSRect {
     let size = 10 * zoomScale
     let gap = 5 * zoomScale
@@ -1341,9 +1354,10 @@ final class SpreadsheetGridNSView: NSView {
           if value.isError {
             drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
           } else if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                    viewModel.isAddressSelected(address)
+                    viewModel.isAddressSelected(address),
+                    Self.selectionNeedsLightText(over: fillColor)
           {
-            // Selection wash sits over fills; force white so text stays readable in dark mode.
+            // Only force white when the effective fill is dark enough that labelColor fails contrast.
             drawFormat.textColor = CellFormatRenderer.codableColor(from: .white)
           }
           CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
@@ -2211,7 +2225,7 @@ final class SpreadsheetGridNSView: NSView {
         needsDisplay = true
       case .content:
         let address = addressAtContent(point: point)
-        if !viewModel.selectionRange.contains(address) {
+        if !viewModel.isAddressSelected(address) {
           viewModel.selectRange(from: address, to: address)
           needsDisplay = true
         }

@@ -119,39 +119,11 @@ struct SheetChartView: View {
     let value: Double
   }
 
-  private var points: [Point] {
-    let n = chart.dataRange.normalized
-    var result: [Point] = []
-    // Prefer first column as labels, remaining columns as a single series (first numeric col).
-    let labelCol = n.minCol
-    let valueCol = min(n.maxCol, n.minCol + 1)
-    let startRow = n.minRow == n.maxRow ? n.minRow : n.minRow + 1
-    for (index, row) in (startRow...n.maxRow).enumerated() {
-      let labelAddress = CellAddress(row: row, col: labelCol)
-      let valueAddress = CellAddress(row: row, col: valueCol)
-      let label = viewModel.displayString(at: labelAddress)
-      let value = viewModel.displayValue(at: valueAddress).asNumber
-        ?? viewModel.displayValue(at: labelAddress).asNumber
-      guard let value else { continue }
-      let displayLabel = label.isEmpty ? "\(index + 1)" : label
-      result.append(Point(id: index, label: displayLabel, value: value))
-    }
-    // Single-column numeric range: use row index labels.
-    if result.isEmpty {
-      for (index, row) in (n.minRow...n.maxRow).enumerated() {
-        for col in n.minCol...n.maxCol {
-          if let value = viewModel.displayValue(at: CellAddress(row: row, col: col)).asNumber {
-            result.append(Point(id: result.count, label: "\(index + 1)", value: value))
-            break
-          }
-        }
-      }
-    }
-    return result
-  }
+  @State private var cachedPoints: [Point] = []
+  @State private var cachedToken = ""
 
   var body: some View {
-    Chart(points) { point in
+    Chart(cachedPoints) { point in
       switch chart.kind {
       case .bar:
         BarMark(
@@ -183,5 +155,50 @@ struct SheetChartView: View {
         AxisValueLabel()
       }
     }
+    .onAppear { refreshPoints() }
+    .onChange(of: cacheToken) { _, _ in
+      refreshPoints()
+    }
+  }
+
+  private var cacheToken: String {
+    let n = chart.dataRange.normalized
+    return "\(chart.id.uuidString)-\(viewModel.contentRevision)-\(chart.kind.rawValue)-\(n.minRow)-\(n.maxRow)-\(n.minCol)-\(n.maxCol)"
+  }
+
+  private func refreshPoints() {
+    let token = cacheToken
+    guard token != cachedToken else { return }
+    cachedPoints = Self.computePoints(chart: chart, viewModel: viewModel)
+    cachedToken = token
+  }
+
+  private static func computePoints(chart: SheetChart, viewModel: SpreadsheetViewModel) -> [Point] {
+    let n = chart.dataRange.normalized
+    var result: [Point] = []
+    let labelCol = n.minCol
+    let valueCol = min(n.maxCol, n.minCol + 1)
+    let startRow = n.minRow == n.maxRow ? n.minRow : n.minRow + 1
+    for (index, row) in (startRow...n.maxRow).enumerated() {
+      let labelAddress = CellAddress(row: row, col: labelCol)
+      let valueAddress = CellAddress(row: row, col: valueCol)
+      let label = viewModel.displayString(at: labelAddress)
+      let value = viewModel.displayValue(at: valueAddress).asNumber
+        ?? viewModel.displayValue(at: labelAddress).asNumber
+      guard let value else { continue }
+      let displayLabel = label.isEmpty ? "\(index + 1)" : label
+      result.append(Point(id: index, label: displayLabel, value: value))
+    }
+    if result.isEmpty {
+      for (index, row) in (n.minRow...n.maxRow).enumerated() {
+        for col in n.minCol...n.maxCol {
+          if let value = viewModel.displayValue(at: CellAddress(row: row, col: col)).asNumber {
+            result.append(Point(id: result.count, label: "\(index + 1)", value: value))
+            break
+          }
+        }
+      }
+    }
+    return result
   }
 }

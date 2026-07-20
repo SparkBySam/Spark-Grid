@@ -99,9 +99,11 @@ enum SortRangePresenter {
   @MainActor
   private final class SheetController: NSObject, NSWindowDelegate {
     var window: NSWindow?
+    weak var viewModel: SpreadsheetViewModel?
 
     func windowWillClose(_ notification: Notification) {
       window = nil
+      viewModel = nil
     }
 
     func close() {
@@ -111,21 +113,36 @@ enum SortRangePresenter {
         window?.close()
       }
       window = nil
+      viewModel = nil
     }
   }
 
   @MainActor
-  private static var controller = SheetController()
+  private static var controllersByWindow: [ObjectIdentifier: SheetController] = [:]
 
   @MainActor
   static func present(from viewModel: SpreadsheetViewModel, in window: NSWindow? = nil) {
     viewModel.commitEditIfNeeded()
-    if controller.window != nil {
-      controller.close()
+    let parent = window ?? NSApp.keyWindow ?? NSApp.mainWindow
+    let key = parent.map { ObjectIdentifier($0) }
+
+    if let key, let existing = controllersByWindow[key] {
+      existing.close()
+      controllersByWindow[key] = nil
+    } else {
+      for (id, controller) in controllersByWindow {
+        controller.close()
+        controllersByWindow[id] = nil
+      }
     }
 
+    let controller = SheetController()
+    controller.viewModel = viewModel
     let rootView = SortRangeSheet(viewModel: viewModel) {
       controller.close()
+      if let key {
+        controllersByWindow[key] = nil
+      }
     }
     let hosting = NSHostingController(rootView: rootView)
     let sheetWindow = NSWindow(contentViewController: hosting)
@@ -135,10 +152,17 @@ enum SortRangePresenter {
     sheetWindow.center()
     controller.window = sheetWindow
     sheetWindow.delegate = controller
+    if let key {
+      controllersByWindow[key] = controller
+    }
 
-    if let parent = window ?? NSApp.keyWindow ?? NSApp.mainWindow {
+    if let parent {
       parent.beginSheet(sheetWindow) { _ in
         controller.window = nil
+        controller.viewModel = nil
+        if let key {
+          controllersByWindow[key] = nil
+        }
       }
     } else {
       sheetWindow.makeKeyAndOrderFront(nil)

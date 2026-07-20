@@ -43,6 +43,8 @@ final class SpreadsheetViewModel {
   var findMatchCase = false
   var findEntireCell = false
   var findScope: FindScope = .sheet
+  /// Stable range for Find-in-Selection so jumping to a match does not shrink search scope.
+  var findScopeRange: CellRange?
   var findMatches: [CellAddress] = []
   var findMatchIndex: Int = -1
 
@@ -850,9 +852,12 @@ final class SpreadsheetViewModel {
     commitEditIfNeeded()
     let edge = BorderEdge.styled(borderStyle, color: borderColor)
     let thickEdge = BorderEdge.styled(.thick, color: borderColor)
+    undoManager?.beginUndoGrouping()
     for range in selectionRanges {
       applyBorderPreset(preset, to: range, edge: edge, thickEdge: thickEdge)
     }
+    undoManager?.endUndoGrouping()
+    undoManager?.setActionName("Format Cells")
   }
 
   private func applyBorderPreset(
@@ -976,14 +981,21 @@ final class SpreadsheetViewModel {
 
   private func updateSelectedFormat(_ mutate: (inout CellFormat) -> Void) {
     commitEditIfNeeded()
+    undoManager?.beginUndoGrouping()
     for range in selectionRanges {
       applyFormat(to: range, mutate: mutate)
     }
+    undoManager?.endUndoGrouping()
+    undoManager?.setActionName("Format Cells")
   }
 
   private func applyFormat(to range: CellRange, mutate: (inout CellFormat) -> Void) {
     let n = range.normalized
     let cellCount = (n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1)
+    let groupLarge = cellCount > 2_000
+    if groupLarge {
+      undoManager?.beginUndoGrouping()
+    }
 
     var sheet = activeSheet
     var changed = false
@@ -1000,22 +1012,18 @@ final class SpreadsheetViewModel {
       changed = true
     }
 
-    if cellCount > 2_000 {
-      for address in sheet.cells.keys where range.contains(address) {
-        mutateAddress(address)
-      }
-      if range.contains(selectionAnchor), sheet.cells[selectionAnchor] == nil {
-        mutateAddress(selectionAnchor)
-      }
-    } else {
-      for address in range.allAddresses() {
-        mutateAddress(address)
-      }
+    // Always visit every address so empty cells receive fill/font/etc.
+    for address in range.allAddresses() {
+      mutateAddress(address)
     }
 
     if changed {
       setActiveSheetPreservingFormulas(sheet)
       notifyGridRefresh()
+    }
+    if groupLarge {
+      undoManager?.endUndoGrouping()
+      undoManager?.setActionName("Format Cells")
     }
   }
 
@@ -1030,7 +1038,7 @@ final class SpreadsheetViewModel {
         inner.applyFormat(newFormat, at: address, skipUndo: true)
       }
     }
-    undoManager?.setActionName("Format Cell")
+    // Action name is set once by the caller after undo grouping when possible.
   }
 
   private func applyFormat(_ format: CellFormat, at address: CellAddress, skipUndo: Bool) {

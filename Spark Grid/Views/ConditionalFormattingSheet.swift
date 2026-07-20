@@ -293,13 +293,21 @@ struct ConditionalFormattingSheet: View {
   }
 
   private func applyNewRule() {
-    guard let rule = buildRule() else { return }
-    viewModel.addConditionalFormatRule(rule)
-    segment = .manage
+    let ranges = viewModel.selectionRanges.isEmpty
+      ? [viewModel.selectionRange]
+      : viewModel.selectionRanges
+    var applied = false
+    for range in ranges {
+      guard let rule = buildRule(for: range) else { continue }
+      viewModel.addConditionalFormatRule(rule)
+      applied = true
+    }
+    if applied {
+      segment = .manage
+    }
   }
 
-  private func buildRule() -> ConditionalFormatRule? {
-    let range = viewModel.selectionRange
+  private func buildRule(for range: CellRange) -> ConditionalFormatRule? {
     switch ruleType {
     case .highlightCells:
       guard let predicate = buildHighlightPredicate() else { return nil }
@@ -374,8 +382,17 @@ struct ConditionalFormattingSheet: View {
     return formula
   }
 
-  private static func parseNumber(_ raw: String) -> Double? {
-    Double(raw.replacingOccurrences(of: ",", with: ""))
+  static func parseNumber(_ raw: String) -> Double? {
+    var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return nil }
+    text = text.replacingOccurrences(of: "$", with: "")
+    text = text.replacingOccurrences(of: ",", with: "")
+    let isPercent = text.hasSuffix("%")
+    if isPercent {
+      text = String(text.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard let value = Double(text) else { return nil }
+    return isPercent ? value / 100.0 : value
   }
 
   private static func rangeLabel(_ range: CellRange) -> String {
@@ -410,9 +427,11 @@ enum ConditionalFormattingPresenter {
   @MainActor
   private final class SheetController: NSObject, NSWindowDelegate {
     var window: NSWindow?
+    weak var viewModel: SpreadsheetViewModel?
 
     func windowWillClose(_ notification: Notification) {
       window = nil
+      viewModel = nil
     }
 
     func close() {
@@ -422,21 +441,37 @@ enum ConditionalFormattingPresenter {
         window?.close()
       }
       window = nil
+      viewModel = nil
     }
   }
 
   @MainActor
-  private static var controller = SheetController()
+  private static var controllersByWindow: [ObjectIdentifier: SheetController] = [:]
 
   @MainActor
   static func present(from viewModel: SpreadsheetViewModel, in window: NSWindow? = nil) {
     viewModel.commitEditIfNeeded()
-    if controller.window != nil {
-      controller.close()
+    let parent = window ?? NSApp.keyWindow ?? NSApp.mainWindow
+    let key = parent.map { ObjectIdentifier($0) }
+
+    if let key, let existing = controllersByWindow[key] {
+      existing.close()
+      controllersByWindow[key] = nil
+    } else {
+      // Fallback singleton path: close any orphaned sheet.
+      for (id, controller) in controllersByWindow {
+        controller.close()
+        controllersByWindow[id] = nil
+      }
     }
 
+    let controller = SheetController()
+    controller.viewModel = viewModel
     let rootView = ConditionalFormattingSheet(viewModel: viewModel) {
       controller.close()
+      if let key {
+        controllersByWindow[key] = nil
+      }
     }
     let hosting = NSHostingController(rootView: rootView)
     let sheetWindow = NSWindow(contentViewController: hosting)
@@ -446,10 +481,17 @@ enum ConditionalFormattingPresenter {
     sheetWindow.center()
     controller.window = sheetWindow
     sheetWindow.delegate = controller
+    if let key {
+      controllersByWindow[key] = controller
+    }
 
-    if let parent = window ?? NSApp.keyWindow ?? NSApp.mainWindow {
+    if let parent {
       parent.beginSheet(sheetWindow) { _ in
         controller.window = nil
+        controller.viewModel = nil
+        if let key {
+          controllersByWindow[key] = nil
+        }
       }
     } else {
       sheetWindow.makeKeyAndOrderFront(nil)
