@@ -1267,19 +1267,32 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
-    let paintFormat = viewModel.resolvedFormat(at: address)
+    let paint = viewModel.resolvedPaint(at: address)
+    let paintFormat = paint.format
     if let fill = CellFormatRenderer.fillColor(for: paintFormat) {
       fill.setFill()
       rect.fill()
     }
 
-    guard !cell.raw.isEmpty else { return }
+    if let fraction = paint.dataBarFraction, let color = paint.dataBarColor {
+      drawDataBar(fraction: fraction, color: color, in: rect)
+    }
+    if let icon = paint.icon {
+      drawIconSetGlyph(icon, in: rect)
+    }
+
+    let hideValue = paint.dataBarFraction != nil && paint.dataBarShowValue == false
+    guard !hideValue, !cell.raw.isEmpty else { return }
     let value = viewModel.displayValue(at: address)
     let text = viewModel.displayString(at: address)
     guard !text.isEmpty else { return }
     let insetX = 4 * zoomScale
     let insetY = 2 * zoomScale
-    let textRect = rect.insetBy(dx: insetX, dy: insetY)
+    var textRect = rect.insetBy(dx: insetX, dy: insetY)
+    if paint.icon != nil {
+      textRect.origin.x += 14 * zoomScale
+      textRect.size.width = max(0, textRect.width - 14 * zoomScale)
+    }
     guard textRect.width > 1, textRect.height > 1 else { return }
 
     NSGraphicsContext.saveGraphicsState()
@@ -1292,6 +1305,105 @@ final class SpreadsheetGridNSView: NSView {
     }
     CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
     NSGraphicsContext.restoreGraphicsState()
+  }
+
+  private func drawDataBar(fraction: Double, color: CodableColor, in rect: NSRect) {
+    let pad = 2 * zoomScale
+    let height = max(4 * zoomScale, rect.height - pad * 2)
+    let maxWidth = max(0, rect.width - pad * 2)
+    let width = maxWidth * CGFloat(min(1, max(0, fraction)))
+    guard width > 0.5 else { return }
+    let bar = NSRect(
+      x: rect.minX + pad,
+      y: rect.midY - height / 2,
+      width: width,
+      height: height
+    )
+    NSColor(
+      calibratedRed: color.red,
+      green: color.green,
+      blue: color.blue,
+      alpha: 0.72
+    ).setFill()
+    NSBezierPath(roundedRect: bar, xRadius: 2 * zoomScale, yRadius: 2 * zoomScale).fill()
+  }
+
+  private func drawIconSetGlyph(_ glyph: IconSetGlyph, in rect: NSRect) {
+    let size = min(12 * zoomScale, rect.height - 4 * zoomScale)
+    guard size > 4 else { return }
+    let origin = NSPoint(x: rect.minX + 3 * zoomScale, y: rect.midY - size / 2)
+    let box = NSRect(origin: origin, size: NSSize(width: size, height: size))
+    switch glyph {
+    case .greenCircle, .yellowCircle, .redCircle:
+      let color: NSColor = {
+        switch glyph {
+        case .greenCircle: return .systemGreen
+        case .yellowCircle: return .systemYellow
+        default: return .systemRed
+        }
+      }()
+      color.setFill()
+      NSBezierPath(ovalIn: box.insetBy(dx: 1, dy: 1)).fill()
+    case .greenArrow, .yellowArrow, .redArrow:
+      let color: NSColor = {
+        switch glyph {
+        case .greenArrow: return .systemGreen
+        case .yellowArrow: return .systemYellow
+        default: return .systemRed
+        }
+      }()
+      color.setFill()
+      let path = NSBezierPath()
+      if glyph == .yellowArrow {
+        path.move(to: NSPoint(x: box.minX, y: box.midY))
+        path.line(to: NSPoint(x: box.maxX, y: box.midY))
+        path.line(to: NSPoint(x: box.maxX - size * 0.25, y: box.midY - size * 0.25))
+        path.move(to: NSPoint(x: box.maxX, y: box.midY))
+        path.line(to: NSPoint(x: box.maxX - size * 0.25, y: box.midY + size * 0.25))
+        path.lineWidth = 1.5 * zoomScale
+        color.setStroke()
+        path.stroke()
+      } else if glyph == .greenArrow {
+        path.move(to: NSPoint(x: box.midX, y: box.maxY))
+        path.line(to: NSPoint(x: box.minX + 1, y: box.minY + size * 0.35))
+        path.line(to: NSPoint(x: box.maxX - 1, y: box.minY + size * 0.35))
+        path.close()
+        path.fill()
+      } else {
+        path.move(to: NSPoint(x: box.midX, y: box.minY))
+        path.line(to: NSPoint(x: box.minX + 1, y: box.maxY - size * 0.35))
+        path.line(to: NSPoint(x: box.maxX - 1, y: box.maxY - size * 0.35))
+        path.close()
+        path.fill()
+      }
+    case .greenCheck, .yellowDash, .redX:
+      let color: NSColor = {
+        switch glyph {
+        case .greenCheck: return .systemGreen
+        case .yellowDash: return .systemYellow
+        default: return .systemRed
+        }
+      }()
+      let path = NSBezierPath()
+      path.lineWidth = 1.6 * zoomScale
+      path.lineCapStyle = .round
+      color.setStroke()
+      switch glyph {
+      case .greenCheck:
+        path.move(to: NSPoint(x: box.minX + size * 0.15, y: box.midY))
+        path.line(to: NSPoint(x: box.midX - size * 0.05, y: box.minY + size * 0.2))
+        path.line(to: NSPoint(x: box.maxX - size * 0.1, y: box.maxY - size * 0.15))
+      case .yellowDash:
+        path.move(to: NSPoint(x: box.minX + size * 0.15, y: box.midY))
+        path.line(to: NSPoint(x: box.maxX - size * 0.15, y: box.midY))
+      default:
+        path.move(to: NSPoint(x: box.minX + size * 0.2, y: box.minY + size * 0.2))
+        path.line(to: NSPoint(x: box.maxX - size * 0.2, y: box.maxY - size * 0.2))
+        path.move(to: NSPoint(x: box.maxX - size * 0.2, y: box.minY + size * 0.2))
+        path.line(to: NSPoint(x: box.minX + size * 0.2, y: box.maxY - size * 0.2))
+      }
+      path.stroke()
+    }
   }
 
   private func drawFrozenCells(in dirtyRect: NSRect) {

@@ -46,6 +46,72 @@ struct ColorScaleStop: Codable, Equatable, Sendable {
   var color: CodableColor
 }
 
+struct DataBarStyle: Codable, Equatable, Sendable {
+  var color: CodableColor
+  var showValue: Bool
+
+  static let blue = DataBarStyle(
+    color: CodableColor(red: 0.39, green: 0.58, blue: 0.93, alpha: 1),
+    showValue: true
+  )
+
+  static let green = DataBarStyle(
+    color: CodableColor(red: 0.39, green: 0.78, blue: 0.47, alpha: 1),
+    showValue: true
+  )
+}
+
+enum IconSetStyle: String, Codable, Sendable, CaseIterable {
+  case threeTrafficLights
+  case threeArrows
+  case threeSymbols
+
+  var title: String {
+    switch self {
+    case .threeTrafficLights: return "3 Traffic Lights"
+    case .threeArrows: return "3 Arrows"
+    case .threeSymbols: return "3 Symbols"
+    }
+  }
+
+  /// Excel `iconSet` attribute.
+  var excelName: String {
+    switch self {
+    case .threeTrafficLights: return "3TrafficLights1"
+    case .threeArrows: return "3Arrows"
+    case .threeSymbols: return "3Symbols"
+    }
+  }
+
+  static func fromExcelName(_ name: String) -> IconSetStyle? {
+    switch name {
+    case "3TrafficLights1", "3TrafficLights2": return .threeTrafficLights
+    case "3Arrows", "3ArrowsGray": return .threeArrows
+    case "3Symbols", "3Symbols2": return .threeSymbols
+    default: return nil
+    }
+  }
+}
+
+enum IconSetGlyph: String, Codable, Sendable {
+  case greenCircle, yellowCircle, redCircle
+  case greenArrow, yellowArrow, redArrow
+  case greenCheck, yellowDash, redX
+}
+
+/// Resolved conditional paint for a cell (format overlays + decorations).
+struct ConditionalPaint: Equatable, Sendable {
+  var format: CellFormat?
+  var dataBarFraction: Double?
+  var dataBarColor: CodableColor?
+  var dataBarShowValue: Bool = true
+  var icon: IconSetGlyph?
+
+  var hasDecoration: Bool {
+    dataBarFraction != nil || icon != nil
+  }
+}
+
 enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
   case greaterThan(Double)
   case lessThan(Double)
@@ -58,8 +124,10 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
   case nonBlanks
   /// Formula relative to the top-left of the rule range (Excel-style).
   case formula(String)
-  /// 2- or 3-color scale; style.fill come from interpolation, not `rule.style`.
+  /// 2- or 3-color scale; style fills come from interpolation, not `rule.style`.
   case colorScale([ColorScaleStop])
+  case dataBar(DataBarStyle)
+  case iconSet(IconSetStyle)
 
   var title: String {
     switch self {
@@ -74,6 +142,8 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
     case .nonBlanks: return "Non-blanks"
     case .formula(let f): return "Formula: \(f)"
     case .colorScale(let stops): return "Color scale (\(stops.count) stops)"
+    case .dataBar: return "Data bars"
+    case .iconSet(let style): return "Icon set: \(style.title)"
     }
   }
 
@@ -109,6 +179,94 @@ struct ConditionalFormatRule: Identifiable, Codable, Equatable, Sendable {
 
 enum ConditionalFormatEvaluator {
   /// Resolves base format plus matching conditional overlays for a cell.
+  static func resolvedPaint(
+    at address: CellAddress,
+    base: CellFormat?,
+    rules: [ConditionalFormatRule],
+    value: CellValue,
+    displayString: String,
+    numberFormat: CellFormat.NumberFormat?,
+    numericValuesInRange: (CellRange) -> [Double],
+    evaluateFormula: (String, CellAddress, CellAddress) -> CellValue
+  ) -> ConditionalPaint {
+    guard !rules.isEmpty else {
+      return ConditionalPaint(format: base)
+    }
+    var result = base ?? CellFormat()
+    var applied = false
+    var paint = ConditionalPaint(format: base)
+
+    for rule in rules {
+      guard rule.range.contains(address) else { continue }
+      let origin = CellAddress(
+        row: rule.range.normalized.minRow,
+        col: rule.range.normalized.minCol
+      )
+
+      switch rule.predicate {
+      case .colorScale(let stops):
+        guard let fill = colorScaleFill(
+          stops: stops,
+          value: value,
+          range: rule.range,
+          numericValuesInRange: numericValuesInRange
+        ) else { continue }
+        result.fillColor = fill
+        paint.format = result.isDefault ? nil : result
+        applied = true
+        if rule.stopIfTrue { break }
+
+      case .dataBar(let style):
+        guard let fraction = dataBarFraction(
+          value: value,
+          range: rule.range,
+          numericValuesInRange: numericValuesInRange
+        ) else { continue }
+        paint.dataBarFraction = fraction
+        paint.dataBarColor = style.color
+        paint.dataBarShowValue = style.showValue
+        applied = true
+        if rule.stopIfTrue { break }
+
+      case .iconSet(let style):
+        guard let glyph = iconGlyph(
+          style: style,
+          value: value,
+          range: rule.range,
+          numericValuesInRange: numericValuesInRange
+        ) else { continue }
+        paint.icon = glyph
+        applied = true
+        if rule.stopIfTrue { break }
+
+      default:
+        guard matches(
+          rule.predicate,
+          value: value,
+          displayString: displayString,
+          numberFormat: numberFormat,
+          address: address,
+          origin: origin,
+          evaluateFormula: evaluateFormula
+        ) else { continue }
+
+        result = rule.style.applying(to: result)
+        paint.format = result.isDefault ? nil : result
+        applied = true
+        if rule.stopIfTrue { break }
+      }
+    }
+
+    if !applied {
+      return ConditionalPaint(format: base)
+    }
+    if paint.format == nil, !result.isDefault {
+      paint.format = result
+    }
+    return paint
+  }
+
+  /// Convenience for callers that only need the format overlay.
   static func resolvedFormat(
     at address: CellAddress,
     base: CellFormat?,
@@ -119,47 +277,16 @@ enum ConditionalFormatEvaluator {
     numericValuesInRange: (CellRange) -> [Double],
     evaluateFormula: (String, CellAddress, CellAddress) -> CellValue
   ) -> CellFormat? {
-    guard !rules.isEmpty else { return base }
-    var result = base ?? CellFormat()
-    var applied = false
-
-    for rule in rules {
-      guard rule.range.contains(address) else { continue }
-      let origin = CellAddress(
-        row: rule.range.normalized.minRow,
-        col: rule.range.normalized.minCol
-      )
-
-      if case .colorScale(let stops) = rule.predicate {
-        guard let fill = colorScaleFill(
-          stops: stops,
-          value: value,
-          range: rule.range,
-          numericValuesInRange: numericValuesInRange
-        ) else { continue }
-        result.fillColor = fill
-        applied = true
-        if rule.stopIfTrue { break }
-        continue
-      }
-
-      guard matches(
-        rule.predicate,
-        value: value,
-        displayString: displayString,
-        numberFormat: numberFormat,
-        address: address,
-        origin: origin,
-        evaluateFormula: evaluateFormula
-      ) else { continue }
-
-      result = rule.style.applying(to: result)
-      applied = true
-      if rule.stopIfTrue { break }
-    }
-
-    if !applied { return base }
-    return result.isDefault ? nil : result
+    resolvedPaint(
+      at: address,
+      base: base,
+      rules: rules,
+      value: value,
+      displayString: displayString,
+      numberFormat: numberFormat,
+      numericValuesInRange: numericValuesInRange,
+      evaluateFormula: evaluateFormula
+    ).format
   }
 
   static func matches(
@@ -205,7 +332,7 @@ enum ConditionalFormatEvaluator {
       let result = evaluateFormula(raw, address, origin)
       if case .error = result { return false }
       return result.asBool == true || (result.asNumber ?? 0) != 0
-    case .colorScale:
+    case .colorScale, .dataBar, .iconSet:
       return false
     }
   }
@@ -222,6 +349,50 @@ enum ConditionalFormatEvaluator {
       return (raw * 100, threshold)
     }
     return (raw, threshold)
+  }
+
+  private static func dataBarFraction(
+    value: CellValue,
+    range: CellRange,
+    numericValuesInRange: (CellRange) -> [Double]
+  ) -> Double? {
+    guard let cellValue = value.asNumber else { return nil }
+    let values = numericValuesInRange(range)
+    guard !values.isEmpty else { return nil }
+    let dataMin = min(0, values.min() ?? 0)
+    let dataMax = values.max() ?? cellValue
+    let span = dataMax - dataMin
+    if span <= 0 { return cellValue > 0 ? 1 : 0 }
+    return min(1, max(0, (cellValue - dataMin) / span))
+  }
+
+  private static func iconGlyph(
+    style: IconSetStyle,
+    value: CellValue,
+    range: CellRange,
+    numericValuesInRange: (CellRange) -> [Double]
+  ) -> IconSetGlyph? {
+    guard let cellValue = value.asNumber else { return nil }
+    let values = numericValuesInRange(range).sorted()
+    guard !values.isEmpty else { return nil }
+    let p67 = percentile(values, p: 67)
+    let p33 = percentile(values, p: 33)
+    let tier: Int
+    if cellValue >= p67 {
+      tier = 0
+    } else if cellValue >= p33 {
+      tier = 1
+    } else {
+      tier = 2
+    }
+    switch style {
+    case .threeTrafficLights:
+      return [.greenCircle, .yellowCircle, .redCircle][tier]
+    case .threeArrows:
+      return [.greenArrow, .yellowArrow, .redArrow][tier]
+    case .threeSymbols:
+      return [.greenCheck, .yellowDash, .redX][tier]
+    }
   }
 
   private static func colorScaleFill(

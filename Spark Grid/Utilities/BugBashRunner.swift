@@ -43,6 +43,8 @@ enum BugBashRunner {
     results.append(mergeSelectionSnap())
     results.append(sharedFormulaRoundTrip())
     results.append(conditionalFormatImport())
+    results.append(dataBarRoundTrip())
+    results.append(excelChartParts())
     return results
   }
 
@@ -91,6 +93,76 @@ enum BugBashRunner {
       return Result(name: "CF import", passed: true, detail: "\(count) rule(s)")
     } catch {
       return Result(name: "CF import", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func dataBarRoundTrip() -> Result {
+    var sheet = Sheet(name: "Test")
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "90"), at: CellAddress(row: 1, col: 0))
+    sheet.conditionalFormats = [
+      ConditionalFormatRule(
+        range: CellRange(start: .origin, end: CellAddress(row: 1, col: 0)),
+        predicate: .dataBar(.blue),
+        style: ConditionalFormatStyle()
+      ),
+      ConditionalFormatRule(
+        range: CellRange(start: .origin, end: CellAddress(row: 1, col: 0)),
+        predicate: .iconSet(.threeTrafficLights),
+        style: ConditionalFormatStyle()
+      ),
+    ]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let xml = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      guard xml.contains("type=\"dataBar\""), xml.contains("type=\"iconSet\"") else {
+        return Result(name: "data bar / icon export", passed: false, detail: "missing CF types in XML")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let preds = imported.activeSheet.conditionalFormats.map(\.predicate)
+      let hasBar = preds.contains { if case .dataBar = $0 { return true }; return false }
+      let hasIcon = preds.contains { if case .iconSet = $0 { return true }; return false }
+      guard hasBar, hasIcon else {
+        return Result(name: "data bar / icon round-trip", passed: false, detail: "\(preds)")
+      }
+      return Result(name: "data bar / icon round-trip", passed: true, detail: "ok")
+    } catch {
+      return Result(name: "data bar / icon round-trip", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func excelChartParts() -> Result {
+    var sheet = Sheet(name: "Sales")
+    sheet.setCell(Cell(raw: "A"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "20"), at: CellAddress(row: 2, col: 0))
+    sheet.charts = [
+      SheetChart(
+        kind: .bar,
+        title: "Sales",
+        dataRange: CellRange(start: .origin, end: CellAddress(row: 2, col: 0)),
+        anchorRow: 4,
+        anchorCol: 2
+      ),
+    ]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      for path in [
+        "xl/charts/chart1.xml",
+        "xl/drawings/drawing1.xml",
+        "xl/worksheets/_rels/sheet1.xml.rels",
+      ] {
+        guard XLSXCodec.zipEntryString(archiveData: data, entryPath: path) != nil else {
+          return Result(name: "excel chart parts", passed: false, detail: "missing \(path)")
+        }
+      }
+      let sheetXML = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      guard sheetXML.contains("<drawing") else {
+        return Result(name: "excel chart parts", passed: false, detail: "worksheet missing drawing ref")
+      }
+      return Result(name: "excel chart parts", passed: true, detail: "drawing+chart+rels")
+    } catch {
+      return Result(name: "excel chart parts", passed: false, detail: error.localizedDescription)
     }
   }
 

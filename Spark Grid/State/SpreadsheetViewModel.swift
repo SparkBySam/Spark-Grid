@@ -61,7 +61,7 @@ final class SpreadsheetViewModel {
   /// Avoid write-back loops when restoring filter from the sheet.
   var isRestoringFilterFromSheet = false
   /// Cache for conditional-format overlays (invalidated with contentRevision).
-  var conditionalFormatCache: [CellAddress: CellFormat?] = [:]
+  var conditionalFormatCache: [CellAddress: ConditionalPaint] = [:]
   var conditionalFormatCacheRevision: Int = -1
   /// View zoom (0.5…2.0). Scales cell geometry in the grid.
   var zoomScale: CGFloat = 1.0 {

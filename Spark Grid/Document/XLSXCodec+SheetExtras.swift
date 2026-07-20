@@ -150,15 +150,20 @@ extension XLSXCodec {
           predicate = .nonBlanks
         case "colorScale":
           predicate = colorScalePredicate(in: ruleBody, themeScheme: themeScheme)
+        case "dataBar":
+          predicate = dataBarPredicate(in: ruleBody, themeScheme: themeScheme)
+        case "iconSet":
+          predicate = iconSetPredicate(in: ruleBody, ruleAttrs: ruleAttrs)
         default:
           predicate = nil
         }
 
         guard let predicate else { continue }
         let ruleStyle: ConditionalFormatStyle
-        if case .colorScale = predicate {
+        switch predicate {
+        case .colorScale, .dataBar, .iconSet:
           ruleStyle = ConditionalFormatStyle()
-        } else {
+        default:
           ruleStyle = style
         }
         sheet.conditionalFormats.append(
@@ -355,6 +360,11 @@ extension XLSXCodec {
             xml += #"<color rgb="FF\#(rgbHex(stop.color))"/>"#
           }
           xml += "</colorScale></cfRule>"
+        case .dataBar(let style):
+          let show = style.showValue ? "" : #" showValue="0""#
+          xml += #"<cfRule type="dataBar" priority="\#(priority)"\#(stop)><dataBar\#(show)><cfvo type="min"/><cfvo type="max"/><color rgb="FF\#(rgbHex(style.color))"/></dataBar></cfRule>"#
+        case .iconSet(let style):
+          xml += #"<cfRule type="iconSet" priority="\#(priority)"\#(stop)><iconSet iconSet="\#(style.excelName)"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>"#
         }
       }
       xml += "</conditionalFormatting>"
@@ -433,6 +443,46 @@ extension XLSXCodec {
       stops.append(ColorScaleStop(type: type, value: value, color: color))
     }
     return .colorScale(stops)
+  }
+
+  private static func dataBarPredicate(
+    in body: String,
+    themeScheme: ThemeColorScheme
+  ) -> ConditionalFormatPredicate? {
+    guard let barRange = body.range(of: #"<dataBar\b[^>]*>[\s\S]*?</dataBar>"#, options: .regularExpression)
+      ?? body.range(of: #"<dataBar\b[^>]*/>"#, options: .regularExpression)
+    else { return nil }
+    let bar = String(body[barRange])
+    let showValue = !(bar.contains(#"showValue="0""#) || bar.contains("showValue='0'"))
+    var color = DataBarStyle.blue.color
+    if let colorRange = bar.range(of: #"<color\b([^>]*)/?\s*>"#, options: .regularExpression) {
+      let token = String(bar[colorRange])
+      if let themed = ThemeColorLookup.resolve(fromAttributes: token, scheme: themeScheme) {
+        color = themed
+      } else if let rgb = attributeValue(token, name: "rgb"), let parsed = colorFromRGBHex(rgb) {
+        color = parsed
+      }
+    }
+    return .dataBar(DataBarStyle(color: color, showValue: showValue))
+  }
+
+  private static func iconSetPredicate(in body: String, ruleAttrs: String) -> ConditionalFormatPredicate? {
+    var name = attributeValue(ruleAttrs, name: "iconSet")
+    if name == nil,
+       let range = body.range(of: #"iconSet="[^"]+""#, options: .regularExpression)
+    {
+      let token = String(body[range])
+      if let q1 = token.firstIndex(of: "\""),
+         let q2 = token.lastIndex(of: "\""),
+         q1 < q2
+      {
+        name = String(token[token.index(after: q1)..<q2])
+      }
+    }
+    guard let name, let style = IconSetStyle.fromExcelName(name) else {
+      return .iconSet(.threeTrafficLights)
+    }
+    return .iconSet(style)
   }
 
   private static func cellIsPredicate(operator op: String, formulas: [String]) -> ConditionalFormatPredicate? {

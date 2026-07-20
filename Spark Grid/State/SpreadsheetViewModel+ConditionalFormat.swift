@@ -2,11 +2,12 @@ import AppKit
 import Foundation
 
 extension SpreadsheetViewModel {
-  /// Format used for painting a cell (base + conditional formatting overlays).
-  func resolvedFormat(at address: CellAddress) -> CellFormat? {
+  /// Full conditional paint (format + data bars / icons).
+  func resolvedPaint(at address: CellAddress) -> ConditionalPaint {
     let rules = activeSheet.conditionalFormats
+    let cell = activeSheet.cell(at: address)
     guard !rules.isEmpty else {
-      return activeSheet.cell(at: address).format
+      return ConditionalPaint(format: cell.format)
     }
     if conditionalFormatCacheRevision != contentRevision {
       conditionalFormatCache.removeAll(keepingCapacity: true)
@@ -15,10 +16,9 @@ extension SpreadsheetViewModel {
     if let index = conditionalFormatCache.index(forKey: address) {
       return conditionalFormatCache[index].value
     }
-    let cell = activeSheet.cell(at: address)
     let value = displayValue(at: address)
     let text = formulaEngine.displayString(at: address, sheet: activeSheet, format: cell.format)
-    let resolved = ConditionalFormatEvaluator.resolvedFormat(
+    let resolved = ConditionalFormatEvaluator.resolvedPaint(
       at: address,
       base: cell.format,
       rules: rules,
@@ -41,6 +41,11 @@ extension SpreadsheetViewModel {
     )
     conditionalFormatCache[address] = resolved
     return resolved
+  }
+
+  /// Format used for painting a cell (base + conditional formatting overlays).
+  func resolvedFormat(at address: CellAddress) -> CellFormat? {
+    resolvedPaint(at: address).format
   }
 
   private func numericValues(in range: CellRange) -> [Double] {

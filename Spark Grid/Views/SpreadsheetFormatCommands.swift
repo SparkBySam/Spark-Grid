@@ -22,6 +22,18 @@ struct SpreadsheetFormatCommands: Commands {
         }
         .disabled(viewModel == nil)
 
+        Button("Data Bars") {
+          presentDataBars()
+        }
+        .disabled(viewModel == nil)
+
+        Menu("Icon Sets") {
+          Button("3 Traffic Lights") { applyIconSet(.threeTrafficLights) }
+          Button("3 Arrows") { applyIconSet(.threeArrows) }
+          Button("3 Symbols") { applyIconSet(.threeSymbols) }
+        }
+        .disabled(viewModel == nil)
+
         Divider()
 
         Button("Clear Rules from Selection") {
@@ -192,6 +204,28 @@ struct SpreadsheetFormatCommands: Commands {
       range: viewModel.selectionRange,
       stopIfTrue: false,
       predicate: .colorScale(stops),
+      style: ConditionalFormatStyle()
+    )
+    viewModel.addConditionalFormatRule(rule)
+  }
+
+  private func presentDataBars() {
+    guard let viewModel else { return }
+    let rule = ConditionalFormatRule(
+      range: viewModel.selectionRange,
+      stopIfTrue: false,
+      predicate: .dataBar(.blue),
+      style: ConditionalFormatStyle()
+    )
+    viewModel.addConditionalFormatRule(rule)
+  }
+
+  private func applyIconSet(_ style: IconSetStyle) {
+    guard let viewModel else { return }
+    let rule = ConditionalFormatRule(
+      range: viewModel.selectionRange,
+      stopIfTrue: false,
+      predicate: .iconSet(style),
       style: ConditionalFormatStyle()
     )
     viewModel.addConditionalFormatRule(rule)

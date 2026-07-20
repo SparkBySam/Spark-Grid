@@ -503,19 +503,33 @@ enum XLSXCodec {
     }
 
     var files: [String: Data] = [:]
-    files["[Content_Types].xml"] = contentTypesXML(sheetCount: workbook.sheets.count)
+    var sheetsWithDrawings = Set<Int>()
+    for (index, sheet) in workbook.sheets.enumerated() {
+      if appendExcelChartParts(for: sheet, sheetIndex: index, into: &files) {
+        sheetsWithDrawings.insert(index)
+      }
+    }
+    files["[Content_Types].xml"] = contentTypesXML(
+      sheetCount: workbook.sheets.count,
+      chartOverrides: chartContentTypeOverrides(workbook: workbook)
+    )
     files["_rels/.rels"] = rootRelsXML
     files["xl/workbook.xml"] = workbookXML(workbook)
     files["xl/_rels/workbook.xml.rels"] = workbookRelsXML(sheetCount: workbook.sheets.count)
 
     for (index, sheet) in workbook.sheets.enumerated() {
+      let hasDrawing = sheetsWithDrawings.contains(index)
       let sheetXML = worksheetXML(
         sheet,
         intern: intern,
         styleIndex: styleIndex,
-        dxfIndex: dxfIndex
+        dxfIndex: dxfIndex,
+        includeDrawing: hasDrawing
       )
       files["xl/worksheets/sheet\(index + 1).xml"] = sheetXML
+      if let rels = worksheetRelsXML(sheetIndex: index, hasDrawing: hasDrawing) {
+        files["xl/worksheets/_rels/sheet\(index + 1).xml.rels"] = rels
+      }
       if let chartsData = sparkChartsJSON(sheet.charts) {
         files["xl/sparkGrid/charts\(index + 1).json"] = chartsData
       }
@@ -532,7 +546,7 @@ enum XLSXCodec {
 
   // MARK: - Export XML builders
 
-  private static func contentTypesXML(sheetCount: Int) -> Data {
+  private static func contentTypesXML(sheetCount: Int, chartOverrides: String = "") -> Data {
     var overrides = """
     <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
     <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
@@ -543,6 +557,7 @@ enum XLSXCodec {
       <Override PartName="/xl/worksheets/sheet\(i).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
       """
     }
+    overrides += chartOverrides
     let xml = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -616,7 +631,8 @@ enum XLSXCodec {
     _ sheet: Sheet,
     intern: (String) -> Int,
     styleIndex: (CellFormat?) -> Int,
-    dxfIndex: (ConditionalFormatStyle) -> Int
+    dxfIndex: (ConditionalFormatStyle) -> Int,
+    includeDrawing: Bool = false
   ) -> Data {
     var colsXML = ""
     if !sheet.columnWidths.isEmpty {
@@ -662,16 +678,18 @@ enum XLSXCodec {
     let mergeXML = mergeCellsXML(sheet.mergedRanges)
     let filterXML = autoFilterXML(sheet.autoFilter)
     let cfXML = conditionalFormattingXML(sheet.conditionalFormats, dxfIndex: dxfIndex)
+    let drawingXML = includeDrawing ? sheetDrawingRelationshipXML(sheetIndex: 0) : ""
 
     let xml = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
     \(viewsXML)
     \(colsXML)
     <sheetData>\(sheetData)</sheetData>
     \(mergeXML)
     \(filterXML)
     \(cfXML)
+    \(drawingXML)
     </worksheet>
     """
     return Data(xml.utf8)
