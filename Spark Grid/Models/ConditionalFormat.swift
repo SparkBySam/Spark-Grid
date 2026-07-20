@@ -19,6 +19,22 @@ struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
     fillColor: CodableColor(red: 0.78, green: 0.94, blue: 0.78, alpha: 1)
   )
 
+  static let blueFill = ConditionalFormatStyle(
+    fillColor: CodableColor(red: 0.78, green: 0.88, blue: 0.98, alpha: 1)
+  )
+
+  static let orangeFill = ConditionalFormatStyle(
+    fillColor: CodableColor(red: 1.0, green: 0.88, blue: 0.72, alpha: 1)
+  )
+
+  static let purpleFill = ConditionalFormatStyle(
+    fillColor: CodableColor(red: 0.9, green: 0.82, blue: 0.96, alpha: 1)
+  )
+
+  static let grayFill = ConditionalFormatStyle(
+    fillColor: CodableColor(red: 0.88, green: 0.88, blue: 0.9, alpha: 1)
+  )
+
   func applying(to base: CellFormat) -> CellFormat {
     var result = base
     if let bold { result.bold = bold }

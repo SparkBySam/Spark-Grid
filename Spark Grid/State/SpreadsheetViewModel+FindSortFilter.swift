@@ -10,6 +10,15 @@ extension SpreadsheetViewModel {
     refreshFindMatches(selectCurrent: true)
   }
 
+  /// ⌘F / ⌥⌘F: open when hidden, close when already visible.
+  func toggleFindBar(replace: Bool) {
+    if isFindBarVisible {
+      hideFindBar()
+    } else {
+      showFindBar(replace: replace)
+    }
+  }
+
   func hideFindBar() {
     isFindBarVisible = false
     findMatches = []

@@ -1,41 +1,110 @@
+import AppKit
 import Charts
 import SwiftUI
 
 struct SpreadsheetChartsPanel: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  @Binding var isCollapsed: Bool
+
+  private let expandedWidth: CGFloat = 280
+  private let collapsedWidth: CGFloat = 28
 
   var body: some View {
     let charts = viewModel.activeSheet.charts
     if charts.isEmpty {
       EmptyView()
     } else {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Charts")
-          .font(.headline)
-        ForEach(charts) { chart in
-          VStack(alignment: .leading, spacing: 4) {
-            HStack {
-              Text(chart.title)
-                .font(.subheadline.weight(.semibold))
-              Spacer()
-              Button {
-                viewModel.removeChart(id: chart.id)
-              } label: {
-                Image(systemName: "xmark.circle.fill")
-                  .foregroundStyle(.secondary)
-              }
-              .buttonStyle(.plain)
-              .help("Delete chart")
-            }
-            SheetChartView(chart: chart, viewModel: viewModel)
-              .frame(height: 160)
-          }
-          .padding(10)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+      Group {
+        if isCollapsed {
+          collapsedBar
+        } else {
+          expandedPanel(charts: charts)
         }
       }
-      .padding(12)
-      .frame(width: 320)
+      .frame(width: isCollapsed ? collapsedWidth : expandedWidth)
+      .frame(maxHeight: .infinity)
+      .background(Color(nsColor: .controlBackgroundColor))
+    }
+  }
+
+  private var collapsedBar: some View {
+    VStack(spacing: 8) {
+      Button {
+        withAnimation(.easeInOut(duration: 0.15)) { isCollapsed = false }
+      } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 11, weight: .semibold))
+          .frame(width: 28, height: 28)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Show charts")
+
+      Text("Charts")
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(.secondary)
+        .rotationEffect(.degrees(-90))
+        .fixedSize()
+        .frame(width: 28)
+
+      Spacer(minLength: 0)
+    }
+    .padding(.top, 4)
+  }
+
+  private func expandedPanel(charts: [SheetChart]) -> some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 6) {
+        Text("Charts")
+          .font(.system(size: 12, weight: .semibold))
+        Spacer(minLength: 0)
+        Button {
+          withAnimation(.easeInOut(duration: 0.15)) { isCollapsed = true }
+        } label: {
+          Image(systemName: "sidebar.trailing")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Hide charts")
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+
+      Divider()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 10) {
+          ForEach(charts) { chart in
+            VStack(alignment: .leading, spacing: 6) {
+              HStack(spacing: 6) {
+                Text(chart.title)
+                  .font(.system(size: 12, weight: .semibold))
+                  .lineLimit(1)
+                Spacer(minLength: 0)
+                Button {
+                  viewModel.removeChart(id: chart.id)
+                } label: {
+                  Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Delete chart")
+              }
+              SheetChartView(chart: chart, viewModel: viewModel)
+                .frame(height: 140)
+            }
+            .padding(8)
+            .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+          }
+        }
+        .padding(10)
+      }
     }
   }
 }

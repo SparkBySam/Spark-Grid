@@ -3,6 +3,7 @@ import SwiftUI
 
 struct FormattingToolbar: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  @Bindable var store: SpreadsheetDocumentStore
   @Bindable private var settings = AppSettings.shared
   let undoManager: UndoManager?
 
@@ -10,20 +11,27 @@ struct FormattingToolbar: View {
   @State private var fillColor: Color = .clear
   @State private var borderColor: Color = .primary
   @State private var fontSizeText = "12"
-  @State private var showBorderPopover = false
+  @State private var showTextPopover = false
   @State private var showFillPopover = false
+  @State private var showBorderPopover = false
   /// Prevents ColorPicker `onChange` from writing synced swatch values back onto the selection.
   @State private var suppressColorApply = false
 
   private var showLabels: Bool { settings.showToolbarLabels }
-  private var toolbarHeight: CGFloat { 58 }
+  private var toolbarHeight: CGFloat { SpreadsheetChrome.toolbarHeight(showLabels: showLabels) }
   private var dividerHeight: CGFloat { showLabels ? 36 : 30 }
   private var iconAreaHeight: CGFloat { 24 }
 
   var body: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      toolbarContent
-        .fixedSize(horizontal: true, vertical: false)
+    HStack(spacing: 0) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        toolbarContent
+          .fixedSize(horizontal: true, vertical: false)
+      }
+      .frame(maxWidth: .infinity)
+
+      AutosaveStatusView(store: store)
+        .padding(.horizontal, 10)
     }
     .frame(maxWidth: .infinity)
     .frame(height: toolbarHeight)
@@ -50,8 +58,6 @@ struct FormattingToolbar: View {
       styleGroup
       toolbarDivider
       colorGroup
-      toolbarDivider
-      borderGroup
       toolbarDivider
       mergeGroup
       toolbarDivider
@@ -113,8 +119,6 @@ struct FormattingToolbar: View {
       ToolbarMenuButton(title: "Format", showLabel: showLabels, width: showLabels ? 44 : 32) {
         Button("General") { viewModel.setNumberFormat(.general) }
         Button("Number") { viewModel.setNumberFormat(.number) }
-        Button("Currency") { viewModel.setNumberFormat(.currency) }
-        Button("Percent") { viewModel.setNumberFormat(.percent) }
         Button("Scientific") { viewModel.setNumberFormat(.scientific) }
       } label: {
         Text("123")
@@ -169,92 +173,71 @@ struct FormattingToolbar: View {
   }
 
   private var colorGroup: some View {
-    HStack(spacing: 0) {
-      ToolbarColorPicker(
+    HStack(spacing: 6) {
+      ToolbarSwatchDisclosure(
         title: "Text",
         showLabel: showLabels,
-        label: {
+        selection: $textColor,
+        isPopoverPresented: $showTextPopover,
+        suppressColorApply: suppressColorApply,
+        onColorChange: { color in
+          viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+        },
+        icon: {
           Text("A")
             .font(.system(size: 15, weight: .semibold))
             .underline(true, color: textColor)
         },
-        selection: $textColor
-      ) { color in
-        guard !suppressColorApply else { return }
-        viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(color)))
-      }
+        popoverContent: {
+          ColorPicker("Color", selection: textColorBinding, supportsOpacity: false)
+        }
+      )
 
-      toolbarDivider
-        .padding(.horizontal, 6)
+      ToolbarSwatchDisclosure(
+        title: "Fill",
+        showLabel: showLabels,
+        selection: $fillColor,
+        isPopoverPresented: $showFillPopover,
+        suppressColorApply: suppressColorApply,
+        onColorChange: applyFillColor,
+        icon: {
+          Image(systemName: "paintbrush.fill")
+            .font(.system(size: 14))
+            .foregroundStyle(fillColor == .clear ? Color(nsColor: .labelColor) : fillColor)
+            .overlay(alignment: .bottom) {
+              RoundedRectangle(cornerRadius: 1)
+                .fill(fillColor == .clear ? Color(nsColor: .labelColor).opacity(0.25) : fillColor)
+                .frame(height: 3)
+                .padding(.horizontal, 1)
+                .offset(y: 4)
+            }
+        },
+        popoverContent: {
+          VStack(alignment: .leading, spacing: 12) {
+            ColorPicker("Color", selection: fillColorBinding, supportsOpacity: false)
 
-      Button {
-        showFillPopover.toggle()
-      } label: {
-        VStack(spacing: 2) {
-          HStack(spacing: 2) {
-            Image(systemName: "paintbrush.fill")
-              .font(.system(size: 14))
-              .foregroundStyle(fillColor == .clear ? Color(nsColor: .labelColor) : fillColor)
-              .overlay(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 1)
-                  .fill(fillColor == .clear ? Color(nsColor: .labelColor).opacity(0.25) : fillColor)
-                  .frame(height: 3)
-                  .padding(.horizontal, 1)
-                  .offset(y: 4)
-              }
-            Image(systemName: "chevron.down")
-              .font(.system(size: 8, weight: .semibold))
-              .foregroundStyle(.secondary)
-          }
-          .frame(width: showLabels ? 48 : 36, height: showLabels ? 24 : 32)
-
-          if showLabels {
-            Text("Fill")
-              .font(.system(size: 9))
-              .lineLimit(1)
-              .minimumScaleFactor(0.8)
+            Button("No Fill") {
+              suppressColorApply = true
+              fillColor = .clear
+              viewModel.setFillColor(nil)
+              DispatchQueue.main.async { suppressColorApply = false }
+              showFillPopover = false
+            }
+            .buttonStyle(.bordered)
           }
         }
-        .frame(minWidth: 40)
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .help("Fill")
-      .popover(isPresented: $showFillPopover, arrowEdge: .bottom) {
-        VStack(alignment: .leading, spacing: 12) {
-          ColorPicker(
-            "Color",
-            selection: Binding(
-              get: { fillColor },
-              set: { newColor in
-                fillColor = newColor
-                applyFillColor(newColor)
-              }
-            ),
-            supportsOpacity: false
-          )
+      )
 
-          Button("No Fill") {
-            suppressColorApply = true
-            fillColor = .clear
-            viewModel.setFillColor(nil)
-            DispatchQueue.main.async { suppressColorApply = false }
-            showFillPopover = false
-          }
-          .buttonStyle(.bordered)
-        }
-        .padding(12)
-        .frame(width: 200)
-      }
-    }
-  }
-
-  private var borderGroup: some View {
-    HStack(spacing: 4) {
-      Button {
-        showBorderPopover.toggle()
-      } label: {
-        VStack(spacing: 2) {
+      ToolbarSwatchDisclosure(
+        title: "Borders",
+        showLabel: showLabels,
+        selection: $borderColor,
+        isPopoverPresented: $showBorderPopover,
+        suppressColorApply: suppressColorApply,
+        onColorChange: { color in
+          viewModel.setBorderColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+        },
+        icon: {
           Image(systemName: "square.split.2x2")
             .font(.system(size: 13))
             .overlay(alignment: .bottom) {
@@ -263,47 +246,18 @@ struct FormattingToolbar: View {
                 .padding(.horizontal, 2)
                 .offset(y: 3)
             }
-            .frame(width: showLabels ? 48 : 32, height: showLabels ? 24 : 32)
-
-          if showLabels {
-            Text("Borders")
-              .font(.system(size: 9))
-              .lineLimit(1)
-              .minimumScaleFactor(0.8)
-          }
-        }
-        .frame(minWidth: 40)
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .help("Borders")
-      .popover(isPresented: $showBorderPopover, arrowEdge: .bottom) {
-        BorderPopoverContent(
-          viewModel: viewModel,
-          borderColor: borderColor,
-          onApplyPreset: { preset in
-            viewModel.applyBorderPreset(preset)
-            showBorderPopover = false
-          }
-        )
-        .padding(10)
-        .frame(width: 220)
-      }
-
-      ToolbarColorPicker(
-        title: "Border",
-        showLabel: showLabels,
-        label: {
-          Image(systemName: "pencil.tip")
-            .font(.system(size: 13))
-            .foregroundStyle(borderColor == .clear ? Color(nsColor: .labelColor) : borderColor)
         },
-        selection: $borderColor
-      ) { color in
-        guard !suppressColorApply else { return }
-        let codable = CellFormatRenderer.codableColor(from: NSColor(color))
-        viewModel.setBorderColor(codable)
-      }
+        popoverContent: {
+          BorderPopoverContent(
+            viewModel: viewModel,
+            borderColor: borderColor,
+            onApplyPreset: { preset in
+              viewModel.applyBorderPreset(preset)
+              showBorderPopover = false
+            }
+          )
+        }
+      )
     }
   }
 
@@ -376,6 +330,7 @@ struct FormattingToolbar: View {
 
       RotateToolbarMenu(
         viewModel: viewModel,
+        showLabel: showLabels,
         iconHeight: iconAreaHeight
       )
     }
@@ -389,6 +344,27 @@ struct FormattingToolbar: View {
     Binding(
       get: { viewModel.selectedFormat.fontFamily ?? CellFormatRenderer.defaultFontFamily },
       set: { viewModel.setFontFamily($0) }
+    )
+  }
+
+  private var textColorBinding: Binding<Color> {
+    Binding(
+      get: { textColor },
+      set: { newColor in
+        textColor = newColor
+        guard !suppressColorApply else { return }
+        viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(newColor)))
+      }
+    )
+  }
+
+  private var fillColorBinding: Binding<Color> {
+    Binding(
+      get: { fillColor },
+      set: { newColor in
+        fillColor = newColor
+        applyFillColor(newColor)
+      }
     )
   }
 
@@ -529,6 +505,64 @@ private final class ClickToFocusTextField: NSTextField {
 
 // MARK: - Toolbar controls
 
+/// Shared Text / Fill / Borders pattern: color swatch + disclosure popover.
+private struct ToolbarSwatchDisclosure<Icon: View, PopoverContent: View>: View {
+  let title: String
+  var showLabel = false
+  @Binding var selection: Color
+  @Binding var isPopoverPresented: Bool
+  var suppressColorApply = false
+  let onColorChange: (Color) -> Void
+  @ViewBuilder var icon: () -> Icon
+  @ViewBuilder var popoverContent: () -> PopoverContent
+
+  var body: some View {
+    VStack(spacing: 2) {
+      HStack(spacing: 0) {
+        ColorPicker("", selection: $selection, supportsOpacity: false)
+          .labelsHidden()
+          .frame(width: 28, height: showLabel ? 24 : 32)
+          .overlay {
+            icon()
+              .allowsHitTesting(false)
+          }
+          .onChange(of: selection) { _, color in
+            guard !suppressColorApply else { return }
+            onColorChange(color)
+          }
+
+        Button {
+          isPopoverPresented.toggle()
+        } label: {
+          Image(systemName: "chevron.down")
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 14, height: showLabel ? 24 : 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(title) options")
+        .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
+          popoverContent()
+            .padding(12)
+            .frame(minWidth: 200)
+        }
+      }
+
+      if showLabel {
+        Text(title)
+          .font(.system(size: 9))
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+      }
+    }
+    .frame(minWidth: 48)
+    .help(title)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(title)
+  }
+}
+
 private struct BorderPopoverContent: View {
   @Bindable var viewModel: SpreadsheetViewModel
   var borderColor: Color
@@ -645,41 +679,35 @@ private struct BorderStylePreview: View {
 
 private struct RotateToolbarMenu: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  var showLabel: Bool
   var iconHeight: CGFloat
 
-  private let labelHeight: CGFloat = 46
-
   var body: some View {
-    ZStack {
+    Menu {
+      Button("None") { viewModel.setTextRotation(0) }
+      Divider()
+      Button("Tilt up") { viewModel.setTextRotation(-45) }
+      Button("Tilt down") { viewModel.setTextRotation(45) }
+      Button("Stack vertically") { viewModel.setTextRotation(90) }
+      Button("Rotate up") { viewModel.setTextRotation(-90) }
+      Button("Rotate down") { viewModel.setTextRotation(90) }
+    } label: {
       VStack(spacing: 2) {
         TiltTextToolbarIcon(active: viewModel.selectedFormat.textRotation != 0, embedded: true)
-          .frame(width: 32, height: iconHeight)
-        Text("Rotate")
-          .font(.system(size: 9))
-          .lineLimit(1)
-          .minimumScaleFactor(0.8)
-          .foregroundStyle(Color(nsColor: .labelColor))
+          .frame(width: 32, height: showLabel ? iconHeight : 32)
+        if showLabel {
+          Text("Rotate")
+            .font(.system(size: 9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .foregroundStyle(Color(nsColor: .labelColor))
+        }
       }
       .frame(minWidth: 40)
-      .allowsHitTesting(false)
-
-      Menu {
-        Button("None") { viewModel.setTextRotation(0) }
-        Divider()
-        Button("Tilt up") { viewModel.setTextRotation(-45) }
-        Button("Tilt down") { viewModel.setTextRotation(45) }
-        Button("Stack vertically") { viewModel.setTextRotation(90) }
-        Button("Rotate up") { viewModel.setTextRotation(-90) }
-        Button("Rotate down") { viewModel.setTextRotation(90) }
-      } label: {
-        Color.clear
-          .frame(width: 44, height: labelHeight)
-          .contentShape(Rectangle())
-      }
-      .menuStyle(.borderlessButton)
-      .buttonStyle(.plain)
+      .contentShape(Rectangle())
     }
-    .frame(width: 44, height: labelHeight)
+    .menuStyle(.borderlessButton)
+    .buttonStyle(.plain)
     .help("Text rotation")
   }
 }
@@ -815,40 +843,6 @@ private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
     .menuStyle(.borderlessButton)
     .buttonStyle(.plain)
     .fixedSize(horizontal: true, vertical: false)
-    .help(title)
-  }
-}
-
-private struct ToolbarColorPicker<Label: View>: View {
-  let title: String
-  var showLabel = false
-  @ViewBuilder var label: () -> Label
-  @Binding var selection: Color
-  let onChange: (Color) -> Void
-
-  var body: some View {
-    VStack(spacing: 2) {
-      ColorPicker("", selection: $selection, supportsOpacity: false)
-        .labelsHidden()
-        .frame(width: 32, height: showLabel ? 24 : 32)
-        .overlay {
-          label()
-            .allowsHitTesting(false)
-        }
-        .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(RoundedRectangle(cornerRadius: 4))
-        .onChange(of: selection) { _, color in
-          onChange(color)
-        }
-
-      if showLabel {
-        Text(title)
-          .font(.system(size: 9))
-          .lineLimit(1)
-          .allowsHitTesting(false)
-      }
-    }
-    .frame(minWidth: 40)
     .help(title)
   }
 }

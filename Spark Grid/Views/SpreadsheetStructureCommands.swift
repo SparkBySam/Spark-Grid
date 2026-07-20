@@ -71,17 +71,17 @@ struct SpreadsheetStructureCommands: Commands {
 
       Divider()
 
-      Menu("Insert Chart") {
+      Button("Define Named Range…") {
+        Self.promptDefineNamedRange(viewModel: viewModel)
+      }
+      .disabled(viewModel == nil)
+    }
+
+    CommandMenu("Insert") {
+      Menu("Chart") {
         Button("Bar Chart") { viewModel?.insertChart(kind: .bar) }
         Button("Line Chart") { viewModel?.insertChart(kind: .line) }
         Button("Area Chart") { viewModel?.insertChart(kind: .area) }
-      }
-      .disabled(viewModel == nil)
-
-      Divider()
-
-      Button("Define Named Range…") {
-        Self.promptDefineNamedRange(viewModel: viewModel)
       }
       .disabled(viewModel == nil)
     }

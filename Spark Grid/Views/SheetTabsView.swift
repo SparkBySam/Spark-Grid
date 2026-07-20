@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SheetTabsView: View {
@@ -9,15 +10,16 @@ struct SheetTabsView: View {
     HStack(spacing: 0) {
       Button(action: viewModel.addSheet) {
         Image(systemName: "plus")
-          .font(.system(size: 12, weight: .semibold))
-          .frame(width: 28, height: 28)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.secondary)
+          .frame(width: 24, height: 24)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .help("Add sheet")
 
       ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 0) {
+        HStack(spacing: 1) {
           ForEach(Array(viewModel.workbook.sheets.enumerated()), id: \.element.id) { index, sheet in
             sheetTab(name: sheet.name, isActive: index == viewModel.workbook.activeSheetIndex) {
               viewModel.selectSheet(at: index)
@@ -39,8 +41,9 @@ struct SheetTabsView: View {
 
       Spacer(minLength: 0)
     }
-    .frame(height: 28)
-    .background(.bar)
+    .frame(height: 24)
+    .background(Color(nsColor: .windowBackgroundColor))
+    .overlay(alignment: .top) { Divider() }
     .alert("Rename Sheet", isPresented: renameAlertBinding) {
       TextField("Sheet name", text: $renameText)
       Button("Rename") {
@@ -65,16 +68,19 @@ struct SheetTabsView: View {
   private func sheetTab(name: String, isActive: Bool, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Text(name)
-        .font(.caption)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
-        .overlay(alignment: .top) {
+        .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+        .foregroundStyle(isActive ? Color.primary : Color.secondary)
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background {
           if isActive {
-            Rectangle()
-              .fill(Color.accentColor)
-              .frame(height: 2)
+            Color(nsColor: .controlBackgroundColor)
           }
+        }
+        .overlay(alignment: .bottom) {
+          Rectangle()
+            .fill(isActive ? Color.accentColor : Color.clear)
+            .frame(height: 2)
         }
         .contentShape(Rectangle())
     }

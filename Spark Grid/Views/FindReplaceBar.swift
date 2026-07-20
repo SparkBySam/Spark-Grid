@@ -6,10 +6,19 @@ struct FindReplaceBar: View {
   var body: some View {
     HStack(spacing: 8) {
       Image(systemName: "magnifyingglass")
+        .font(.system(size: 13))
         .foregroundStyle(.secondary)
+        .frame(width: 20)
 
       TextField("Find", text: $viewModel.findQuery)
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+        .overlay(
+          RoundedRectangle(cornerRadius: 5)
+            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+        )
         .frame(minWidth: 140, maxWidth: 220)
         .onSubmit { viewModel.findNext() }
         .onChange(of: viewModel.findQuery) { _, _ in
@@ -18,53 +27,67 @@ struct FindReplaceBar: View {
 
       if viewModel.isFindReplaceMode {
         TextField("Replace", text: $viewModel.findReplaceText)
-          .textFieldStyle(.roundedBorder)
+          .textFieldStyle(.plain)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
+          .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+          .overlay(
+            RoundedRectangle(cornerRadius: 5)
+              .strokeBorder(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+          )
           .frame(minWidth: 120, maxWidth: 180)
       }
 
-      Button("Previous") { viewModel.findPrevious() }
-        .disabled(viewModel.findMatches.isEmpty)
-      Button("Next") { viewModel.findNext() }
-        .disabled(viewModel.findMatches.isEmpty)
+      FindBarIconButton(systemName: "chevron.up", help: "Previous") {
+        viewModel.findPrevious()
+      }
+      .disabled(viewModel.findMatches.isEmpty)
+
+      FindBarIconButton(systemName: "chevron.down", help: "Next") {
+        viewModel.findNext()
+      }
+      .disabled(viewModel.findMatches.isEmpty)
 
       if viewModel.isFindReplaceMode {
         Button("Replace") { _ = viewModel.replaceCurrent() }
+          .buttonStyle(.borderless)
           .disabled(viewModel.findMatches.isEmpty)
+
         Button("Replace All") { _ = viewModel.replaceAll() }
+          .buttonStyle(.borderless)
           .disabled(viewModel.findMatches.isEmpty)
       }
 
-      Toggle("Match Case", isOn: $viewModel.findMatchCase)
-        .toggleStyle(.checkbox)
-        .onChange(of: viewModel.findMatchCase) { _, _ in
-          viewModel.refreshFindMatches(selectCurrent: true)
-        }
-      Toggle("Entire Cell", isOn: $viewModel.findEntireCell)
-        .toggleStyle(.checkbox)
-        .onChange(of: viewModel.findEntireCell) { _, _ in
-          viewModel.refreshFindMatches(selectCurrent: true)
-        }
+      Text(matchLabel)
+        .font(.system(size: 11, weight: .medium).monospacedDigit())
+        .foregroundStyle(viewModel.findMatches.isEmpty ? .tertiary : .secondary)
+        .frame(minWidth: 56, alignment: .leading)
 
-      HStack(spacing: 6) {
-        Text("Scope")
-          .foregroundStyle(.secondary)
-          .fixedSize()
+      Menu {
+        Toggle("Match Case", isOn: $viewModel.findMatchCase)
+        Toggle("Entire Cell", isOn: $viewModel.findEntireCell)
+        Divider()
         Picker("Scope", selection: $viewModel.findScope) {
           Text("Sheet").tag(FindScope.sheet)
           Text("Selection").tag(FindScope.selection)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 160)
+      } label: {
+        Image(systemName: "ellipsis.circle")
+          .font(.system(size: 13))
+          .foregroundStyle(.secondary)
+          .frame(width: 24, height: 24)
+          .contentShape(Rectangle())
+      }
+      .menuStyle(.borderlessButton)
+      .help("Find options")
+      .onChange(of: viewModel.findMatchCase) { _, _ in
+        viewModel.refreshFindMatches(selectCurrent: true)
+      }
+      .onChange(of: viewModel.findEntireCell) { _, _ in
+        viewModel.refreshFindMatches(selectCurrent: true)
       }
       .onChange(of: viewModel.findScope) { _, _ in
         viewModel.refreshFindMatches(selectCurrent: true)
-      }
-
-      if !viewModel.findMatches.isEmpty {
-        Text(matchLabel)
-          .foregroundStyle(.secondary)
-          .monospacedDigit()
       }
 
       Spacer(minLength: 0)
@@ -72,19 +95,41 @@ struct FindReplaceBar: View {
       Button {
         viewModel.hideFindBar()
       } label: {
-        Image(systemName: "xmark.circle.fill")
+        Image(systemName: "xmark")
+          .font(.system(size: 11, weight: .semibold))
           .foregroundStyle(.secondary)
+          .frame(width: 24, height: 24)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .help("Close")
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 6)
+    .padding(.horizontal, 12)
+    .frame(height: SpreadsheetChrome.findBarHeight)
     .background(Color(nsColor: .controlBackgroundColor))
+    .foregroundStyle(Color(nsColor: .labelColor))
   }
 
   private var matchLabel: String {
+    guard !viewModel.findMatches.isEmpty else { return "No matches" }
     let index = viewModel.findMatchIndex + 1
     return "\(index) of \(viewModel.findMatches.count)"
+  }
+}
+
+private struct FindBarIconButton: View {
+  let systemName: String
+  let help: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: systemName)
+        .font(.system(size: 11, weight: .semibold))
+        .frame(width: 24, height: 24)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(help)
   }
 }

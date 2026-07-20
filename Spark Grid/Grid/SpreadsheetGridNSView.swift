@@ -45,7 +45,7 @@ final class SpreadsheetGridNSView: NSView {
   private var fillSourceRange: CellRange?
   private var headerDrag: HeaderDrag?
   private let resizeHandleThickness: CGFloat = 6
-  private let fillHandleSize: CGFloat = 8
+  private let fillHandleSize: CGFloat = 9
   private var editorCaretObserver: NSObjectProtocol?
   private var isApplyingFormulaAttributes = false
   private var lastAppliedFormulaHighlightKey = ""
@@ -435,15 +435,18 @@ final class SpreadsheetGridNSView: NSView {
     guard let viewModel, !viewModel.isEditing, !isEditorActive else { return nil }
     guard !viewModel.hasMultipleSelectionRanges else { return nil }
     let range = viewModel.selectionRange.normalized
+    // Filter chip owns the SE corner on header cells — hide the handle so they don't fight.
+    if viewModel.isFilterHeaderCell(row: range.maxRow, col: range.maxCol) { return nil }
     guard visibleRowRange().contains(range.maxRow),
           visibleColumnRange().contains(range.maxCol) else { return nil }
     let cell = rectForCell(row: range.maxRow, col: range.maxCol)
     guard isCellRectInContentArea(cell) else { return nil }
+    let size = fillHandleSize
     return NSRect(
-      x: cell.maxX - fillHandleSize + 1,
-      y: cell.maxY - fillHandleSize + 1,
-      width: fillHandleSize,
-      height: fillHandleSize
+      x: cell.maxX - size / 2,
+      y: cell.maxY - size / 2,
+      width: size,
+      height: size
     )
   }
 
@@ -1337,6 +1340,11 @@ final class SpreadsheetGridNSView: NSView {
           drawFormat.fontSize = baseSize * zoomScale
           if value.isError {
             drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
+          } else if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
+                    viewModel.isAddressSelected(address)
+          {
+            // Selection wash sits over fills; force white so text stays readable in dark mode.
+            drawFormat.textColor = CellFormatRenderer.codableColor(from: .white)
           }
           CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
           NSGraphicsContext.restoreGraphicsState()
@@ -1503,38 +1511,43 @@ final class SpreadsheetGridNSView: NSView {
 
     for (index, range) in ranges.enumerated() {
       let n = range.normalized
+      let fullTopLeft = rectForCell(row: n.minRow, col: n.minCol)
+      let fullBottomRight = rectForCell(row: n.maxRow, col: n.maxCol)
+      let fullRect = NSRect(
+        x: fullTopLeft.minX,
+        y: fullTopLeft.minY,
+        width: fullBottomRight.maxX - fullTopLeft.minX,
+        height: fullBottomRight.maxY - fullTopLeft.minY
+      )
+
       let startRow = max(n.minRow, visibleRows.lowerBound)
       let endRow = min(n.maxRow, visibleRows.upperBound)
       let startCol = max(n.minCol, visibleCols.lowerBound)
       let endCol = min(n.maxCol, visibleCols.upperBound)
-      guard startRow <= endRow, startCol <= endCol else { continue }
-
-      let topLeft = rectForCell(row: startRow, col: startCol)
-      let bottomRight = rectForCell(row: endRow, col: endCol)
-      let fillRect = NSRect(
-        x: topLeft.minX,
-        y: topLeft.minY,
-        width: bottomRight.maxX - topLeft.minX,
-        height: bottomRight.maxY - topLeft.minY
-      )
-      if isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) {
-        NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12).setFill()
-        fillRect.fill()
+      if startRow <= endRow, startCol <= endCol {
+        let topLeft = rectForCell(row: startRow, col: startCol)
+        let bottomRight = rectForCell(row: endRow, col: endCol)
+        let fillRect = NSRect(
+          x: topLeft.minX,
+          y: topLeft.minY,
+          width: bottomRight.maxX - topLeft.minX,
+          height: bottomRight.maxY - topLeft.minY
+        )
+        if isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) {
+          let selectionAlpha: CGFloat =
+            effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? 0.4 : 0.12
+          NSColor.selectedContentBackgroundColor.withAlphaComponent(selectionAlpha).setFill()
+          fillRect.fill()
+        }
       }
 
-      if isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) {
+      // Full selection outline (Excel-familiar), not an L-anchor on the active cell.
+      if isCellRectInContentArea(fullRect), dirtyRect.intersects(fullRect) {
         NSColor.controlAccentColor.setStroke()
-        let border = NSBezierPath(rect: fillRect.insetBy(dx: 0.5, dy: 0.5))
+        let border = NSBezierPath(rect: fullRect.insetBy(dx: 0.5, dy: 0.5))
         border.lineWidth = index == ranges.count - 1 ? 2 : 1.5
         border.stroke()
       }
-    }
-
-    let anchor = rectForCell(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
-    if isCellRectInContentArea(anchor) {
-      NSColor.controlAccentColor.setFill()
-      NSRect(x: anchor.minX, y: anchor.minY, width: 2, height: anchor.height).fill()
-      NSRect(x: anchor.minX, y: anchor.minY, width: anchor.width, height: 2).fill()
     }
 
     if !isMulti {
@@ -1546,9 +1559,9 @@ final class SpreadsheetGridNSView: NSView {
     guard let rect = fillHandleRect(), dirtyRect.intersects(rect) else { return }
     NSColor.controlAccentColor.setFill()
     NSBezierPath(rect: rect).fill()
-    NSColor.windowBackgroundColor.setStroke()
+    NSColor.white.setStroke()
     let border = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
-    border.lineWidth = 1
+    border.lineWidth = 1.5
     border.stroke()
   }
 
@@ -2215,11 +2228,40 @@ final class SpreadsheetGridNSView: NSView {
     let paste = menu.addItem(withTitle: "Paste", action: #selector(handleMenuPaste(_:)), keyEquivalent: "")
     paste.target = self
     menu.addItem(.separator())
-    let selectAll = menu.addItem(withTitle: "Select All", action: #selector(handleMenuSelectAll(_:)), keyEquivalent: "")
-    selectAll.target = self
+    addPrimaryContextActions(to: menu)
     menu.addItem(.separator())
     addStructureSubmenus(to: menu)
     return menu
+  }
+
+  private func addPrimaryContextActions(to menu: NSMenu) {
+    guard let viewModel else { return }
+
+    addMenuItem(menu, "Create a Filter", #selector(handleMenuCreateFilter(_:)))
+    let clearFilter = addMenuItem(menu, "Clear Filter", #selector(handleMenuClearFilter(_:)))
+    clearFilter.isEnabled = viewModel.filterState != nil
+    let clearColumn = addMenuItem(
+      menu,
+      "Clear Filter for Column",
+      #selector(handleMenuClearColumnFilter(_:))
+    )
+    clearColumn.isEnabled = viewModel.isFilterColumn(viewModel.selectionAnchor.col)
+
+    menu.addItem(.separator())
+
+    let merge = NSMenu(title: "Merge")
+    let mergeAll = addMenuItem(merge, "Merge All", #selector(handleMenuMergeAll(_:)))
+    mergeAll.isEnabled = viewModel.canMergeSelection
+    let mergeAcross = addMenuItem(merge, "Merge Across", #selector(handleMenuMergeAcross(_:)))
+    mergeAcross.isEnabled = viewModel.canMergeHorizontally
+    let mergeVertical = addMenuItem(merge, "Merge Vertically", #selector(handleMenuMergeVertical(_:)))
+    mergeVertical.isEnabled = viewModel.canMergeVertically
+    merge.addItem(.separator())
+    let unmerge = addMenuItem(merge, "Unmerge Cells", #selector(handleMenuUnmerge(_:)))
+    unmerge.isEnabled = viewModel.canUnmergeSelection
+    let mergeItem = NSMenuItem(title: "Merge", action: nil, keyEquivalent: "")
+    mergeItem.submenu = merge
+    menu.addItem(mergeItem)
   }
 
   private func addStructureSubmenus(to menu: NSMenu) {
@@ -2248,20 +2290,6 @@ final class SpreadsheetGridNSView: NSView {
       menu.addItem(rowsColsItem)
     }
 
-    let merge = NSMenu(title: "Merge")
-    let mergeAll = addMenuItem(merge, "Merge All", #selector(handleMenuMergeAll(_:)))
-    mergeAll.isEnabled = viewModel.canMergeSelection
-    let mergeAcross = addMenuItem(merge, "Merge Across", #selector(handleMenuMergeAcross(_:)))
-    mergeAcross.isEnabled = viewModel.canMergeHorizontally
-    let mergeVertical = addMenuItem(merge, "Merge Vertically", #selector(handleMenuMergeVertical(_:)))
-    mergeVertical.isEnabled = viewModel.canMergeVertically
-    merge.addItem(.separator())
-    let unmerge = addMenuItem(merge, "Unmerge Cells", #selector(handleMenuUnmerge(_:)))
-    unmerge.isEnabled = viewModel.canUnmergeSelection
-    let mergeItem = NSMenuItem(title: "Merge", action: nil, keyEquivalent: "")
-    mergeItem.submenu = merge
-    menu.addItem(mergeItem)
-
     let borders = NSMenu(title: "Borders")
     addMenuItem(borders, "All Borders", #selector(handleMenuBorderAll(_:)))
     addMenuItem(borders, "Outside Borders", #selector(handleMenuBorderOutside(_:)))
@@ -2270,26 +2298,6 @@ final class SpreadsheetGridNSView: NSView {
     let bordersItem = NSMenuItem(title: "Borders", action: nil, keyEquivalent: "")
     bordersItem.submenu = borders
     menu.addItem(bordersItem)
-
-    let filter = NSMenu(title: "Filter")
-    addMenuItem(filter, "Create a Filter", #selector(handleMenuCreateFilter(_:)))
-    let clearFilter = addMenuItem(filter, "Clear Filter", #selector(handleMenuClearFilter(_:)))
-    clearFilter.isEnabled = viewModel.filterState != nil
-    let clearColumn = addMenuItem(
-      filter,
-      "Clear Filter for Column",
-      #selector(handleMenuClearColumnFilter(_:))
-    )
-    clearColumn.isEnabled = viewModel.isFilterColumn(viewModel.selectionAnchor.col)
-    let filterItem = NSMenuItem(title: "Filter", action: nil, keyEquivalent: "")
-    filterItem.submenu = filter
-    menu.addItem(filterItem)
-
-    let format = NSMenu(title: "Format")
-    addMenuItem(format, "No Fill", #selector(handleMenuNoFill(_:)))
-    let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
-    formatItem.submenu = format
-    menu.addItem(formatItem)
 
     let freeze = NSMenu(title: "Freeze")
     addMenuItem(freeze, "Freeze Panes", #selector(handleMenuFreezePanes(_:)))
@@ -2326,11 +2334,6 @@ final class SpreadsheetGridNSView: NSView {
 
   @objc private func handleMenuPaste(_ sender: Any?) {
     viewModel?.pasteFromPasteboard()
-    syncDisplay()
-  }
-
-  @objc private func handleMenuSelectAll(_ sender: Any?) {
-    viewModel?.selectAll()
     syncDisplay()
   }
 
@@ -2430,11 +2433,6 @@ final class SpreadsheetGridNSView: NSView {
 
   @objc private func handleMenuBorderNone(_ sender: Any?) {
     viewModel?.applyBorderPreset(.none)
-    syncDisplay()
-  }
-
-  @objc private func handleMenuNoFill(_ sender: Any?) {
-    viewModel?.setFillColor(nil)
     syncDisplay()
   }
 

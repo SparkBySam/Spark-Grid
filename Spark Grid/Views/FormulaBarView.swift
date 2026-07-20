@@ -3,21 +3,17 @@ import SwiftUI
 
 struct FormulaBarView: View {
   @Bindable var viewModel: SpreadsheetViewModel
-  @Bindable var store: SpreadsheetDocumentStore
 
   private var lineCount: Int {
-    let lines = viewModel.formulaBarText
-      .split(separator: "\n", omittingEmptySubsequences: false)
-      .count
-    return min(4, max(1, lines))
+    SpreadsheetChrome.formulaBarLineCount(for: viewModel.formulaBarText)
   }
 
   private var barHeight: CGFloat {
-    CGFloat(lineCount) * 18 + 10
+    SpreadsheetChrome.formulaBarHeight(lineCount: lineCount)
   }
 
   private var fieldHeight: CGFloat {
-    CGFloat(lineCount) * 18
+    SpreadsheetChrome.formulaFieldHeight(lineCount: lineCount)
   }
 
   var body: some View {
@@ -56,12 +52,6 @@ struct FormulaBarView: View {
         )
         .frame(maxWidth: .infinity, minHeight: fieldHeight, maxHeight: fieldHeight)
         .padding(.vertical, 5)
-
-        Divider()
-
-        AutosaveStatusView(store: store)
-          .padding(.trailing, 2)
-          .padding(.top, 4)
       }
       .padding(.horizontal, 10)
       .frame(height: barHeight)
@@ -93,7 +83,7 @@ private struct FormulaErrorBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 6)
+    .frame(height: SpreadsheetChrome.formulaErrorBannerHeight)
     .background(Color(nsColor: .systemRed).opacity(0.12))
     .overlay(alignment: .top) {
       Rectangle()

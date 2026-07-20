@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-private enum SpreadsheetChrome {
+/// Shared geometry for the strip above the grid so spacer and chrome stay in sync.
+enum SpreadsheetChrome {
   static let formulaBarLineHeight: CGFloat = 18
   static let formulaBarVerticalPadding: CGFloat = 10
   static let formulaBarMaxLines = 4
@@ -20,6 +21,10 @@ private enum SpreadsheetChrome {
 
   static func formulaBarHeight(lineCount: Int) -> CGFloat {
     CGFloat(lineCount) * formulaBarLineHeight + formulaBarVerticalPadding
+  }
+
+  static func formulaFieldHeight(lineCount: Int) -> CGFloat {
+    CGFloat(lineCount) * formulaBarLineHeight
   }
 
   static func topHeight(
@@ -49,6 +54,7 @@ struct SpreadsheetWindowView: View {
   @Bindable private var settings = AppSettings.shared
 
   @State private var viewModel: SpreadsheetViewModel
+  @State private var isChartsPanelCollapsed = false
 
   private var document: Binding<SpreadsheetDocument> {
     $store.document
@@ -68,6 +74,7 @@ struct SpreadsheetWindowView: View {
   var body: some View {
     let showingFormulaError = viewModel.selectedFormulaErrorExplanation != nil
     let formulaLines = SpreadsheetChrome.formulaBarLineCount(for: viewModel.formulaBarText)
+    let hasCharts = !viewModel.activeSheet.charts.isEmpty
     ZStack(alignment: .top) {
       VStack(spacing: 0) {
         Color.clear.frame(
@@ -78,16 +85,22 @@ struct SpreadsheetWindowView: View {
             formulaBarLineCount: formulaLines
           )
         )
-        SpreadsheetGridView(viewModel: viewModel)
-          .frame(minHeight: 0, maxHeight: .infinity)
+        HStack(spacing: 0) {
+          SpreadsheetGridView(viewModel: viewModel)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+          if hasCharts {
+            Divider()
+            SpreadsheetChartsPanel(viewModel: viewModel, isCollapsed: $isChartsPanelCollapsed)
+          }
+        }
         Divider()
         SheetTabsView(viewModel: viewModel)
       }
 
       VStack(spacing: 0) {
-        FormattingToolbar(viewModel: viewModel, undoManager: undoManager)
+        FormattingToolbar(viewModel: viewModel, store: store, undoManager: undoManager)
         Divider()
-        FormulaBarView(viewModel: viewModel, store: store)
+        FormulaBarView(viewModel: viewModel)
         Divider()
         if viewModel.isFindBarVisible {
           FindReplaceBar(viewModel: viewModel)
@@ -96,20 +109,10 @@ struct SpreadsheetWindowView: View {
       }
       .frame(maxWidth: .infinity)
       .background(Color(nsColor: .controlBackgroundColor))
-
-      if !viewModel.activeSheet.charts.isEmpty {
-        HStack {
-          Spacer()
-          SpreadsheetChartsPanel(viewModel: viewModel)
-            .padding(.top, SpreadsheetChrome.topHeight(
-              showLabels: settings.showToolbarLabels,
-              showingFormulaError: showingFormulaError,
-              showingFindBar: viewModel.isFindBarVisible,
-              formulaBarLineCount: formulaLines
-            ) + 8)
-            .padding(.trailing, 8)
-        }
-        .allowsHitTesting(true)
+    }
+    .onChange(of: viewModel.activeSheet.charts.count) { oldCount, newCount in
+      if oldCount == 0, newCount > 0 {
+        isChartsPanelCollapsed = false
       }
     }
     .focusedValue(\.spreadsheetViewModel, viewModel)
