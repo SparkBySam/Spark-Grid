@@ -43,7 +43,7 @@ struct SheetTabsView: View {
     }
     .frame(height: 24)
     .background(Color(nsColor: .windowBackgroundColor))
-    .overlay(alignment: .top) { Divider() }
+    .overlay(alignment: .top) { ChromeDivider() }
     .alert("Rename Sheet", isPresented: renameAlertBinding) {
       TextField("Sheet name", text: $renameText)
       Button("Rename") {

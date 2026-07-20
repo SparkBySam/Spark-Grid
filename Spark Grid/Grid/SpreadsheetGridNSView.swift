@@ -7,7 +7,8 @@ final class SpreadsheetGridNSView: NSView {
   static let defaultColumnWidth = Workbook.defaultColumnWidth
   static let defaultRowHeight = Workbook.defaultRowHeight
   /// Mid-contrast hairline that reads on both dark empty cells and light fills.
-  private static let darkModeGridLine = NSColor(calibratedWhite: 0.52, alpha: 0.28)
+  private static let darkModeGridLine = NSColor(calibratedWhite: 0.54, alpha: 0.30)
+  private static let lightModeGridLine = NSColor(white: 0, alpha: 0.14)
 
   var viewModel: SpreadsheetViewModel? {
     didSet {
@@ -91,7 +92,7 @@ final class SpreadsheetGridNSView: NSView {
     case .darkAqua:
       return Self.darkModeGridLine
     default:
-      return NSColor.gridColor
+      return Self.lightModeGridLine
     }
   }
 
@@ -100,7 +101,7 @@ final class SpreadsheetGridNSView: NSView {
     case .darkAqua:
       return Self.darkModeGridLine
     default:
-      return NSColor.separatorColor
+      return NSColor.separatorColor.withAlphaComponent(0.92)
     }
   }
 
@@ -1643,7 +1644,7 @@ final class SpreadsheetGridNSView: NSView {
     guard frozenCols > 0 || frozenRows > 0 else { return }
 
     let content = contentRect
-    NSColor.separatorColor.withAlphaComponent(0.9).setStroke()
+    NSColor.separatorColor.withAlphaComponent(0.92).setStroke()
     if frozenCols > 0 {
       let x = frozenColumnBoundaryX()
       let line = NSBezierPath()

@@ -288,7 +288,8 @@ final class FormulaBarContainerView: NSView {
     let next = max(18, height)
     guard abs(visibleHeight - next) > 0.5 else { return }
     visibleHeight = next
-    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: next)
+    // Document can grow taller than the viewport so multiline cells scroll when collapsed.
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     invalidateIntrinsicContentSize()
     needsLayout = true
   }
@@ -319,7 +320,7 @@ final class FormulaBarContainerView: NSView {
     textView.textContainer?.lineFragmentPadding = 2
     textView.textContainerInset = NSSize(width: 0, height: 1)
     textView.minSize = .zero
-    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: visibleHeight)
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     textView.insertionPointColor = .labelColor
     textView.focusRingType = .none
     textView.autoresizingMask = [.width]

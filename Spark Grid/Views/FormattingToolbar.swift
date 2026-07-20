@@ -39,7 +39,7 @@ struct FormattingToolbar: View {
     .frame(maxWidth: .infinity)
     .frame(height: toolbarHeight)
     .background(toolbarBackground)
-    .overlay(alignment: .bottom) { Divider() }
+    .overlay(alignment: .bottom) { ChromeDivider() }
     .onChange(of: viewModel.selection) { _, _ in
       syncColorsFromSelection()
       syncFontSizeFromSelection()
@@ -351,7 +351,9 @@ struct FormattingToolbar: View {
   }
 
   private var toolbarDivider: some View {
-    Divider().frame(height: dividerHeight)
+    Rectangle()
+      .fill(SpreadsheetChrome.chromeDividerColor)
+      .frame(width: SpreadsheetChrome.dividerHeight, height: dividerHeight)
   }
 
   private var fontFamilyBinding: Binding<String> {
@@ -535,7 +537,7 @@ private struct ToolbarColorSwatch<Icon: View>: View {
       }
       .overlay(
         RoundedRectangle(cornerRadius: 5)
-          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+          .strokeBorder(SpreadsheetChrome.chromeBorderColor, lineWidth: 0.5)
       )
 
       if showLabel {
@@ -584,7 +586,7 @@ private struct ToolbarSwatchDisclosure<Icon: View, PopoverContent: View>: View {
       .frame(width: swatchWidth + 1 + chevronWidth, height: controlHeight)
       .overlay(
         RoundedRectangle(cornerRadius: 5)
-          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+          .strokeBorder(SpreadsheetChrome.chromeBorderColor, lineWidth: 0.5)
       )
       .clipShape(RoundedRectangle(cornerRadius: 5))
       .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
@@ -663,7 +665,7 @@ private struct ToolbarSwatchDisclosure<Icon: View, PopoverContent: View>: View {
 
   private var segmentDivider: some View {
     Rectangle()
-      .fill(Color(nsColor: .separatorColor).opacity(0.55))
+      .fill(SpreadsheetChrome.chromeBorderColor)
       .frame(width: 1, height: controlHeight - 8)
   }
 }
@@ -750,7 +752,7 @@ private struct ToolbarColorChartPopover: View {
               .frame(width: 22, height: 22)
               .overlay {
                 RoundedRectangle(cornerRadius: 3)
-                  .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                  .strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.5)
               }
           }
           .buttonStyle(.plain)
@@ -773,7 +775,7 @@ private struct ToolbarNoColorSwatch: View {
       RoundedRectangle(cornerRadius: 3)
         .fill(Color(nsColor: .windowBackgroundColor))
       RoundedRectangle(cornerRadius: 3)
-        .strokeBorder(Color.primary.opacity(0.18), lineWidth: 0.5)
+        .strokeBorder(Color.primary.opacity(0.20), lineWidth: 0.5)
       GeometryReader { geo in
         Path { path in
           path.move(to: CGPoint(x: 3, y: geo.size.height - 3))

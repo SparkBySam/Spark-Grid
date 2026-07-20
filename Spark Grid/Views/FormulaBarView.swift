@@ -3,17 +3,25 @@ import SwiftUI
 
 struct FormulaBarView: View {
   @Bindable var viewModel: SpreadsheetViewModel
+  @Binding var isExpanded: Bool
 
-  private var lineCount: Int {
-    SpreadsheetChrome.formulaBarLineCount(for: viewModel.formulaBarText)
+  private var contentLineCount: Int {
+    SpreadsheetChrome.formulaBarContentLineCount(for: viewModel.formulaBarText)
+  }
+
+  private var viewportLineCount: Int {
+    SpreadsheetChrome.formulaBarViewportLineCount(
+      contentLines: contentLineCount,
+      expanded: isExpanded
+    )
   }
 
   private var barHeight: CGFloat {
-    SpreadsheetChrome.formulaBarHeight(lineCount: lineCount)
+    SpreadsheetChrome.formulaBarHeight(lineCount: viewportLineCount)
   }
 
   private var fieldHeight: CGFloat {
-    SpreadsheetChrome.formulaFieldHeight(lineCount: lineCount)
+    SpreadsheetChrome.formulaFieldHeight(lineCount: viewportLineCount)
   }
 
   var body: some View {
@@ -25,7 +33,9 @@ struct FormulaBarView: View {
           .frame(width: 48, alignment: .trailing)
           .padding(.top, 4)
 
-        Divider()
+        Rectangle()
+          .fill(SpreadsheetChrome.chromeDividerColor)
+          .frame(width: SpreadsheetChrome.dividerHeight)
 
         FormulaBarTextField(
           text: Binding(
@@ -55,6 +65,18 @@ struct FormulaBarView: View {
       }
       .padding(.horizontal, 10)
       .frame(height: barHeight)
+      .contentShape(Rectangle())
+      .onTapGesture(count: 2) {
+        guard contentLineCount > 1 else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+          isExpanded.toggle()
+        }
+      }
+      .help(
+        contentLineCount > 1
+          ? (isExpanded ? "Double-click to collapse formula bar" : "Double-click to expand formula bar")
+          : "Formula bar"
+      )
 
       if let explanation = viewModel.selectedFormulaErrorExplanation {
         FormulaErrorBanner(text: explanation)
@@ -63,6 +85,9 @@ struct FormulaBarView: View {
     .frame(maxWidth: .infinity)
     .background(Color(nsColor: .controlBackgroundColor))
     .foregroundStyle(Color(nsColor: .labelColor))
+    .onChange(of: viewModel.selection) { _, _ in
+      isExpanded = false
+    }
   }
 }
 

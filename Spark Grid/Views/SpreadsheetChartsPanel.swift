@@ -73,7 +73,8 @@ struct SpreadsheetChartsPanel: View {
       .padding(.horizontal, 10)
       .padding(.vertical, 6)
 
-      Divider()
+      ChromeDivider()
+        .padding(.horizontal, 10)
 
       ScrollView {
         VStack(alignment: .leading, spacing: 10) {

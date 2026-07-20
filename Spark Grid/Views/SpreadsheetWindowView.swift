@@ -9,6 +9,17 @@ enum SpreadsheetChrome {
   static let findBarHeight: CGFloat = 36
   static let formulaErrorBannerHeight: CGFloat = 40
   static let dividerHeight: CGFloat = 1
+  /// Slightly stronger than default `Divider()` / toolbar borders (~+2% contrast).
+  static let chromeDividerOpacity: CGFloat = 0.72
+  static let chromeBorderOpacity: CGFloat = 0.57
+
+  static var chromeDividerColor: Color {
+    Color(nsColor: .separatorColor).opacity(chromeDividerOpacity)
+  }
+
+  static var chromeBorderColor: Color {
+    Color(nsColor: .separatorColor).opacity(chromeBorderOpacity)
+  }
 
   static func toolbarHeight(showLabels: Bool) -> CGFloat {
     58
@@ -17,6 +28,18 @@ enum SpreadsheetChrome {
   static func formulaBarLineCount(for text: String) -> Int {
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
     return min(formulaBarMaxLines, max(1, lines))
+  }
+
+  static func formulaBarContentLineCount(for text: String) -> Int {
+    max(1, text.split(separator: "\n", omittingEmptySubsequences: false).count)
+  }
+
+  /// Collapsed = one visible row (scroll for overflow); expanded = up to `formulaBarMaxLines`.
+  static func formulaBarViewportLineCount(contentLines: Int, expanded: Bool) -> Int {
+    if expanded {
+      return min(formulaBarMaxLines, max(1, contentLines))
+    }
+    return 1
   }
 
   static func formulaBarHeight(lineCount: Int) -> CGFloat {
@@ -47,6 +70,16 @@ enum SpreadsheetChrome {
   }
 }
 
+/// Chrome hairline — a touch stronger than stock `Divider()`.
+struct ChromeDivider: View {
+  var body: some View {
+    Rectangle()
+      .fill(SpreadsheetChrome.chromeDividerColor)
+      .frame(height: SpreadsheetChrome.dividerHeight)
+      .frame(maxWidth: .infinity)
+  }
+}
+
 struct SpreadsheetWindowView: View {
   @Bindable var store: SpreadsheetDocumentStore
   @Environment(\.undoManager) private var undoManager
@@ -55,6 +88,7 @@ struct SpreadsheetWindowView: View {
 
   @State private var viewModel: SpreadsheetViewModel
   @State private var isChartsPanelCollapsed = false
+  @State private var isFormulaBarExpanded = false
 
   private var document: Binding<SpreadsheetDocument> {
     $store.document
@@ -73,7 +107,11 @@ struct SpreadsheetWindowView: View {
 
   var body: some View {
     let showingFormulaError = viewModel.selectedFormulaErrorExplanation != nil
-    let formulaLines = SpreadsheetChrome.formulaBarLineCount(for: viewModel.formulaBarText)
+    let formulaContentLines = SpreadsheetChrome.formulaBarContentLineCount(for: viewModel.formulaBarText)
+    let formulaViewportLines = SpreadsheetChrome.formulaBarViewportLineCount(
+      contentLines: formulaContentLines,
+      expanded: isFormulaBarExpanded
+    )
     let hasCharts = !viewModel.activeSheet.charts.isEmpty
     ZStack(alignment: .top) {
       VStack(spacing: 0) {
@@ -82,29 +120,34 @@ struct SpreadsheetWindowView: View {
             showLabels: settings.showToolbarLabels,
             showingFormulaError: showingFormulaError,
             showingFindBar: viewModel.isFindBarVisible,
-            formulaBarLineCount: formulaLines
+            formulaBarLineCount: formulaViewportLines
           )
         )
         HStack(spacing: 0) {
           SpreadsheetGridView(viewModel: viewModel)
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
           if hasCharts {
-            Divider()
+            Rectangle()
+              .fill(SpreadsheetChrome.chromeDividerColor)
+              .frame(width: SpreadsheetChrome.dividerHeight)
             SpreadsheetChartsPanel(viewModel: viewModel, isCollapsed: $isChartsPanelCollapsed)
           }
         }
-        Divider()
+        ChromeDivider()
         SheetTabsView(viewModel: viewModel)
       }
 
       VStack(spacing: 0) {
         FormattingToolbar(viewModel: viewModel, store: store, undoManager: undoManager)
-        Divider()
-        FormulaBarView(viewModel: viewModel)
-        Divider()
+        ChromeDivider()
+        FormulaBarView(
+          viewModel: viewModel,
+          isExpanded: $isFormulaBarExpanded
+        )
+        ChromeDivider()
         if viewModel.isFindBarVisible {
           FindReplaceBar(viewModel: viewModel)
-          Divider()
+          ChromeDivider()
         }
       }
       .frame(maxWidth: .infinity)

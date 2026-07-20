@@ -18,7 +18,7 @@ struct FindReplaceBar: View {
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
         .overlay(
           RoundedRectangle(cornerRadius: 5)
-            .strokeBorder(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+            .strokeBorder(SpreadsheetChrome.chromeBorderColor, lineWidth: 1)
         )
         .frame(minWidth: 140, maxWidth: 220)
         .onSubmit { viewModel.findNext() }
@@ -39,7 +39,7 @@ struct FindReplaceBar: View {
           .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
           .overlay(
             RoundedRectangle(cornerRadius: 5)
-              .strokeBorder(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+              .strokeBorder(SpreadsheetChrome.chromeBorderColor, lineWidth: 1)
           )
           .frame(minWidth: 120, maxWidth: 180)
       }
