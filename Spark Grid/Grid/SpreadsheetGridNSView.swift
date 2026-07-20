@@ -6,12 +6,8 @@ final class SpreadsheetGridNSView: NSView {
   static let headerSize: CGFloat = 28 // unscaled; prefer instance `headerSize` for layout
   static let defaultColumnWidth = Workbook.defaultColumnWidth
   static let defaultRowHeight = Workbook.defaultRowHeight
-  private static let darkModeGridLine = NSColor(
-    calibratedRed: 53.0 / 255.0,
-    green: 53.0 / 255.0,
-    blue: 53.0 / 255.0,
-    alpha: 1.0
-  )
+  /// Mid-contrast hairline that reads on both dark empty cells and light fills.
+  private static let darkModeGridLine = NSColor(calibratedWhite: 0.52, alpha: 0.28)
 
   var viewModel: SpreadsheetViewModel? {
     didSet {
@@ -698,15 +694,15 @@ final class SpreadsheetGridNSView: NSView {
     NSColor.windowBackgroundColor.setFill()
     dirtyRect.fill()
 
-  // 1. Grid lines and cells in the content area (clipped).
+  // 1. Cells first, then gridlines on top so hairlines stay even over fills.
     let skipGridlines = visibleRegionIsMostlyBordered()
     if let ctx = NSGraphicsContext.current {
       ctx.saveGraphicsState()
       NSBezierPath(rect: contentRect).addClip()
+      drawCells(in: dirtyRect)
       if !skipGridlines {
         drawGridLines(in: dirtyRect)
       }
-      drawCells(in: dirtyRect)
       drawSelection(in: dirtyRect)
       drawFormulaReferenceHighlights(in: dirtyRect)
       ctx.restoreGraphicsState()
@@ -717,10 +713,10 @@ final class SpreadsheetGridNSView: NSView {
       if let ctx = NSGraphicsContext.current {
         ctx.saveGraphicsState()
         NSBezierPath(rect: contentRect).addClip()
+        drawFrozenCells(in: dirtyRect)
         if !skipGridlines {
           drawFrozenGridLines(in: dirtyRect)
         }
-        drawFrozenCells(in: dirtyRect)
         ctx.restoreGraphicsState()
       }
     }
@@ -2235,6 +2231,12 @@ final class SpreadsheetGridNSView: NSView {
     bordersItem.submenu = borders
     menu.addItem(bordersItem)
 
+    let format = NSMenu(title: "Format")
+    addMenuItem(format, "No Fill", #selector(handleMenuNoFill(_:)))
+    let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
+    formatItem.submenu = format
+    menu.addItem(formatItem)
+
     let freeze = NSMenu(title: "Freeze")
     addMenuItem(freeze, "Freeze Panes", #selector(handleMenuFreezePanes(_:)))
     addMenuItem(freeze, "Freeze Rows", #selector(handleMenuFreezeRows(_:)))
@@ -2374,6 +2376,11 @@ final class SpreadsheetGridNSView: NSView {
 
   @objc private func handleMenuBorderNone(_ sender: Any?) {
     viewModel?.applyBorderPreset(.none)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuNoFill(_ sender: Any?) {
+    viewModel?.setFillColor(nil)
     syncDisplay()
   }
 

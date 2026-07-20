@@ -11,6 +11,8 @@ struct FormattingToolbar: View {
   @State private var borderColor: Color = .primary
   @State private var fontSizeText = "12"
   @State private var showBorderPopover = false
+  /// Prevents ColorPicker `onChange` from writing synced swatch values back onto the selection.
+  @State private var suppressColorApply = false
 
   private var showLabels: Bool { settings.showToolbarLabels }
   private var toolbarHeight: CGFloat { 58 }
@@ -177,6 +179,7 @@ struct FormattingToolbar: View {
         },
         selection: $textColor
       ) { color in
+        guard !suppressColorApply else { return }
         viewModel.setTextColor(CellFormatRenderer.codableColor(from: NSColor(color)))
       }
 
@@ -186,14 +189,28 @@ struct FormattingToolbar: View {
       ToolbarColorPicker(
         title: "Fill",
         showLabel: showLabels,
+        showsClear: true,
+        clearTitle: "No Fill",
         label: {
           Image(systemName: "paintbrush.fill")
             .font(.system(size: 14))
             .foregroundStyle(fillColor == .clear ? Color(nsColor: .labelColor) : fillColor)
+            .overlay(alignment: .bottom) {
+              RoundedRectangle(cornerRadius: 1)
+                .fill(fillColor == .clear ? Color(nsColor: .labelColor).opacity(0.25) : fillColor)
+                .frame(height: 3)
+                .padding(.horizontal, 1)
+                .offset(y: 4)
+            }
         },
         selection: $fillColor
       ) { color in
-        viewModel.setFillColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+        guard !suppressColorApply else { return }
+        if color == .clear {
+          viewModel.setFillColor(nil)
+        } else {
+          viewModel.setFillColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+        }
       }
     }
   }
@@ -249,6 +266,7 @@ struct FormattingToolbar: View {
         },
         selection: $borderColor
       ) { color in
+        guard !suppressColorApply else { return }
         let codable = CellFormatRenderer.codableColor(from: NSColor(color))
         viewModel.setBorderColor(codable)
       }
@@ -349,6 +367,7 @@ struct FormattingToolbar: View {
   }
 
   private func syncColorsFromSelection() {
+    suppressColorApply = true
     let format = viewModel.selectedFormat
     if let text = format.textColor, let ns = CellFormatRenderer.nsColor(text) {
       textColor = Color(nsColor: ns)
@@ -371,6 +390,10 @@ struct FormattingToolbar: View {
       borderColor = Color(nsColor: ns)
     } else {
       borderColor = Color(nsColor: .labelColor)
+    }
+    // ColorPicker onChange runs after the binding update; clear on the next turn.
+    DispatchQueue.main.async {
+      suppressColorApply = false
     }
   }
 
@@ -756,24 +779,47 @@ private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
 private struct ToolbarColorPicker<Label: View>: View {
   let title: String
   var showLabel = false
+  var showsClear = false
+  var clearTitle = "None"
   @ViewBuilder var label: () -> Label
   @Binding var selection: Color
   let onChange: (Color) -> Void
 
   var body: some View {
-  VStack(spacing: 2) {
-      ColorPicker("", selection: $selection, supportsOpacity: false)
-        .labelsHidden()
-        .frame(width: 32, height: showLabel ? 24 : 32)
-        .overlay {
+    VStack(spacing: 2) {
+      if showsClear {
+        Menu {
+          Button(clearTitle) {
+            selection = .clear
+            onChange(.clear)
+          }
+          Divider()
+          ColorPicker("Color", selection: $selection, supportsOpacity: false)
+            .labelsHidden()
+        } label: {
           label()
-            .allowsHitTesting(false)
+            .frame(width: 28, height: showLabel ? 20 : 28)
+            .contentShape(Rectangle())
         }
-        .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(RoundedRectangle(cornerRadius: 4))
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .onChange(of: selection) { _, color in
           onChange(color)
         }
+      } else {
+        ColorPicker("", selection: $selection, supportsOpacity: false)
+          .labelsHidden()
+          .frame(width: 32, height: showLabel ? 24 : 32)
+          .overlay {
+            label()
+              .allowsHitTesting(false)
+          }
+          .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
+          .contentShape(RoundedRectangle(cornerRadius: 4))
+          .onChange(of: selection) { _, color in
+            onChange(color)
+          }
+      }
 
       if showLabel {
         Text(title)

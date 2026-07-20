@@ -5,13 +5,29 @@ struct FormulaBarView: View {
   @Bindable var viewModel: SpreadsheetViewModel
   @Bindable var store: SpreadsheetDocumentStore
 
+  private var lineCount: Int {
+    let lines = viewModel.formulaBarText
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .count
+    return min(4, max(1, lines))
+  }
+
+  private var barHeight: CGFloat {
+    CGFloat(lineCount) * 18 + 10
+  }
+
+  private var fieldHeight: CGFloat {
+    CGFloat(lineCount) * 18
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(alignment: .top, spacing: 8) {
         Text(viewModel.selection.a1)
           .font(.system(.body, design: .monospaced))
           .foregroundStyle(.secondary)
           .frame(width: 48, alignment: .trailing)
+          .padding(.top, 4)
 
         Divider()
 
@@ -24,6 +40,7 @@ struct FormulaBarView: View {
           namedRanges: Array(viewModel.workbook.namedRanges.keys),
           highlights: viewModel.formulaReferenceHighlights,
           focusedHighlightIndex: viewModel.focusedFormulaHighlightIndex,
+          visibleHeight: fieldHeight,
           onSubmit: { text in
             viewModel.commitFormulaBarText(text)
           },
@@ -37,15 +54,17 @@ struct FormulaBarView: View {
             viewModel.updateFormulaHighlightFocus(atUTF16: index)
           }
         )
-        .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
+        .frame(maxWidth: .infinity, minHeight: fieldHeight, maxHeight: fieldHeight)
+        .padding(.vertical, 5)
 
         Divider()
 
         AutosaveStatusView(store: store)
           .padding(.trailing, 2)
+          .padding(.top, 4)
       }
       .padding(.horizontal, 10)
-      .frame(height: 28)
+      .frame(height: barHeight)
 
       if let explanation = viewModel.selectedFormulaErrorExplanation {
         FormulaErrorBanner(text: explanation)

@@ -9,6 +9,7 @@ struct FormulaBarTextField: NSViewRepresentable {
   var namedRanges: [String]
   var highlights: [FormulaRefHighlight]
   var focusedHighlightIndex: Int?
+  var visibleHeight: CGFloat = 18
   var onSubmit: (String) -> Void
   var onTextChange: () -> Void
   var onBeginEditing: () -> Void
@@ -23,6 +24,7 @@ struct FormulaBarTextField: NSViewRepresentable {
     container.textView.delegate = context.coordinator
     context.coordinator.textView = container.textView
     container.textView.string = liveText
+    container.setVisibleHeight(visibleHeight)
     context.coordinator.applyAttributes(force: true)
     return container
   }
@@ -30,6 +32,7 @@ struct FormulaBarTextField: NSViewRepresentable {
   func updateNSView(_ nsView: FormulaBarContainerView, context: Context) {
     context.coordinator.parent = self
     context.coordinator.textView = nsView.textView
+    nsView.setVisibleHeight(visibleHeight)
 
     let textView = nsView.textView
     let isFocused = textView.window?.firstResponder === textView
@@ -150,6 +153,11 @@ struct FormulaBarTextField: NSViewRepresentable {
       if commandSelector == #selector(NSResponder.insertNewline(_:))
         || commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
       {
+        // Option+Return inserts a line break (Excel Alt+Enter); Return commits.
+        if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+          textView.insertText("\n", replacementRange: textView.selectedRange)
+          return true
+        }
         submit()
         return true
       }
@@ -263,6 +271,7 @@ struct FormulaBarTextField: NSViewRepresentable {
 /// Hosts the formula-bar text view with a stable width in SwiftUI stacks.
 final class FormulaBarContainerView: NSView {
   let textView = FormulaBarNSTextView()
+  private var visibleHeight: CGFloat = 18
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -275,14 +284,24 @@ final class FormulaBarContainerView: NSView {
     fatalError("init(coder:) has not been implemented")
   }
 
+  func setVisibleHeight(_ height: CGFloat) {
+    let next = max(18, height)
+    guard abs(visibleHeight - next) > 0.5 else { return }
+    visibleHeight = next
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: next)
+    invalidateIntrinsicContentSize()
+    needsLayout = true
+  }
+
   private func setup() {
     let scroll = NSScrollView()
     scroll.drawsBackground = false
     scroll.backgroundColor = .clear
     scroll.borderType = .noBorder
-    scroll.hasVerticalScroller = false
+    scroll.hasVerticalScroller = true
     scroll.hasHorizontalScroller = false
     scroll.autohidesScrollers = true
+    scroll.scrollerStyle = .overlay
     scroll.translatesAutoresizingMaskIntoConstraints = false
 
     textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -293,14 +312,14 @@ final class FormulaBarContainerView: NSView {
     textView.allowsUndo = true
     textView.isEditable = true
     textView.isSelectable = true
-    textView.isVerticallyResizable = false
+    textView.isVerticallyResizable = true
     textView.isHorizontallyResizable = false
     textView.textContainer?.widthTracksTextView = true
-    textView.textContainer?.heightTracksTextView = true
+    textView.textContainer?.heightTracksTextView = false
     textView.textContainer?.lineFragmentPadding = 2
-    textView.textContainerInset = NSSize(width: 0, height: 3)
+    textView.textContainerInset = NSSize(width: 0, height: 1)
     textView.minSize = .zero
-    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: 22)
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: visibleHeight)
     textView.insertionPointColor = .labelColor
     textView.focusRingType = .none
     textView.autoresizingMask = [.width]
@@ -317,7 +336,7 @@ final class FormulaBarContainerView: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    NSSize(width: NSView.noIntrinsicMetric, height: 22)
+    NSSize(width: NSView.noIntrinsicMetric, height: visibleHeight)
   }
 
   override func layout() {
@@ -326,11 +345,18 @@ final class FormulaBarContainerView: NSView {
     if let clip = textView.enclosingScrollView?.contentView {
       var frame = textView.frame
       frame.size.width = max(clip.bounds.width, 1)
-      frame.size.height = 22
+      let usedHeight: CGFloat
+      if let container = textView.textContainer,
+         let layoutManager = textView.layoutManager {
+        usedHeight = layoutManager.usedRect(for: container).height
+      } else {
+        usedHeight = visibleHeight
+      }
+      frame.size.height = max(visibleHeight, usedHeight)
       textView.frame = frame
       textView.textContainer?.containerSize = NSSize(
         width: max(clip.bounds.width - 4, 1),
-        height: 22
+        height: CGFloat.greatestFiniteMagnitude
       )
     }
   }

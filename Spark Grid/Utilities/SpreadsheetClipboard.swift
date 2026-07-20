@@ -46,7 +46,7 @@ enum SpreadsheetClipboard {
       var fields: [String] = []
       fields.reserveCapacity(colCount)
       for col in bounds.minCol...bounds.maxCol {
-        fields.append(sheet.cell(at: CellAddress(row: row, col: col)).raw)
+        fields.append(escapeField(sheet.cell(at: CellAddress(row: row, col: col)).raw))
       }
       rows.append(fields.joined(separator: "\t"))
     }
@@ -66,6 +66,8 @@ enum SpreadsheetClipboard {
     return grid
   }
 
+  /// Parses TSV/CSV-style clipboard text. Quoted fields may contain tabs and newlines
+  /// (Excel Alt+Enter / wrap) without splitting into extra rows or columns.
   static func parseGrid(_ text: String) -> [[String]] {
     let normalized = text
       .replacingOccurrences(of: "\r\n", with: "\n")
@@ -73,9 +75,59 @@ enum SpreadsheetClipboard {
 
     guard !normalized.isEmpty else { return [] }
 
-    return normalized.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-      String(line).split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+    var grid: [[String]] = []
+    var row: [String] = []
+    var field = ""
+    var inQuotes = false
+    var index = normalized.startIndex
+
+    while index < normalized.endIndex {
+      let character = normalized[index]
+      if inQuotes {
+        if character == "\"" {
+          let next = normalized.index(after: index)
+          if next < normalized.endIndex, normalized[next] == "\"" {
+            field.append("\"")
+            index = next
+          } else {
+            inQuotes = false
+          }
+        } else {
+          field.append(character)
+        }
+      } else {
+        switch character {
+        case "\"":
+          inQuotes = true
+        case "\t":
+          row.append(field)
+          field = ""
+        case "\n":
+          row.append(field)
+          field = ""
+          grid.append(row)
+          row = []
+        default:
+          field.append(character)
+        }
+      }
+      index = normalized.index(after: index)
     }
+
+    row.append(field)
+    // Trailing newline after the last record is common on pasteboards.
+    if !(row.count == 1 && row[0].isEmpty && !grid.isEmpty) {
+      grid.append(row)
+    }
+    return grid
+  }
+
+  /// Quote fields that contain tabs, newlines, or quotes (Excel-compatible TSV).
+  static func escapeField(_ value: String) -> String {
+    if value.contains(where: { $0 == "\t" || $0 == "\n" || $0 == "\r" || $0 == "\"" }) {
+      return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+    return value
   }
 
   static var hasContent: Bool {

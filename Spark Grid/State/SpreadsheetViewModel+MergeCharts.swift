@@ -17,8 +17,8 @@ extension SpreadsheetViewModel {
     case nothingToMerge
   }
 
-  /// Merges the selection. Warns when non-anchor cells have content that will be discarded
-  /// (Excel keeps the top-left / left-most value in each merge).
+  /// Merges the selection. Warns when other cells have values that will be cleared
+  /// (keeps the top-left cell of each merge, Excel-style).
   @discardableResult
   func mergeSelection(axis: MergeAxis = .all, confirmDiscard: Bool = true) -> MergeOutcome {
     commitEditIfNeeded()
@@ -29,17 +29,10 @@ extension SpreadsheetViewModel {
     let planned = plannedMerges(for: range, axis: axis)
     guard !planned.isEmpty else { return .nothingToMerge }
 
-    let discarded = discardedContentSummary(for: planned)
-    if confirmDiscard, !discarded.isEmpty {
+    if confirmDiscard, let warning = mergeWarningText(for: planned) {
       let alert = NSAlert()
       alert.messageText = "Merge Cells?"
-      alert.informativeText = """
-      Only the top-left value in each merge is kept. Other cell values will be cleared.
-
-      \(discarded)
-
-      Continue?
-      """
+      alert.informativeText = warning
       alert.alertStyle = .warning
       alert.addButton(withTitle: "Merge")
       alert.addButton(withTitle: "Cancel")
@@ -50,7 +43,6 @@ extension SpreadsheetViewModel {
     let beforeMerges = sheet.mergedRanges
     let beforeCells = sheet.cells
 
-    // Drop overlaps with the new merges.
     for plan in planned {
       let pn = plan.normalized
       sheet.mergedRanges.removeAll { merge in
@@ -61,14 +53,13 @@ extension SpreadsheetViewModel {
     }
     sheet.mergedRanges.append(contentsOf: planned)
 
-    // Excel-compatible: keep only the anchor cell value in each merge.
     for plan in planned {
       let pn = plan.normalized
-      let anchor = CellAddress(row: pn.minRow, col: pn.minCol)
+      let topLeft = CellAddress(row: pn.minRow, col: pn.minCol)
       for row in pn.minRow...pn.maxRow {
         for col in pn.minCol...pn.maxCol {
           let address = CellAddress(row: row, col: col)
-          guard address != anchor else { continue }
+          guard address != topLeft else { continue }
           var cell = sheet.cell(at: address)
           if !cell.raw.isEmpty {
             cell.raw = ""
@@ -189,27 +180,49 @@ extension SpreadsheetViewModel {
     }
   }
 
-  private func discardedContentSummary(for merges: [CellRange]) -> String {
-    var lines: [String] = []
+  private func mergeWarningText(for merges: [CellRange]) -> String? {
+    var keptLines: [String] = []
+    var clearedLines: [String] = []
+
     for merge in merges {
       let n = merge.normalized
-      let anchor = CellAddress(row: n.minRow, col: n.minCol)
+      let topLeft = CellAddress(row: n.minRow, col: n.minCol)
+      let keptRaw = activeSheet.cell(at: topLeft).raw
+      if !keptRaw.isEmpty {
+        keptLines.append("• \(topLeft.a1): \(preview(keptRaw))")
+      } else {
+        keptLines.append("• \(topLeft.a1): (empty)")
+      }
       for row in n.minRow...n.maxRow {
         for col in n.minCol...n.maxCol {
           let address = CellAddress(row: row, col: col)
-          guard address != anchor else { continue }
+          guard address != topLeft else { continue }
           let raw = activeSheet.cell(at: address).raw
           guard !raw.isEmpty else { continue }
-          let preview = raw.count > 40 ? String(raw.prefix(37)) + "…" : raw
-          lines.append("• \(address.a1): \(preview)")
-          if lines.count >= 8 {
-            lines.append("• …")
-            return lines.joined(separator: "\n")
+          clearedLines.append("• \(address.a1): \(preview(raw))")
+          if clearedLines.count >= 8 {
+            clearedLines.append("• …")
+            break
           }
         }
+        if clearedLines.count >= 8 { break }
       }
     }
-    return lines.joined(separator: "\n")
+
+    guard !clearedLines.isEmpty else { return nil }
+    return """
+    The top-left cell is kept; other values are cleared.
+
+    Kept:
+    \(keptLines.joined(separator: "\n"))
+
+    Cleared:
+    \(clearedLines.joined(separator: "\n"))
+    """
+  }
+
+  private func preview(_ raw: String) -> String {
+    raw.count > 40 ? String(raw.prefix(37)) + "…" : raw
   }
 
   private func mergeActionName(_ axis: MergeAxis) -> String {

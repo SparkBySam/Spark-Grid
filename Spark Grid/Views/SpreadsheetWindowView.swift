@@ -2,7 +2,9 @@ import AppKit
 import SwiftUI
 
 private enum SpreadsheetChrome {
-  static let formulaBarHeight: CGFloat = 28
+  static let formulaBarLineHeight: CGFloat = 18
+  static let formulaBarVerticalPadding: CGFloat = 10
+  static let formulaBarMaxLines = 4
   static let findBarHeight: CGFloat = 36
   static let formulaErrorBannerHeight: CGFloat = 40
   static let dividerHeight: CGFloat = 1
@@ -11,12 +13,25 @@ private enum SpreadsheetChrome {
     58
   }
 
+  static func formulaBarLineCount(for text: String) -> Int {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
+    return min(formulaBarMaxLines, max(1, lines))
+  }
+
+  static func formulaBarHeight(lineCount: Int) -> CGFloat {
+    CGFloat(lineCount) * formulaBarLineHeight + formulaBarVerticalPadding
+  }
+
   static func topHeight(
     showLabels: Bool,
     showingFormulaError: Bool,
-    showingFindBar: Bool
+    showingFindBar: Bool,
+    formulaBarLineCount: Int = 1
   ) -> CGFloat {
-    var height = toolbarHeight(showLabels: showLabels) + dividerHeight + formulaBarHeight + dividerHeight
+    var height = toolbarHeight(showLabels: showLabels)
+      + dividerHeight
+      + formulaBarHeight(lineCount: formulaBarLineCount)
+      + dividerHeight
     if showingFindBar {
       height += findBarHeight + dividerHeight
     }
@@ -52,13 +67,15 @@ struct SpreadsheetWindowView: View {
 
   var body: some View {
     let showingFormulaError = viewModel.selectedFormulaErrorExplanation != nil
+    let formulaLines = SpreadsheetChrome.formulaBarLineCount(for: viewModel.formulaBarText)
     ZStack(alignment: .top) {
       VStack(spacing: 0) {
         Color.clear.frame(
           height: SpreadsheetChrome.topHeight(
             showLabels: settings.showToolbarLabels,
             showingFormulaError: showingFormulaError,
-            showingFindBar: viewModel.isFindBarVisible
+            showingFindBar: viewModel.isFindBarVisible,
+            formulaBarLineCount: formulaLines
           )
         )
         SpreadsheetGridView(viewModel: viewModel)
@@ -87,7 +104,8 @@ struct SpreadsheetWindowView: View {
             .padding(.top, SpreadsheetChrome.topHeight(
               showLabels: settings.showToolbarLabels,
               showingFormulaError: showingFormulaError,
-              showingFindBar: viewModel.isFindBarVisible
+              showingFindBar: viewModel.isFindBarVisible,
+              formulaBarLineCount: formulaLines
             ) + 8)
             .padding(.trailing, 8)
         }
