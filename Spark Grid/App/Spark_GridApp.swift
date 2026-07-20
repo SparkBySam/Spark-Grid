@@ -11,6 +11,14 @@ struct Spark_GridApp: App {
   @NSApplicationDelegateAdaptor(SparkGridAppDelegate.self) private var appDelegate
   @State private var store = SpreadsheetDocumentStore()
 
+  init() {
+#if DEBUG
+    if ProcessInfo.processInfo.environment["SPARK_GRID_BUG_BASH"] == "1" {
+      _ = BugBashRunner.runIfRequested()
+    }
+#endif
+  }
+
   var body: some Scene {
     // Single window avoids a blank "Untitled" WindowGroup instance racing file-open.
     Window("Spark Grid", id: "main") {

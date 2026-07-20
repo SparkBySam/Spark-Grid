@@ -1579,7 +1579,10 @@ final class SpreadsheetGridNSView: NSView {
 
   private func updateEditorFrame() {
     guard let viewModel else { return }
-    let rect = rectForCell(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col).insetBy(dx: 1, dy: 1)
+    let sheet = viewModel.activeSheet
+    let anchor = viewModel.selectionAnchor
+    let rect = (paintRect(for: anchor, sheet: sheet) ?? rectForCell(row: anchor.row, col: anchor.col))
+      .insetBy(dx: 1, dy: 1)
     guard rect.width > 4, rect.height > 4 else {
       editor.isHidden = true
       return
@@ -1783,7 +1786,8 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
-    let address = addressAtContent(point: point)
+    let rawAddress = addressAtContent(point: point)
+    let address = viewModel?.activeSheet.mergeAnchor(for: rawAddress) ?? rawAddress
     if rowHeight(at: address.row) <= 0 {
       return
     }

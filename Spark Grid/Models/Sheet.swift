@@ -160,14 +160,21 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         return address.row == n.minRow && address.col == n.minCol
     }
 
-    /// Non-anchor cells covered by a merge (should not paint content).
-    func isCoveredByMerge(_ address: CellAddress) -> Bool {
-        guard let merge = mergeContaining(address) else { return false }
-        let n = merge.normalized
-        return !(address.row == n.minRow && address.col == n.minCol)
-    }
+  /// Top-left anchor for selection/editing when `address` sits inside a merge.
+  func mergeAnchor(for address: CellAddress) -> CellAddress {
+    guard let merge = mergeContaining(address) else { return address }
+    let n = merge.normalized
+    return CellAddress(row: n.minRow, col: n.minCol)
+  }
 
-    /// Expands a single cell (or range) to include any intersecting merges.
+  /// Non-anchor cells covered by a merge (should not paint content).
+  func isCoveredByMerge(_ address: CellAddress) -> Bool {
+    guard let merge = mergeContaining(address) else { return false }
+    let n = merge.normalized
+    return !(address.row == n.minRow && address.col == n.minCol)
+  }
+
+  /// Expands a single cell (or range) to include any intersecting merges.
     func selectionExpandedForMerges(_ range: CellRange) -> CellRange {
         var n = range.normalized
         var changed = true
