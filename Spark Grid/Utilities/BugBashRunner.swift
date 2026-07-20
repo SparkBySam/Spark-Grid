@@ -45,6 +45,8 @@ enum BugBashRunner {
     results.append(conditionalFormatImport())
     results.append(dataBarRoundTrip())
     results.append(excelChartParts())
+    results.append(worksheetElementOrder())
+    results.append(enterpriseFilterImport())
     return results
   }
 
@@ -163,6 +165,55 @@ enum BugBashRunner {
       return Result(name: "excel chart parts", passed: true, detail: "drawing+chart+rels")
     } catch {
       return Result(name: "excel chart parts", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func worksheetElementOrder() -> Result {
+    var sheet = Sheet(name: "Test")
+    sheet.setCell(Cell(raw: "A"), at: .origin)
+    sheet.setCell(Cell(raw: "B"), at: CellAddress(row: 0, col: 1))
+    sheet.mergedRanges = [
+      CellRange(start: .origin, end: CellAddress(row: 0, col: 1)),
+    ]
+    sheet.autoFilter = SheetFilterState(
+      range: CellRange(start: .origin, end: CellAddress(row: 2, col: 1)),
+      selectedValuesByColumn: [:]
+    )
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let xml = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      guard let filterIdx = xml.range(of: "<autoFilter")?.lowerBound,
+            let mergeIdx = xml.range(of: "<mergeCells")?.lowerBound
+      else {
+        return Result(name: "worksheet element order", passed: false, detail: "missing autoFilter or mergeCells")
+      }
+      guard filterIdx < mergeIdx else {
+        return Result(name: "worksheet element order", passed: false, detail: "mergeCells before autoFilter (Excel rejects)")
+      }
+      return Result(name: "worksheet element order", passed: true, detail: "autoFilter before mergeCells")
+    } catch {
+      return Result(name: "worksheet element order", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func enterpriseFilterImport() -> Result {
+    let path = "/Users/samparker/Downloads/Enterprise Report_Queen City Harley-Davidson_2026-04-09_to_2026-07-15_export_1784222143023.xlsx"
+    guard FileManager.default.fileExists(atPath: path) else {
+      return Result(name: "enterprise filter import", passed: true, detail: "skipped (file missing)")
+    }
+    do {
+      let wb = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: path))
+      let withFilters = wb.sheets.filter { $0.autoFilter != nil }
+      guard withFilters.count >= 2 else {
+        return Result(
+          name: "enterprise filter import",
+          passed: false,
+          detail: "expected ≥2 sheets with autoFilter, got \(withFilters.count)"
+        )
+      }
+      return Result(name: "enterprise filter import", passed: true, detail: "\(withFilters.count) sheets filtered")
+    } catch {
+      return Result(name: "enterprise filter import", passed: false, detail: error.localizedDescription)
     }
   }
 
@@ -345,6 +396,10 @@ enum BugBashRunner {
           let data = try? Data(contentsOf: URL(fileURLWithPath: path))
     else {
       return Result(name: "theme parse", passed: true, detail: "skipped (file missing)")
+    }
+    // File may have been re-saved without a theme part (e.g. after Excel repair).
+    guard XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/theme/theme1.xml") != nil else {
+      return Result(name: "theme parse", passed: true, detail: "skipped (no theme part in file)")
     }
     let scheme = XLSXCodec.importThemeScheme(archiveData: data)
     guard scheme.colorsByName["accent1"] != nil else {

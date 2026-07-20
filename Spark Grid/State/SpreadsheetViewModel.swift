@@ -54,6 +54,10 @@ final class SpreadsheetViewModel {
       if !isRestoringFilterFromSheet {
         syncAutoFilterToActiveSheet()
       }
+      // Chevrons / hidden rows are grid-visual — always refresh when filter changes.
+      if oldValue != filterState {
+        notifyGridRefresh()
+      }
     }
   }
   /// Cached rows hidden by the active filter (invalidated on filter/content changes).

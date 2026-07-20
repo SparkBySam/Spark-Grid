@@ -50,6 +50,8 @@ struct FormattingToolbar: View {
       toolbarDivider
       borderGroup
       toolbarDivider
+      mergeGroup
+      toolbarDivider
       alignGroup
     }
     .padding(.horizontal, 12)
@@ -250,6 +252,37 @@ struct FormattingToolbar: View {
         let codable = CellFormatRenderer.codableColor(from: NSColor(color))
         viewModel.setBorderColor(codable)
       }
+    }
+  }
+
+  private var mergeGroup: some View {
+    HStack(spacing: 4) {
+      Menu {
+        Button("Merge All") { viewModel.mergeSelection(axis: .all) }
+          .disabled(!viewModel.canMergeSelection)
+        Button("Merge Across") { viewModel.mergeSelection(axis: .horizontal) }
+          .disabled(!viewModel.canMergeHorizontally)
+        Button("Merge Vertically") { viewModel.mergeSelection(axis: .vertical) }
+          .disabled(!viewModel.canMergeVertically)
+        Divider()
+        Button("Unmerge") { viewModel.unmergeSelection() }
+          .disabled(!viewModel.canUnmergeSelection)
+      } label: {
+        VStack(spacing: 2) {
+          Image(systemName: "rectangle.split.2x1")
+            .font(.system(size: 13))
+            .frame(width: showLabels ? 48 : 32, height: showLabels ? 24 : 32)
+          if showLabels {
+            Text("Merge")
+              .font(.system(size: 9))
+              .lineLimit(1)
+          }
+        }
+        .frame(minWidth: 40)
+        .contentShape(Rectangle())
+      }
+      .menuStyle(.borderlessButton)
+      .help("Merge cells")
     }
   }
 

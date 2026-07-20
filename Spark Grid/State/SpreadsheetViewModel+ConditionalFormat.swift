@@ -101,6 +101,8 @@ extension SpreadsheetViewModel {
     isRestoringFilterFromSheet = true
     filterState = activeSheet.autoFilter
     isRestoringFilterFromSheet = false
+    // Ensure chevrons appear even when workbook contentRevision already advanced.
+    notifyGridRefresh()
   }
 
   func syncAutoFilterToActiveSheet() {

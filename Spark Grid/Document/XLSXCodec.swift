@@ -675,8 +675,9 @@ enum XLSXCodec {
     }
 
     let viewsXML = sheetViewsXML(frozenRows: sheet.frozenRows, frozenColumns: sheet.frozenColumns)
-    let mergeXML = mergeCellsXML(sheet.mergedRanges)
+    // ECMA-376 order: sheetData → autoFilter → mergeCells → conditionalFormatting → drawing
     let filterXML = autoFilterXML(sheet.autoFilter)
+    let mergeXML = mergeCellsXML(sheet.mergedRanges)
     let cfXML = conditionalFormattingXML(sheet.conditionalFormats, dxfIndex: dxfIndex)
     let drawingXML = includeDrawing ? sheetDrawingRelationshipXML(sheetIndex: 0) : ""
 
@@ -686,8 +687,8 @@ enum XLSXCodec {
     \(viewsXML)
     \(colsXML)
     <sheetData>\(sheetData)</sheetData>
-    \(mergeXML)
     \(filterXML)
+    \(mergeXML)
     \(cfXML)
     \(drawingXML)
     </worksheet>

@@ -2182,47 +2182,79 @@ final class SpreadsheetGridNSView: NSView {
     let selectAll = menu.addItem(withTitle: "Select All", action: #selector(handleMenuSelectAll(_:)), keyEquivalent: "")
     selectAll.target = self
     menu.addItem(.separator())
-    addStructureMenuItems(to: menu)
+    addStructureSubmenus(to: menu)
     return menu
   }
 
-  private func addStructureMenuItems(to menu: NSMenu) {
+  private func addStructureSubmenus(to menu: NSMenu) {
     guard let viewModel else { return }
     let axis = viewModel.selectionAxis
     let showRows = axis != .column
     let showCols = axis != .row
 
-    if showRows {
-      let insertRowAbove = menu.addItem(withTitle: "Insert Row Above", action: #selector(handleMenuInsertRowAbove(_:)), keyEquivalent: "")
-      insertRowAbove.target = self
-      let insertRowBelow = menu.addItem(withTitle: "Insert Row Below", action: #selector(handleMenuInsertRowBelow(_:)), keyEquivalent: "")
-      insertRowBelow.target = self
-      let deleteRows = menu.addItem(withTitle: "Delete Row(s)", action: #selector(handleMenuDeleteRows(_:)), keyEquivalent: "")
-      deleteRows.target = self
+    if showRows || showCols {
+      let rowsCols = NSMenu(title: "Rows & Columns")
+      if showRows {
+        addMenuItem(rowsCols, "Insert Row Above", #selector(handleMenuInsertRowAbove(_:)))
+        addMenuItem(rowsCols, "Insert Row Below", #selector(handleMenuInsertRowBelow(_:)))
+        addMenuItem(rowsCols, "Delete Row(s)", #selector(handleMenuDeleteRows(_:)))
+      }
+      if showRows && showCols {
+        rowsCols.addItem(.separator())
+      }
+      if showCols {
+        addMenuItem(rowsCols, "Insert Column Left", #selector(handleMenuInsertColumnLeft(_:)))
+        addMenuItem(rowsCols, "Insert Column Right", #selector(handleMenuInsertColumnRight(_:)))
+        addMenuItem(rowsCols, "Delete Column(s)", #selector(handleMenuDeleteColumns(_:)))
+      }
+      let rowsColsItem = NSMenuItem(title: "Rows & Columns", action: nil, keyEquivalent: "")
+      rowsColsItem.submenu = rowsCols
+      menu.addItem(rowsColsItem)
     }
 
-    if showRows && showCols {
-      menu.addItem(.separator())
-    }
+    let merge = NSMenu(title: "Merge")
+    let mergeAll = addMenuItem(merge, "Merge All", #selector(handleMenuMergeAll(_:)))
+    mergeAll.isEnabled = viewModel.canMergeSelection
+    let mergeAcross = addMenuItem(merge, "Merge Across", #selector(handleMenuMergeAcross(_:)))
+    mergeAcross.isEnabled = viewModel.canMergeHorizontally
+    let mergeVertical = addMenuItem(merge, "Merge Vertically", #selector(handleMenuMergeVertical(_:)))
+    mergeVertical.isEnabled = viewModel.canMergeVertically
+    merge.addItem(.separator())
+    let unmerge = addMenuItem(merge, "Unmerge Cells", #selector(handleMenuUnmerge(_:)))
+    unmerge.isEnabled = viewModel.canUnmergeSelection
+    let mergeItem = NSMenuItem(title: "Merge", action: nil, keyEquivalent: "")
+    mergeItem.submenu = merge
+    menu.addItem(mergeItem)
 
-    if showCols {
-      let insertColLeft = menu.addItem(withTitle: "Insert Column Left", action: #selector(handleMenuInsertColumnLeft(_:)), keyEquivalent: "")
-      insertColLeft.target = self
-      let insertColRight = menu.addItem(withTitle: "Insert Column Right", action: #selector(handleMenuInsertColumnRight(_:)), keyEquivalent: "")
-      insertColRight.target = self
-      let deleteCols = menu.addItem(withTitle: "Delete Column(s)", action: #selector(handleMenuDeleteColumns(_:)), keyEquivalent: "")
-      deleteCols.target = self
-    }
+    let borders = NSMenu(title: "Borders")
+    addMenuItem(borders, "All Borders", #selector(handleMenuBorderAll(_:)))
+    addMenuItem(borders, "Outside Borders", #selector(handleMenuBorderOutside(_:)))
+    addMenuItem(borders, "Bottom Border", #selector(handleMenuBorderBottom(_:)))
+    addMenuItem(borders, "No Border", #selector(handleMenuBorderNone(_:)))
+    let bordersItem = NSMenuItem(title: "Borders", action: nil, keyEquivalent: "")
+    bordersItem.submenu = borders
+    menu.addItem(bordersItem)
 
-    menu.addItem(.separator())
-    let freeze = menu.addItem(withTitle: "Freeze Panes", action: #selector(handleMenuFreezePanes(_:)), keyEquivalent: "")
-    freeze.target = self
-    let freezeRows = menu.addItem(withTitle: "Freeze Rows", action: #selector(handleMenuFreezeRows(_:)), keyEquivalent: "")
-    freezeRows.target = self
-    let freezeCols = menu.addItem(withTitle: "Freeze Columns", action: #selector(handleMenuFreezeColumns(_:)), keyEquivalent: "")
-    freezeCols.target = self
-    let unfreeze = menu.addItem(withTitle: "Unfreeze Panes", action: #selector(handleMenuUnfreezePanes(_:)), keyEquivalent: "")
-    unfreeze.target = self
+    let freeze = NSMenu(title: "Freeze")
+    addMenuItem(freeze, "Freeze Panes", #selector(handleMenuFreezePanes(_:)))
+    addMenuItem(freeze, "Freeze Rows", #selector(handleMenuFreezeRows(_:)))
+    addMenuItem(freeze, "Freeze Columns", #selector(handleMenuFreezeColumns(_:)))
+    freeze.addItem(.separator())
+    addMenuItem(freeze, "Unfreeze Panes", #selector(handleMenuUnfreezePanes(_:)))
+    let freezeItem = NSMenuItem(title: "Freeze", action: nil, keyEquivalent: "")
+    freezeItem.submenu = freeze
+    menu.addItem(freezeItem)
+  }
+
+  @discardableResult
+  private func addMenuItem(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
+    let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+    item.target = self
+    return item
+  }
+
+  private func addStructureMenuItems(to menu: NSMenu) {
+    addStructureSubmenus(to: menu)
   }
 
   @objc private func handleMenuCut(_ sender: Any?) {
@@ -2303,6 +2335,46 @@ final class SpreadsheetGridNSView: NSView {
   @objc private func handleMenuUnfreezePanes(_ sender: Any?) {
     viewModel?.unfreezePanes()
     applyFreezePanesLayout()
+  }
+
+  @objc private func handleMenuMergeAll(_ sender: Any?) {
+    viewModel?.mergeSelection(axis: .all)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuMergeAcross(_ sender: Any?) {
+    viewModel?.mergeSelection(axis: .horizontal)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuMergeVertical(_ sender: Any?) {
+    viewModel?.mergeSelection(axis: .vertical)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuUnmerge(_ sender: Any?) {
+    viewModel?.unmergeSelection()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuBorderAll(_ sender: Any?) {
+    viewModel?.applyBorderPreset(.all)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuBorderOutside(_ sender: Any?) {
+    viewModel?.applyBorderPreset(.outside)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuBorderBottom(_ sender: Any?) {
+    viewModel?.applyBorderPreset(.bottom)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuBorderNone(_ sender: Any?) {
+    viewModel?.applyBorderPreset(.none)
+    syncDisplay()
   }
 
   enum FreezeAlertAxis {

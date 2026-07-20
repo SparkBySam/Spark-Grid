@@ -56,10 +56,18 @@ struct SpreadsheetStructureCommands: Commands {
 
       Divider()
 
-      Button("Merge Cells") { viewModel?.mergeSelection() }
-        .disabled(viewModel == nil)
-      Button("Unmerge Cells") { viewModel?.unmergeSelection() }
-        .disabled(viewModel == nil || viewModel?.canUnmergeSelection != true)
+      Menu("Merge Cells") {
+        Button("Merge All") { viewModel?.mergeSelection(axis: .all) }
+          .disabled(viewModel?.canMergeSelection != true)
+        Button("Merge Across") { viewModel?.mergeSelection(axis: .horizontal) }
+          .disabled(viewModel?.canMergeHorizontally != true)
+        Button("Merge Vertically") { viewModel?.mergeSelection(axis: .vertical) }
+          .disabled(viewModel?.canMergeVertically != true)
+        Divider()
+        Button("Unmerge Cells") { viewModel?.unmergeSelection() }
+          .disabled(viewModel?.canUnmergeSelection != true)
+      }
+      .disabled(viewModel == nil)
 
       Divider()
 
