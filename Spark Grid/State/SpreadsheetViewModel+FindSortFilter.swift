@@ -321,6 +321,8 @@ extension SpreadsheetViewModel {
     var range = selectionRange
     if range.isSingleCell {
       range = filterRangeForSingleCell(selectionAnchor)
+    } else if let trimmed = trimmedFilterRange(from: range) {
+      range = trimmed
     }
     var n = range.normalized
     // If the block starts below row 1 and the row above looks like headers, include it.
@@ -344,6 +346,54 @@ extension SpreadsheetViewModel {
     guard n.maxRow > n.minRow else { return }
     filterState = SheetFilterState(range: range, selectedValuesByColumn: [:])
     notifyGridRefresh()
+  }
+
+  /// Shrinks a large/empty-padded selection to the content table Excel would filter.
+  private func trimmedFilterRange(from range: CellRange) -> CellRange? {
+    let sheet = activeSheet
+    let n = range.normalized
+    let isWholeSheet =
+      selectionAxis == .sheet
+      || (n.minRow == 0 && n.minCol == 0
+        && n.maxRow >= sheet.effectiveRowCount - 1
+        && n.maxCol >= sheet.effectiveColumnCount - 1)
+
+    if isWholeSheet, let used = sheet.populatedBounds, used.normalized.maxRow > used.normalized.minRow {
+      return used
+    }
+
+    func hasContent(row: Int, col: Int) -> Bool {
+      !sheet.cell(at: CellAddress(row: row, col: col)).raw.isEmpty
+    }
+
+    var minRow: Int?
+    var maxRow: Int?
+    var minCol: Int?
+    var maxCol: Int?
+    for row in n.minRow...n.maxRow {
+      for col in n.minCol...n.maxCol {
+        guard hasContent(row: row, col: col) else { continue }
+        minRow = min(minRow ?? row, row)
+        maxRow = max(maxRow ?? row, row)
+        minCol = min(minCol ?? col, col)
+        maxCol = max(maxCol ?? col, col)
+      }
+    }
+    guard let minRow, let maxRow, let minCol, let maxCol, maxRow > minRow else {
+      // Selection has no multi-row content — fall back to used range when it fits.
+      if let used = sheet.populatedBounds,
+         used.normalized.maxRow > used.normalized.minRow,
+         n.minRow <= used.normalized.minRow,
+         n.maxRow >= used.normalized.maxRow
+      {
+        return used
+      }
+      return nil
+    }
+    return CellRange(
+      start: CellAddress(row: minRow, col: minCol),
+      end: CellAddress(row: maxRow, col: maxCol)
+    )
   }
 
   /// Range used when Create Filter is invoked from a single selected cell.

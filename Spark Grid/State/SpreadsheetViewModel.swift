@@ -149,6 +149,10 @@ final class SpreadsheetViewModel {
     self.workbook = workbook
     formulaEngine.rebuild(workbook: workbook)
     syncEditTextFromSelection()
+    // Pull AutoFilter from the sheet so Excel header-row filters appear immediately.
+    isRestoringFilterFromSheet = true
+    filterState = workbook.activeSheet.autoFilter
+    isRestoringFilterFromSheet = false
   }
 
   func displayValue(at address: CellAddress) -> CellValue {
@@ -299,11 +303,20 @@ final class SpreadsheetViewModel {
   }
 
   func extendSelection(to end: CellAddress) {
-    selectionEnd = clamp(end)
+    let tip = clamp(end)
+    selectionEnd = tip
+    // Expand for merges in the painted range only — never move the drag origin
+    // to the normalized top-left (that breaks right→left / bottom→top drags).
     let expanded = activeSheet.selectionExpandedForMerges(
-      CellRange(start: selectionAnchor, end: selectionEnd)
+      CellRange(start: selectionAnchor, end: tip)
     )
-    setPrimaryRange(from: expanded.start, to: expanded.end)
+    let painted = CellRange(start: clamp(expanded.start), end: clamp(expanded.end))
+    if selectionRanges.isEmpty {
+      selectionRanges = [painted]
+    } else {
+      selectionRanges[selectionRanges.count - 1] = painted
+    }
+    noteSelectionChanged()
   }
 
   /// ⌘-click a cell to add/remove it from a discontinuous selection.
@@ -404,6 +417,7 @@ final class SpreadsheetViewModel {
     isEditing = false
   }
 
+  /// ⌘A / Edit → Select All: always the entire sheet.
   func selectAll() {
     commitEditIfNeeded()
     let sheet = activeSheet
@@ -411,8 +425,20 @@ final class SpreadsheetViewModel {
       row: sheet.effectiveRowCount - 1,
       col: sheet.effectiveColumnCount - 1
     )
+    replaceSelection(with: CellRange(start: .origin, end: wholeEnd))
+    syncEditTextFromSelection()
+    isEditing = false
+  }
 
-    // Excel-style: first select the used range (fast / visible); again expands to the whole sheet.
+  /// Corner-header click: used range first, then whole sheet (Excel-style).
+  func selectUsedRangeOrAll() {
+    commitEditIfNeeded()
+    let sheet = activeSheet
+    let wholeEnd = CellAddress(
+      row: sheet.effectiveRowCount - 1,
+      col: sheet.effectiveColumnCount - 1
+    )
+
     if let used = sheet.populatedBounds {
       let usedNorm = used.normalized
       let current = selectionRange.normalized
@@ -441,7 +467,7 @@ final class SpreadsheetViewModel {
     if selectionAxis == .sheet {
       select(.origin)
     } else {
-      selectAll()
+      selectUsedRangeOrAll()
     }
   }
 
@@ -739,7 +765,6 @@ final class SpreadsheetViewModel {
       workbook.activeSheetIndex -= 1
     }
     contentRevision &+= 1
-    filterState = nil
     invalidateFindMatches()
     selection = .origin
     syncEditTextFromSelection()
@@ -990,6 +1015,7 @@ final class SpreadsheetViewModel {
 
     if changed {
       setActiveSheetPreservingFormulas(sheet)
+      notifyGridRefresh()
     }
   }
 

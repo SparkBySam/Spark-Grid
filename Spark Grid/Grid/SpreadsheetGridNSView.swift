@@ -886,17 +886,10 @@ final class SpreadsheetGridNSView: NSView {
       }
       let label = A1Notation.columnLabel(for: col) as NSString
       let size = label.size(withAttributes: attrs)
-      let hasFilter = viewModel?.isFilterColumn(col) == true
-      let labelX = hasFilter
-        ? drawRect.midX - size.width / 2 - 5
-        : drawRect.midX - size.width / 2
       label.draw(
-        at: NSPoint(x: labelX, y: drawRect.midY - size.height / 2),
+        at: NSPoint(x: drawRect.midX - size.width / 2, y: drawRect.midY - size.height / 2),
         withAttributes: attrs
       )
-      if hasFilter {
-        drawFilterAffordance(in: drawRect)
-      }
       if !isSheetSelection {
         let isSelected = isColumnSelected(col)
         if isSelected {
@@ -1168,17 +1161,57 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
-  private func drawFilterAffordance(in rect: NSRect) {
+  private func drawFilterAffordance(in rect: NSRect, over background: NSColor?) {
     let size = 10 * zoomScale
-    let pad = 3 * zoomScale
+    let gap = 5 * zoomScale
+    let boxWidth = size + 2 * zoomScale
+    let boxHeight = size
+    let box = NSRect(
+      x: rect.maxX - boxWidth - gap,
+      y: rect.maxY - boxHeight - gap,
+      width: boxWidth,
+      height: boxHeight
+    )
+
+    let base = (background ?? NSColor.windowBackgroundColor)
+      .usingColorSpace(.deviceRGB) ?? background ?? .windowBackgroundColor
+    let luminance =
+      0.2126 * base.redComponent
+      + 0.7152 * base.greenComponent
+      + 0.0722 * base.blueComponent
+    let onLight = luminance > 0.55
+    let chipFill = onLight
+      ? NSColor.black.withAlphaComponent(0.12)
+      : NSColor.white.withAlphaComponent(0.22)
+    let glyphFill = onLight
+      ? NSColor.black.withAlphaComponent(0.72)
+      : NSColor.white.withAlphaComponent(0.92)
+
+    chipFill.setFill()
+    NSBezierPath(roundedRect: box, xRadius: 2 * zoomScale, yRadius: 2 * zoomScale).fill()
+
     let tri = NSBezierPath()
-    let origin = NSPoint(x: rect.maxX - size - pad, y: rect.midY - size / 3)
+    let origin = NSPoint(x: box.midX - size / 2, y: box.midY - size / 4)
     tri.move(to: origin)
     tri.line(to: NSPoint(x: origin.x + size, y: origin.y))
-    tri.line(to: NSPoint(x: origin.x + size / 2, y: origin.y + size * 0.7))
+    tri.line(to: NSPoint(x: origin.x + size / 2, y: origin.y + size * 0.65))
     tri.close()
-    NSColor.secondaryLabelColor.setFill()
+    glyphFill.setFill()
     tri.fill()
+  }
+
+  private func filterAffordanceRect(forCell rect: NSRect) -> NSRect {
+    let size = 10 * zoomScale
+    let gap = 5 * zoomScale
+    let boxWidth = size + 2 * zoomScale
+    let boxHeight = size
+    // Slightly larger hit target than the drawn chip.
+    return NSRect(
+      x: rect.maxX - boxWidth - gap - 2 * zoomScale,
+      y: rect.maxY - boxHeight - gap - 2 * zoomScale,
+      width: boxWidth + 4 * zoomScale,
+      height: boxHeight + 4 * zoomScale
+    )
   }
 
   private func drawCells(in dirtyRect: NSRect) {
@@ -1265,7 +1298,8 @@ final class SpreadsheetGridNSView: NSView {
 
     let paint = viewModel.resolvedPaint(at: address)
     let paintFormat = paint.format
-    if let fill = CellFormatRenderer.fillColor(for: paintFormat) {
+    let fillColor = CellFormatRenderer.fillColor(for: paintFormat)
+    if let fill = fillColor {
       fill.setFill()
       rect.fill()
     }
@@ -1277,30 +1311,42 @@ final class SpreadsheetGridNSView: NSView {
       drawIconSetGlyph(icon, in: rect)
     }
 
+    let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
     let hideValue = paint.dataBarFraction != nil && paint.dataBarShowValue == false
-    guard !hideValue, !cell.raw.isEmpty else { return }
-    let value = viewModel.displayValue(at: address)
-    let text = viewModel.displayString(at: address)
-    guard !text.isEmpty else { return }
-    let insetX = 4 * zoomScale
-    let insetY = 2 * zoomScale
-    var textRect = rect.insetBy(dx: insetX, dy: insetY)
-    if paint.icon != nil {
-      textRect.origin.x += 14 * zoomScale
-      textRect.size.width = max(0, textRect.width - 14 * zoomScale)
+    if !hideValue, !cell.raw.isEmpty {
+      let value = viewModel.displayValue(at: address)
+      let text = viewModel.displayString(at: address)
+      if !text.isEmpty {
+        let insetX = 4 * zoomScale
+        let insetY = 2 * zoomScale
+        var textRect = rect.insetBy(dx: insetX, dy: insetY)
+        if paint.icon != nil {
+          textRect.origin.x += 14 * zoomScale
+          textRect.size.width = max(0, textRect.width - 14 * zoomScale)
+        }
+        if isFilterHeader {
+          // Keep wrapped text clear of the bottom-right filter chip.
+          textRect.size.width = max(0, textRect.width - 14 * zoomScale)
+          textRect.size.height = max(0, textRect.height - 14 * zoomScale)
+        }
+        if textRect.width > 1, textRect.height > 1 {
+          NSGraphicsContext.saveGraphicsState()
+          NSBezierPath(rect: rect).addClip()
+          var drawFormat = paintFormat ?? CellFormat()
+          let baseSize = drawFormat.fontSize ?? CellFormatRenderer.defaultFontSize
+          drawFormat.fontSize = baseSize * zoomScale
+          if value.isError {
+            drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
+          }
+          CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
+          NSGraphicsContext.restoreGraphicsState()
+        }
+      }
     }
-    guard textRect.width > 1, textRect.height > 1 else { return }
 
-    NSGraphicsContext.saveGraphicsState()
-    NSBezierPath(rect: rect).addClip()
-    var drawFormat = paintFormat ?? CellFormat()
-    let baseSize = drawFormat.fontSize ?? CellFormatRenderer.defaultFontSize
-    drawFormat.fontSize = baseSize * zoomScale
-    if value.isError {
-      drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
+    if isFilterHeader {
+      drawFilterAffordance(in: rect, over: fillColor)
     }
-    CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
-    NSGraphicsContext.restoreGraphicsState()
   }
 
   private func drawDataBar(fraction: Double, color: CodableColor, in rect: NSRect) {
@@ -1861,12 +1907,6 @@ final class SpreadsheetGridNSView: NSView {
       needsDisplay = true
       return
     case .column(let col):
-      if viewModel?.isFilterColumn(col) == true,
-         isInColumnHeaderFilterAffordance(point: point, col: col)
-      {
-        presentFilterMenu(for: col, at: point)
-        return
-      }
       if event.modifierFlags.contains(.command) {
         viewModel?.commandClickColumn(col)
       } else {
@@ -1899,6 +1939,13 @@ final class SpreadsheetGridNSView: NSView {
     if rowHeight(at: address.row) <= 0 {
       return
     }
+    if viewModel?.isFilterHeaderCell(row: address.row, col: address.col) == true,
+       isInFilterAffordance(point: point, address: address)
+    {
+      presentFilterMenu(for: address.col, at: point)
+      window?.makeFirstResponder(self)
+      return
+    }
     if event.modifierFlags.contains(.command) {
       viewModel?.commandClickCell(address)
       needsDisplay = true
@@ -1918,16 +1965,9 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
-  private func isInColumnHeaderFilterAffordance(point: NSPoint, col: Int) -> Bool {
-    let rect = columnHeaderRect(for: col)
-    let zoneWidth = max(14, 16 * zoomScale)
-    return point.x >= rect.maxX - zoneWidth && rect.contains(point)
-  }
-
   private func isInFilterAffordance(point: NSPoint, address: CellAddress) -> Bool {
     let rect = rectForCell(row: address.row, col: address.col)
-    let zoneWidth = 16 * zoomScale
-    return point.x >= rect.maxX - zoneWidth && rect.contains(point)
+    return filterAffordanceRect(forCell: rect).contains(point)
   }
 
   private func presentFilterMenu(for column: Int, at point: NSPoint) {
@@ -2231,6 +2271,20 @@ final class SpreadsheetGridNSView: NSView {
     bordersItem.submenu = borders
     menu.addItem(bordersItem)
 
+    let filter = NSMenu(title: "Filter")
+    addMenuItem(filter, "Create a Filter", #selector(handleMenuCreateFilter(_:)))
+    let clearFilter = addMenuItem(filter, "Clear Filter", #selector(handleMenuClearFilter(_:)))
+    clearFilter.isEnabled = viewModel.filterState != nil
+    let clearColumn = addMenuItem(
+      filter,
+      "Clear Filter for Column",
+      #selector(handleMenuClearColumnFilter(_:))
+    )
+    clearColumn.isEnabled = viewModel.isFilterColumn(viewModel.selectionAnchor.col)
+    let filterItem = NSMenuItem(title: "Filter", action: nil, keyEquivalent: "")
+    filterItem.submenu = filter
+    menu.addItem(filterItem)
+
     let format = NSMenu(title: "Format")
     addMenuItem(format, "No Fill", #selector(handleMenuNoFill(_:)))
     let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
@@ -2381,6 +2435,22 @@ final class SpreadsheetGridNSView: NSView {
 
   @objc private func handleMenuNoFill(_ sender: Any?) {
     viewModel?.setFillColor(nil)
+    syncDisplay()
+  }
+
+  @objc private func handleMenuCreateFilter(_ sender: Any?) {
+    viewModel?.createFilter()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuClearFilter(_ sender: Any?) {
+    viewModel?.clearFilter()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuClearColumnFilter(_ sender: Any?) {
+    guard let viewModel else { return }
+    viewModel.clearColumnFilter(viewModel.selectionAnchor.col)
     syncDisplay()
   }
 

@@ -37,6 +37,7 @@ enum BugBashRunner {
     results.append(percentConditionalCompare())
     results.append(mergeRoundTrip())
     results.append(filterCriteriaRoundTrip())
+    results.append(emptyFilterRoundTrip())
     results.append(chartRoundTrip())
     results.append(colorScaleRoundTrip())
     results.append(themeSchemeParse())
@@ -211,7 +212,23 @@ enum BugBashRunner {
           detail: "expected ≥2 sheets with autoFilter, got \(withFilters.count)"
         )
       }
-      return Result(name: "enterprise filter import", passed: true, detail: "\(withFilters.count) sheets filtered")
+      let reportFilters = withFilters.prefix(2)
+      for sheet in reportFilters {
+        guard let filter = sheet.autoFilter else { continue }
+        let n = filter.range.normalized
+        guard n.minRow == 4 else {
+          return Result(
+            name: "enterprise filter import",
+            passed: false,
+            detail: "\(sheet.name) header row \(n.minRow + 1), expected 5"
+          )
+        }
+      }
+      return Result(
+        name: "enterprise filter import",
+        passed: true,
+        detail: "\(withFilters.count) sheets filtered; Report headers on row 5"
+      )
     } catch {
       return Result(name: "enterprise filter import", passed: false, detail: error.localizedDescription)
     }
@@ -283,6 +300,40 @@ enum BugBashRunner {
       return Result(name: "merge round-trip", passed: true, detail: "ok")
     } catch {
       return Result(name: "merge round-trip", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func emptyFilterRoundTrip() -> Result {
+    var sheet = Sheet(name: "Test")
+    sheet.setCell(Cell(raw: "H"), at: CellAddress(row: 4, col: 0))
+    sheet.setCell(Cell(raw: "1"), at: CellAddress(row: 5, col: 0))
+    sheet.autoFilter = SheetFilterState(
+      range: CellRange(
+        start: CellAddress(row: 4, col: 0),
+        end: CellAddress(row: 5, col: 2)
+      ),
+      selectedValuesByColumn: [:]
+    )
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let xml = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      guard xml.contains(#"<autoFilter ref="A5:C6"/>"#) || xml.contains(#"ref="A5:C6""#) else {
+        return Result(name: "empty filter export", passed: false, detail: "missing autoFilter ref A5:C6")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      guard let filter = imported.activeSheet.autoFilter else {
+        return Result(name: "empty filter round-trip", passed: false, detail: "no autofilter after import")
+      }
+      let n = filter.range.normalized
+      guard n.minRow == 4, n.maxRow == 5, n.minCol == 0, n.maxCol == 2 else {
+        return Result(name: "empty filter round-trip", passed: false, detail: "wrong range \(n)")
+      }
+      guard filter.selectedValuesByColumn.isEmpty else {
+        return Result(name: "empty filter round-trip", passed: false, detail: "expected no criteria")
+      }
+      return Result(name: "empty filter round-trip", passed: true, detail: "A5:C6 preserved")
+    } catch {
+      return Result(name: "empty filter round-trip", passed: false, detail: error.localizedDescription)
     }
   }
 

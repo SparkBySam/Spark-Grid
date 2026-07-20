@@ -11,6 +11,7 @@ struct FormattingToolbar: View {
   @State private var borderColor: Color = .primary
   @State private var fontSizeText = "12"
   @State private var showBorderPopover = false
+  @State private var showFillPopover = false
   /// Prevents ColorPicker `onChange` from writing synced swatch values back onto the selection.
   @State private var suppressColorApply = false
 
@@ -186,31 +187,64 @@ struct FormattingToolbar: View {
       toolbarDivider
         .padding(.horizontal, 6)
 
-      ToolbarColorPicker(
-        title: "Fill",
-        showLabel: showLabels,
-        showsClear: true,
-        clearTitle: "No Fill",
-        label: {
-          Image(systemName: "paintbrush.fill")
-            .font(.system(size: 14))
-            .foregroundStyle(fillColor == .clear ? Color(nsColor: .labelColor) : fillColor)
-            .overlay(alignment: .bottom) {
-              RoundedRectangle(cornerRadius: 1)
-                .fill(fillColor == .clear ? Color(nsColor: .labelColor).opacity(0.25) : fillColor)
-                .frame(height: 3)
-                .padding(.horizontal, 1)
-                .offset(y: 4)
-            }
-        },
-        selection: $fillColor
-      ) { color in
-        guard !suppressColorApply else { return }
-        if color == .clear {
-          viewModel.setFillColor(nil)
-        } else {
-          viewModel.setFillColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+      Button {
+        showFillPopover.toggle()
+      } label: {
+        VStack(spacing: 2) {
+          HStack(spacing: 2) {
+            Image(systemName: "paintbrush.fill")
+              .font(.system(size: 14))
+              .foregroundStyle(fillColor == .clear ? Color(nsColor: .labelColor) : fillColor)
+              .overlay(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 1)
+                  .fill(fillColor == .clear ? Color(nsColor: .labelColor).opacity(0.25) : fillColor)
+                  .frame(height: 3)
+                  .padding(.horizontal, 1)
+                  .offset(y: 4)
+              }
+            Image(systemName: "chevron.down")
+              .font(.system(size: 8, weight: .semibold))
+              .foregroundStyle(.secondary)
+          }
+          .frame(width: showLabels ? 48 : 36, height: showLabels ? 24 : 32)
+
+          if showLabels {
+            Text("Fill")
+              .font(.system(size: 9))
+              .lineLimit(1)
+              .minimumScaleFactor(0.8)
+          }
         }
+        .frame(minWidth: 40)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Fill")
+      .popover(isPresented: $showFillPopover, arrowEdge: .bottom) {
+        VStack(alignment: .leading, spacing: 12) {
+          ColorPicker(
+            "Color",
+            selection: Binding(
+              get: { fillColor },
+              set: { newColor in
+                fillColor = newColor
+                applyFillColor(newColor)
+              }
+            ),
+            supportsOpacity: false
+          )
+
+          Button("No Fill") {
+            suppressColorApply = true
+            fillColor = .clear
+            viewModel.setFillColor(nil)
+            DispatchQueue.main.async { suppressColorApply = false }
+            showFillPopover = false
+          }
+          .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .frame(width: 200)
       }
     }
   }
@@ -400,6 +434,15 @@ struct FormattingToolbar: View {
   private func syncFontSizeFromSelection() {
     let size = Int(viewModel.selectedFormat.fontSize ?? CellFormatRenderer.defaultFontSize)
     fontSizeText = "\(size)"
+  }
+
+  private func applyFillColor(_ color: Color) {
+    guard !suppressColorApply else { return }
+    if color == .clear {
+      viewModel.setFillColor(nil)
+    } else {
+      viewModel.setFillColor(CellFormatRenderer.codableColor(from: NSColor(color)))
+    }
   }
 
   private func applyFontSizeFromField() {
@@ -779,47 +822,24 @@ private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
 private struct ToolbarColorPicker<Label: View>: View {
   let title: String
   var showLabel = false
-  var showsClear = false
-  var clearTitle = "None"
   @ViewBuilder var label: () -> Label
   @Binding var selection: Color
   let onChange: (Color) -> Void
 
   var body: some View {
     VStack(spacing: 2) {
-      if showsClear {
-        Menu {
-          Button(clearTitle) {
-            selection = .clear
-            onChange(.clear)
-          }
-          Divider()
-          ColorPicker("Color", selection: $selection, supportsOpacity: false)
-            .labelsHidden()
-        } label: {
+      ColorPicker("", selection: $selection, supportsOpacity: false)
+        .labelsHidden()
+        .frame(width: 32, height: showLabel ? 24 : 32)
+        .overlay {
           label()
-            .frame(width: 28, height: showLabel ? 20 : 28)
-            .contentShape(Rectangle())
+            .allowsHitTesting(false)
         }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
+        .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(RoundedRectangle(cornerRadius: 4))
         .onChange(of: selection) { _, color in
           onChange(color)
         }
-      } else {
-        ColorPicker("", selection: $selection, supportsOpacity: false)
-          .labelsHidden()
-          .frame(width: 32, height: showLabel ? 24 : 32)
-          .overlay {
-            label()
-              .allowsHitTesting(false)
-          }
-          .background(Color.clear, in: RoundedRectangle(cornerRadius: 4))
-          .contentShape(RoundedRectangle(cornerRadius: 4))
-          .onChange(of: selection) { _, color in
-            onChange(color)
-          }
-      }
 
       if showLabel {
         Text(title)

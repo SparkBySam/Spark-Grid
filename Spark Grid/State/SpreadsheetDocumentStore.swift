@@ -72,6 +72,11 @@ final class SpreadsheetDocumentStore {
   func save(to url: URL? = nil) throws {
     let destination = url ?? fileURL
     guard let destination else { return }
+    // Prefer the live grid workbook so AutoFilter / in-memory edits aren't dropped.
+    if let viewModel = activeViewModel {
+      viewModel.syncAutoFilterToActiveSheet()
+      document.workbook = viewModel.workbook
+    }
     let accessing = destination.startAccessingSecurityScopedResource()
     defer {
       if accessing {
