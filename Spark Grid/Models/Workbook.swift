@@ -38,15 +38,41 @@ struct Workbook: Codable, Equatable, Sendable {
   var activeSheetIndex: Int
   /// Global named ranges, keyed by uppercase name.
   var namedRanges: [String: NamedRange]
+  /// Raw `xl/theme/theme1.xml` from import — round-tripped on export when present.
+  var xlsxThemeData: Data?
 
   init(
     sheets: [Sheet] = [Sheet(name: "Sheet1")],
     activeSheetIndex: Int = 0,
-    namedRanges: [String: NamedRange] = [:]
+    namedRanges: [String: NamedRange] = [:],
+    xlsxThemeData: Data? = nil
   ) {
     self.sheets = sheets.isEmpty ? [Sheet(name: "Sheet1")] : sheets
     self.activeSheetIndex = min(max(0, activeSheetIndex), self.sheets.count - 1)
     self.namedRanges = namedRanges
+    self.xlsxThemeData = xlsxThemeData
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case sheets, activeSheetIndex, namedRanges, xlsxThemeData
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    sheets = try c.decode([Sheet].self, forKey: .sheets)
+    activeSheetIndex = try c.decode(Int.self, forKey: .activeSheetIndex)
+    namedRanges = try c.decodeIfPresent([String: NamedRange].self, forKey: .namedRanges) ?? [:]
+    xlsxThemeData = try c.decodeIfPresent(Data.self, forKey: .xlsxThemeData)
+    if sheets.isEmpty { sheets = [Sheet(name: "Sheet1")] }
+    activeSheetIndex = min(max(0, activeSheetIndex), sheets.count - 1)
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(sheets, forKey: .sheets)
+    try c.encode(activeSheetIndex, forKey: .activeSheetIndex)
+    try c.encode(namedRanges, forKey: .namedRanges)
+    try c.encodeIfPresent(xlsxThemeData, forKey: .xlsxThemeData)
   }
 
   var activeSheet: Sheet {

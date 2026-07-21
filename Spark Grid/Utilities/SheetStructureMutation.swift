@@ -18,6 +18,7 @@ enum SheetStructureMutation {
     if sheet.frozenRows > index {
       sheet.frozenRows += count
     }
+    ensureRowCapacity(&sheet, through: index + count - 1)
     shiftSheetAnnotations(&sheet, axis: .row, index: index, delta: count)
   }
 
@@ -59,6 +60,7 @@ enum SheetStructureMutation {
     if sheet.frozenColumns > index {
       sheet.frozenColumns += count
     }
+    ensureColumnCapacity(&sheet, through: index + count - 1)
     shiftSheetAnnotations(&sheet, axis: .column, index: index, delta: count)
   }
 
@@ -214,5 +216,17 @@ enum SheetStructureMutation {
 
   private static func deleteKeyedValues(_ values: [Int: CGFloat], range: Range<Int>) -> [Int: CGFloat] {
     values.filter { !range.contains($0.key) }
+  }
+
+  private static func ensureColumnCapacity(_ sheet: inout Sheet, through lastColumn: Int) {
+    let needed = lastColumn + 1
+    guard needed > sheet.effectiveColumnCount else { return }
+    sheet.gridColumnCount = needed
+  }
+
+  private static func ensureRowCapacity(_ sheet: inout Sheet, through lastRow: Int) {
+    let needed = lastRow + 1
+    guard needed > sheet.effectiveRowCount else { return }
+    sheet.gridRowCount = needed
   }
 }

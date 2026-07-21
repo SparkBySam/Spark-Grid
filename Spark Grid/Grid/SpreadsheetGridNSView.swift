@@ -706,6 +706,7 @@ final class SpreadsheetGridNSView: NSView {
       ctx.saveGraphicsState()
       NSBezierPath(rect: contentRect).addClip()
       drawCells(in: dirtyRect)
+      drawImages(in: dirtyRect)
       if !skipGridlines {
         drawGridLines(in: dirtyRect)
       }
@@ -1261,6 +1262,27 @@ final class SpreadsheetGridNSView: NSView {
     )
   }
 
+  private func drawImages(in dirtyRect: NSRect) {
+    guard let sheet = viewModel?.activeSheet, !sheet.images.isEmpty else { return }
+    for image in sheet.images {
+      guard let nsImage = NSImage(data: image.imageData) else { continue }
+      let x = xForColumn(image.anchorCol) + SheetImage.points(fromEMU: image.colOffsetEMU)
+      let y = yForRow(image.anchorRow) + SheetImage.points(fromEMU: image.rowOffsetEMU)
+      let width = SheetImage.points(fromEMU: image.widthEMU)
+      let height = SheetImage.points(fromEMU: image.heightEMU)
+      let rect = NSRect(x: x, y: y, width: width, height: height)
+      guard dirtyRect.intersects(rect), isCellRectInContentArea(rect) else { continue }
+      nsImage.draw(
+        in: rect,
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1,
+        respectFlipped: true,
+        hints: nil
+      )
+    }
+  }
+
   private func drawCells(in dirtyRect: NSRect) {
     guard let viewModel else { return }
     let sheet = viewModel.activeSheet
@@ -1362,11 +1384,13 @@ final class SpreadsheetGridNSView: NSView {
 
     for range in viewModel.selectionRanges {
       let n = range.normalized
-      let rows = max(n.minRow, rowRange.lowerBound)...min(n.maxRow, rowRange.upperBound)
-      let cols = max(n.minCol, colRange.lowerBound)...min(n.maxCol, colRange.upperBound)
-      guard rows.lowerBound <= rows.upperBound, cols.lowerBound <= cols.upperBound else { continue }
-      for row in rows {
-        for col in cols {
+      let rowLower = max(n.minRow, rowRange.lowerBound)
+      let rowUpper = min(n.maxRow, rowRange.upperBound)
+      let colLower = max(n.minCol, colRange.lowerBound)
+      let colUpper = min(n.maxCol, colRange.upperBound)
+      guard rowLower <= rowUpper, colLower <= colUpper else { continue }
+      for row in rowLower...rowUpper {
+        for col in colLower...colUpper {
           let address = CellAddress(row: row, col: col)
           if sheet.isCoveredByMerge(address) { continue }
           let rect = rectForCell(row: row, col: col)

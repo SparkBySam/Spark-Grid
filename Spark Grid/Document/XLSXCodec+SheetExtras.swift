@@ -282,7 +282,8 @@ extension XLSXCodec {
     if body.contains("<i/>") || body.contains("<i ") || body.contains("<x14:i") {
       style.italic = true
     }
-    if let fill = firstColor(in: body, near: "fgColor", themeScheme: themeScheme)
+    if let fill = firstColor(in: body, near: "bgColor", themeScheme: themeScheme)
+      ?? firstColor(in: body, near: "fgColor", themeScheme: themeScheme)
       ?? firstColor(in: body, near: "patternFill", themeScheme: themeScheme)
     {
       style.fillColor = fill
@@ -627,7 +628,7 @@ extension XLSXCodec {
     let fontXML = font.isEmpty ? "" : "<x14:font>\(font)</x14:font>"
     var fillXML = ""
     if let rgb = style.fillColor.map(rgbHex) {
-      fillXML = #"<x14:fill><x14:patternFill patternType="solid"><x14:fgColor rgb="FF\#(rgb)"/><x14:bgColor indexed="64"/></x14:patternFill></x14:fill>"#
+      fillXML = #"<x14:fill><x14:patternFill patternType="solid"><x14:bgColor rgb="FF\#(rgb)"/></x14:patternFill></x14:fill>"#
     }
     return "<x14:dxf>\(fontXML)\(fillXML)</x14:dxf>"
   }
@@ -645,7 +646,7 @@ extension XLSXCodec {
       let fontXML = font.isEmpty ? "" : "<font>\(font)</font>"
       var fillXML = ""
       if let rgb = style.fillColor.map(rgbHex) {
-        fillXML = #"<fill><patternFill patternType="solid"><fgColor rgb="FF\#(rgb)"/><bgColor indexed="64"/></patternFill></fill>"#
+        fillXML = #"<fill><patternFill patternType="solid"><bgColor rgb="FF\#(rgb)"/></patternFill></fill>"#
       }
       body += "<dxf>\(fontXML)\(fillXML)</dxf>"
     }

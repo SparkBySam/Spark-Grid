@@ -105,6 +105,9 @@ struct ThemeColorScheme: Sendable {
 struct ThemeResolvedStyleColors: Sendable {
   var fontColorsById: [Int: CodableColor] = [:]
   var fillColorsById: [Int: CodableColor] = [:]
+  /// Resolved through cellXfs → fontId/fillId (most reliable for per-cell paint).
+  var fontColorsByCellXfId: [Int: CodableColor] = [:]
+  var fillColorsByCellXfId: [Int: CodableColor] = [:]
 }
 
 enum ThemeColorLookup {
@@ -142,8 +145,32 @@ enum ThemeColorLookup {
           range: NSRange(location: 0, length: ns.length)
         ).enumerated() {
           let body = ns.substring(with: match.range(at: 1))
+          if body.contains(#"patternType="none""#) { continue }
           if let color = firstThemeOrRGBColor(in: body, scheme: scheme) {
             result.fillColorsById[index] = color
+          }
+        }
+      }
+    }
+    if let xfsRange = stylesXML.range(of: #"<cellXfs\b[^>]*>[\s\S]*?</cellXfs>"#, options: .regularExpression) {
+      let xfsXML = String(stylesXML[xfsRange])
+      let xfPattern = #"<xf\b([^>/]*)(?:/>|>)"#
+      if let regex = try? NSRegularExpression(pattern: xfPattern) {
+        let ns = xfsXML as NSString
+        for (index, match) in regex.matches(
+          in: xfsXML,
+          range: NSRange(location: 0, length: ns.length)
+        ).enumerated() {
+          let attrs = ns.substring(with: match.range(at: 1))
+          if let fontId = attribute(attrs, "fontId").flatMap(Int.init),
+             let color = result.fontColorsById[fontId]
+          {
+            result.fontColorsByCellXfId[index] = color
+          }
+          if let fillId = attribute(attrs, "fillId").flatMap(Int.init),
+             let color = result.fillColorsById[fillId]
+          {
+            result.fillColorsByCellXfId[index] = color
           }
         }
       }

@@ -1,29 +1,45 @@
 import Foundation
 
 extension XLSXCodec {
-  /// Writes Excel-readable chart + drawing parts for a sheet's charts.
-  /// Also keeps the Spark JSON sidecar for faithful round-trip of our model.
-  static func appendExcelChartParts(
+  /// Writes Excel-readable drawing parts for a sheet's charts and embedded images.
+  /// Also keeps the Spark JSON sidecar for faithful round-trip of our chart model.
+  static func appendSheetDrawingParts(
     for sheet: Sheet,
     sheetIndex: Int,
+    globalImageIndex: inout Int,
     into files: inout [String: Data]
   ) -> Bool {
-    guard !sheet.charts.isEmpty else { return false }
+    let hasCharts = !sheet.charts.isEmpty
+    let hasImages = !sheet.images.isEmpty
+    guard hasCharts || hasImages else { return false }
+
     let sheetNum = sheetIndex + 1
     var drawingBody = ""
+    var drawingRels = ""
+    var relId = 1
+
     for (chartIndex, chart) in sheet.charts.enumerated() {
       let chartNum = sheetIndex * 100 + chartIndex + 1
       files["xl/charts/chart\(chartNum).xml"] = Data(excelChartXML(chart, sheetName: sheet.name).utf8)
-      drawingBody += twoCellAnchorXML(chart: chart, chartRelId: "rId\(chartIndex + 1)")
-    }
-    files["xl/drawings/drawing\(sheetNum).xml"] = Data(drawingXML(body: drawingBody).utf8)
-    var drawingRels = ""
-    for (chartIndex, _) in sheet.charts.enumerated() {
-      let chartNum = sheetIndex * 100 + chartIndex + 1
+      drawingBody += twoCellAnchorXML(chart: chart, chartRelId: "rId\(relId)")
       drawingRels += """
-      <Relationship Id="rId\(chartIndex + 1)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart\(chartNum).xml"/>
+      <Relationship Id="rId\(relId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart\(chartNum).xml"/>
       """
+      relId += 1
     }
+
+    for (imageIndex, image) in sheet.images.enumerated() {
+      globalImageIndex += 1
+      let mediaName = mediaFileName(for: image, index: globalImageIndex)
+      files["xl/media/\(mediaName)"] = image.imageData
+      drawingBody += oneCellAnchorImageXML(image: image, relId: "rId\(relId)", pictureId: imageIndex + 1)
+      drawingRels += """
+      <Relationship Id="rId\(relId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/\(mediaName)"/>
+      """
+      relId += 1
+    }
+
+    files["xl/drawings/drawing\(sheetNum).xml"] = Data(drawingXML(body: drawingBody).utf8)
     files["xl/drawings/_rels/drawing\(sheetNum).xml.rels"] = Data("""
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -49,9 +65,10 @@ extension XLSXCodec {
     return Data(xml.utf8)
   }
 
-  static func chartContentTypeOverrides(workbook: Workbook) -> String {
+  static func drawingContentTypeOverrides(workbook: Workbook) -> String {
     var overrides = ""
-    for (sheetIndex, sheet) in workbook.sheets.enumerated() where !sheet.charts.isEmpty {
+    for (sheetIndex, sheet) in workbook.sheets.enumerated() {
+      guard !sheet.charts.isEmpty || !sheet.images.isEmpty else { continue }
       let sheetNum = sheetIndex + 1
       overrides += """
       <Override PartName="/xl/drawings/drawing\(sheetNum).xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
@@ -89,7 +106,7 @@ extension XLSXCodec {
           <xdr:cNvPr id="2" name="\(escapeXML(chart.title))"/>
           <xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></xdr:cNvGraphicFramePr>
         </xdr:nvGraphicFramePr>
-        <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>
+        <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm>
         <a:graphic>
           <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
             <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="\(chartRelId)"/>

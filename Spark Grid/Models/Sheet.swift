@@ -16,6 +16,12 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     var mergedRanges: [CellRange]
     /// Embedded charts (Spark-native; also stored in a custom xlsx part).
     var charts: [SheetChart]
+    /// Embedded pictures (Excel drawing anchors).
+    var images: [SheetImage]
+    /// Explicit grid width when it exceeds populated data (e.g. after insert past the last column).
+    var gridColumnCount: Int?
+    /// Explicit grid height when it exceeds populated data (e.g. after insert past the last row).
+    var gridRowCount: Int?
 
     init(
         id: UUID = UUID(),
@@ -28,7 +34,10 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         conditionalFormats: [ConditionalFormatRule] = [],
         autoFilter: SheetFilterState? = nil,
         mergedRanges: [CellRange] = [],
-        charts: [SheetChart] = []
+        charts: [SheetChart] = [],
+        images: [SheetImage] = [],
+        gridColumnCount: Int? = nil,
+        gridRowCount: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,12 +50,15 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         self.autoFilter = autoFilter
         self.mergedRanges = mergedRanges
         self.charts = charts
+        self.images = images
+        self.gridColumnCount = gridColumnCount
+        self.gridRowCount = gridRowCount
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, cells, columnWidths, rowHeights
         case frozenRows, frozenColumns, conditionalFormats, autoFilter
-        case mergedRanges, charts
+        case mergedRanges, charts, images, gridColumnCount, gridRowCount
     }
 
     init(from decoder: Decoder) throws {
@@ -62,6 +74,9 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         autoFilter = try c.decodeIfPresent(SheetFilterState.self, forKey: .autoFilter)
         mergedRanges = try c.decodeIfPresent([CellRange].self, forKey: .mergedRanges) ?? []
         charts = try c.decodeIfPresent([SheetChart].self, forKey: .charts) ?? []
+        images = try c.decodeIfPresent([SheetImage].self, forKey: .images) ?? []
+        gridColumnCount = try c.decodeIfPresent(Int.self, forKey: .gridColumnCount)
+        gridRowCount = try c.decodeIfPresent(Int.self, forKey: .gridRowCount)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -77,6 +92,9 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         try c.encodeIfPresent(autoFilter, forKey: .autoFilter)
         try c.encode(mergedRanges, forKey: .mergedRanges)
         try c.encode(charts, forKey: .charts)
+        try c.encode(images, forKey: .images)
+        try c.encodeIfPresent(gridColumnCount, forKey: .gridColumnCount)
+        try c.encodeIfPresent(gridRowCount, forKey: .gridRowCount)
     }
 
     func cell(at address: CellAddress) -> Cell {
@@ -140,12 +158,18 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
 
     /// Grid row count — at least the default, expands when data exceeds it.
     var effectiveRowCount: Int {
-        max(Workbook.defaultRowCount, maxPopulatedRow + 1)
+        let fromData = maxPopulatedRow + 1
+        let fromHeights = (rowHeights.keys.max() ?? -1) + 1
+        let explicit = gridRowCount ?? Workbook.defaultRowCount
+        return max(Workbook.defaultRowCount, fromData, fromHeights, explicit)
     }
 
     /// Grid column count — at least the default, expands when data exceeds it.
     var effectiveColumnCount: Int {
-        max(Workbook.defaultColumnCount, maxPopulatedColumn + 1)
+        let fromData = maxPopulatedColumn + 1
+        let fromWidths = (columnWidths.keys.max() ?? -1) + 1
+        let explicit = gridColumnCount ?? Workbook.defaultColumnCount
+        return max(Workbook.defaultColumnCount, fromData, fromWidths, explicit)
     }
 
     // MARK: - Merges

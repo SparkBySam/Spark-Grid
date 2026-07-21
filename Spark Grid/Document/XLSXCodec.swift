@@ -67,13 +67,23 @@ enum XLSXCodec {
           themeScheme: themeScheme
         )
         importSparkCharts(into: &sheet, archiveData: archiveData, sheetIndex: sheets.count)
+        importSheetImages(
+          into: &sheet,
+          archiveData: archiveData,
+          sheetIndex: sheets.count,
+          worksheetPath: path
+        )
         sheets.append(sheet)
       }
     }
 
     guard !sheets.isEmpty else { throw CodecError.emptyWorkbook }
     // Defined names are not exposed by CoreXLSX Workbook model — skip without failing.
-    return Workbook(sheets: sheets, activeSheetIndex: 0)
+    return Workbook(
+      sheets: sheets,
+      activeSheetIndex: 0,
+      xlsxThemeData: zipEntryData(archiveData: archiveData, entryPath: "xl/theme/theme1.xml")
+    )
   }
 
   /// CoreXLSX drops shared-formula followers (`<f t="shared" si="…"/>`). Expand them from sheet XML.
@@ -156,6 +166,11 @@ enum XLSXCodec {
   }
 
   static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
+    guard let data = zipEntryData(archiveData: archiveData, entryPath: entryPath) else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  static func zipEntryData(archiveData: Data, entryPath: String) -> Data? {
     let normalized = entryPath.hasPrefix("/") ? String(entryPath.dropFirst()) : entryPath
     guard let archive = try? Archive(data: archiveData, accessMode: .read) else { return nil }
     let candidates = [normalized, normalized.hasPrefix("xl/") ? normalized : "xl/\(normalized)"]
@@ -169,9 +184,8 @@ enum XLSXCodec {
       } catch {
         continue
       }
-      if let text = String(data: data, encoding: .utf8) {
-        return text
-      }
+      guard !data.isEmpty else { continue }
+      return data
     }
     return nil
   }
@@ -366,8 +380,18 @@ enum XLSXCodec {
           changed = true
         }
       }
+    }
 
-      if let styleIndex = cell.styleIndex, let rotation = textRotationsByStyleIndex[styleIndex] {
+    if let styleIndex = cell.styleIndex {
+      if format.textColor == nil, let themed = themeStyleColors.fontColorsByCellXfId[styleIndex] {
+        format.textColor = themed
+        changed = true
+      }
+      if format.fillColor == nil, let themed = themeStyleColors.fillColorsByCellXfId[styleIndex] {
+        format.fillColor = themed
+        changed = true
+      }
+      if let rotation = textRotationsByStyleIndex[styleIndex] {
         format.textRotation = rotation
         changed = true
       }
@@ -550,18 +574,29 @@ enum XLSXCodec {
 
     var files: [String: Data] = [:]
     var sheetsWithDrawings = Set<Int>()
+    var globalImageIndex = 0
     for (index, sheet) in workbook.sheets.enumerated() {
-      if appendExcelChartParts(for: sheet, sheetIndex: index, into: &files) {
+      if appendSheetDrawingParts(
+        for: sheet,
+        sheetIndex: index,
+        globalImageIndex: &globalImageIndex,
+        into: &files
+      ) {
         sheetsWithDrawings.insert(index)
       }
     }
     files["[Content_Types].xml"] = contentTypesXML(
       sheetCount: workbook.sheets.count,
-      chartOverrides: chartContentTypeOverrides(workbook: workbook)
+      drawingOverrides: drawingContentTypeOverrides(workbook: workbook),
+      imageDefaults: imageContentTypeDefaults(workbook: workbook),
+      includeTheme: workbook.xlsxThemeData != nil
     )
     files["_rels/.rels"] = rootRelsXML
     files["xl/workbook.xml"] = workbookXML(workbook)
-    files["xl/_rels/workbook.xml.rels"] = workbookRelsXML(sheetCount: workbook.sheets.count)
+    files["xl/_rels/workbook.xml.rels"] = workbookRelsXML(
+      sheetCount: workbook.sheets.count,
+      includeTheme: workbook.xlsxThemeData != nil
+    )
 
     for (index, sheet) in workbook.sheets.enumerated() {
       let hasDrawing = sheetsWithDrawings.contains(index)
@@ -583,6 +618,9 @@ enum XLSXCodec {
 
     files["xl/sharedStrings.xml"] = sharedStringsXML(sharedStrings)
     files["xl/styles.xml"] = stylesXML(styleList, dxfs: dxfList)
+    if let themeData = workbook.xlsxThemeData {
+      files["xl/theme/theme1.xml"] = themeData
+    }
 
     guard let data = MinimalZip.archive(files: files) else {
       throw CodecError.writeFailed
@@ -592,21 +630,32 @@ enum XLSXCodec {
 
   // MARK: - Export XML builders
 
-  private static func contentTypesXML(sheetCount: Int, chartOverrides: String = "") -> Data {
+  private static func contentTypesXML(
+    sheetCount: Int,
+    drawingOverrides: String = "",
+    imageDefaults: String = "",
+    includeTheme: Bool = false
+  ) -> Data {
     var overrides = """
     <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
     <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
     <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
     """
+    if includeTheme {
+      overrides += """
+      <Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+      """
+    }
     for i in 1...sheetCount {
       overrides += """
       <Override PartName="/xl/worksheets/sheet\(i).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
       """
     }
-    overrides += chartOverrides
+    overrides += drawingOverrides
     let xml = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    \(imageDefaults)
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Default Extension="xml" ContentType="application/xml"/>
     <Default Extension="json" ContentType="application/json"/>
@@ -651,7 +700,7 @@ enum XLSXCodec {
     return Data(xml.utf8)
   }
 
-  private static func workbookRelsXML(sheetCount: Int) -> Data {
+  private static func workbookRelsXML(sheetCount: Int, includeTheme: Bool = false) -> Data {
     var rels = ""
     for i in 1...sheetCount {
       rels += """
@@ -660,10 +709,16 @@ enum XLSXCodec {
     }
     let stylesId = sheetCount + 1
     let sharedId = sheetCount + 2
+    let themeId = sheetCount + 3
     rels += """
     <Relationship Id="rId\(stylesId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
     <Relationship Id="rId\(sharedId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
     """
+    if includeTheme {
+      rels += """
+      <Relationship Id="rId\(themeId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
+      """
+    }
     let xml = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">

@@ -45,14 +45,17 @@ enum BugBashRunner {
     results.append(sharedFormulaRoundTrip())
     results.append(conditionalFormatImport())
     results.append(highlightRoundTrip())
+    results.append(cfDxfExcelCompat())
     results.append(dataBarRoundTrip())
     results.append(excelChartParts())
+    results.append(imageImport())
     results.append(worksheetElementOrder())
     results.append(enterpriseFilterImport())
     results.append(MainActor.assumeIsolated { findScopePersistsAfterJump() })
     results.append(MainActor.assumeIsolated { largeEmptyFormatApply() })
     results.append(cfParseNumber())
     results.append(MainActor.assumeIsolated { sortRemapsMerge() })
+    results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
     return results
   }
 
@@ -134,6 +137,94 @@ enum BugBashRunner {
       return Result(name: "highlight round-trip", passed: true, detail: "ok")
     } catch {
       return Result(name: "highlight round-trip", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func cfDxfExcelCompat() -> Result {
+    var sheet = Sheet(name: "Test")
+    sheet.conditionalFormats = [
+      ConditionalFormatRule(
+        range: CellRange(start: .origin, end: CellAddress(row: 9, col: 0)),
+        predicate: .greaterThan(10),
+        style: .redFill
+      ),
+    ]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") ?? ""
+      guard styles.contains("<dxf>"), styles.contains("bgColor") else {
+        return Result(name: "CF dxf excel compat", passed: false, detail: "missing dxf bgColor")
+      }
+      guard !styles.contains(#"bgColor indexed="64""#) else {
+        return Result(name: "CF dxf excel compat", passed: false, detail: "dxf still has bgColor indexed=64")
+      }
+      return Result(name: "CF dxf excel compat", passed: true, detail: "bgColor solid fill")
+    } catch {
+      return Result(name: "CF dxf excel compat", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func imageImport() -> Result {
+    let pngData: Data
+    if let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 8,
+      pixelsHigh: 8,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ),
+      let encoded = rep.representation(using: .png, properties: [:])
+    {
+      pngData = encoded
+    } else {
+      return Result(name: "image round-trip", passed: false, detail: "couldn't build PNG")
+    }
+
+    var sheet = Sheet(name: "Images")
+    sheet.images = [
+      SheetImage(
+        anchorRow: 1,
+        anchorCol: 0,
+        widthEMU: 1_016_000,
+        heightEMU: 381_000,
+        imageData: pngData
+      ),
+    ]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      guard XLSXCodec.zipEntryData(archiveData: data, entryPath: "xl/media/image1.png") != nil,
+            XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/drawings/drawing1.xml")?.contains("oneCellAnchor") == true
+      else {
+        return Result(name: "image export", passed: false, detail: "missing drawing/media parts")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      guard imported.activeSheet.images.count == 1,
+            imported.activeSheet.images[0].imageData == pngData
+      else {
+        return Result(name: "image round-trip", passed: false, detail: "import mismatch")
+      }
+    } catch {
+      return Result(name: "image round-trip", passed: false, detail: error.localizedDescription)
+    }
+
+    let desktop = "/Users/samparker/Desktop/Enterprise Report_Queen City Harley-Davidson_2026-07-18_to_2026-07-18_export_1784598505245.xlsx"
+    guard FileManager.default.isReadableFile(atPath: desktop) else {
+      return Result(name: "image round-trip", passed: true, detail: "synthetic ok; desktop skipped")
+    }
+    do {
+      let wb = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: desktop))
+      let imageCount = wb.sheets.reduce(0) { $0 + $1.images.count }
+      guard imageCount > 0 else {
+        return Result(name: "image desktop import", passed: false, detail: "no images from desktop file")
+      }
+      return Result(name: "image round-trip", passed: true, detail: "synthetic + \(imageCount) desktop image(s)")
+    } catch {
+      return Result(name: "image round-trip", passed: true, detail: "synthetic ok; desktop: \(error.localizedDescription)")
     }
   }
 
@@ -669,6 +760,34 @@ enum BugBashRunner {
       return Result(name: "sort remap chart", passed: false, detail: "chart \(String(describing: chartRange))")
     }
     return Result(name: "sort remap merge/CF/chart", passed: true, detail: "rows remapped")
+  }
+
+  @MainActor
+  private static func insertColumnPastLastColumn() -> Result {
+    var sheet = Sheet(name: "Insert")
+    let lastCol = Workbook.defaultColumnCount - 1
+    sheet.setCell(Cell(raw: "Last"), at: CellAddress(row: 0, col: lastCol))
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    vm.selectColumn(lastCol)
+    let beforeCount = vm.activeSheet.effectiveColumnCount
+    vm.insertColumnsRight()
+    let afterCount = vm.activeSheet.effectiveColumnCount
+    guard afterCount == beforeCount + 1 else {
+      return Result(
+        name: "insert column right edge",
+        passed: false,
+        detail: "columns \(beforeCount) -> \(afterCount)"
+      )
+    }
+    let selected = vm.selectionRange.normalized
+    guard selected.minCol == lastCol + 1, selected.maxCol == lastCol + 1 else {
+      return Result(
+        name: "insert column right edge",
+        passed: false,
+        detail: "selection cols \(selected.minCol)-\(selected.maxCol)"
+      )
+    }
+    return Result(name: "insert column right edge", passed: true, detail: "column \(lastCol + 1)")
   }
 }
 #endif

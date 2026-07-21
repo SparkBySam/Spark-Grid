@@ -1254,7 +1254,19 @@ final class SpreadsheetViewModel {
   }
 
   func insertColumnsRight(count: Int = 1) {
-    insertColumns(at: selectionRange.normalized.maxCol + 1, count: count)
+    let n = selectionRange.normalized
+    let insertAt = n.maxCol + 1
+    insertColumns(at: insertAt, count: count)
+    let newEndCol = insertAt + count - 1
+    if selectionAxis == .column {
+      selectColumns(from: insertAt, to: newEndCol)
+    } else {
+      selectRange(
+        from: CellAddress(row: n.minRow, col: insertAt),
+        to: CellAddress(row: n.maxRow, col: newEndCol)
+      )
+    }
+    scrollRequestToken &+= 1
   }
 
   func deleteSelectedRows() {
