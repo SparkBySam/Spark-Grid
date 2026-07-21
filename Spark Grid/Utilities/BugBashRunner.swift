@@ -44,6 +44,7 @@ enum BugBashRunner {
     results.append(mergeSelectionSnap())
     results.append(sharedFormulaRoundTrip())
     results.append(conditionalFormatImport())
+    results.append(highlightRoundTrip())
     results.append(dataBarRoundTrip())
     results.append(excelChartParts())
     results.append(worksheetElementOrder())
@@ -100,6 +101,39 @@ enum BugBashRunner {
       return Result(name: "CF import", passed: true, detail: "\(count) rule(s)")
     } catch {
       return Result(name: "CF import", passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func highlightRoundTrip() -> Result {
+    var sheet = Sheet(name: "Test")
+    sheet.setCell(Cell(raw: "5"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "15"), at: CellAddress(row: 1, col: 0))
+    sheet.conditionalFormats = [
+      ConditionalFormatRule(
+        range: CellRange(start: .origin, end: CellAddress(row: 9, col: 0)),
+        predicate: .greaterThan(10),
+        style: .redFill
+      ),
+    ]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let xml = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      let styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") ?? ""
+      guard xml.contains("type=\"cellIs\""), xml.contains("conditionalFormatting") else {
+        return Result(name: "highlight export", passed: false, detail: "missing cellIs CF in XML")
+      }
+      guard xml.contains("x14:conditionalFormatting"), styles.contains("<cellStyles") else {
+        return Result(name: "highlight export", passed: false, detail: "missing x14 CF or cellStyles")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      guard imported.activeSheet.conditionalFormats.count == 1,
+            case .greaterThan(10) = imported.activeSheet.conditionalFormats[0].predicate
+      else {
+        return Result(name: "highlight round-trip", passed: false, detail: "\(imported.activeSheet.conditionalFormats)")
+      }
+      return Result(name: "highlight round-trip", passed: true, detail: "ok")
+    } catch {
+      return Result(name: "highlight round-trip", passed: false, detail: error.localizedDescription)
     }
   }
 

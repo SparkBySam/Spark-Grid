@@ -1293,6 +1293,13 @@ final class SpreadsheetGridNSView: NSView {
       }
     }
     CellFormatRenderer.drawBordersBatch(borderItems, scale: zoomScale)
+    drawSelectionWash(
+      in: dirtyRect,
+      rowRange: rowRange,
+      colRange: colRange,
+      viewModel: viewModel,
+      sheet: sheet
+    )
     NSGraphicsContext.restoreGraphicsState()
   }
 
@@ -1329,7 +1336,45 @@ final class SpreadsheetGridNSView: NSView {
       }
     }
     CellFormatRenderer.drawBordersBatch(borderItems, scale: zoomScale)
+    drawSelectionWash(
+      in: dirtyRect,
+      rowRange: rowRange,
+      colRange: colRange,
+      viewModel: viewModel,
+      sheet: sheet
+    )
     NSGraphicsContext.restoreGraphicsState()
+  }
+
+  /// Selection fill for every cell in the range — not only cells still stored after clearing text.
+  private func drawSelectionWash(
+    in dirtyRect: NSRect,
+    rowRange: ClosedRange<Int>,
+    colRange: ClosedRange<Int>,
+    viewModel: SpreadsheetViewModel,
+    sheet: Sheet
+  ) {
+    guard !rowRange.isEmpty, !colRange.isEmpty else { return }
+    let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    let washAlpha: CGFloat = isDarkMode ? 0.4 : 0.12
+    let washColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(washAlpha)
+    washColor.setFill()
+
+    for range in viewModel.selectionRanges {
+      let n = range.normalized
+      let rows = max(n.minRow, rowRange.lowerBound)...min(n.maxRow, rowRange.upperBound)
+      let cols = max(n.minCol, colRange.lowerBound)...min(n.maxCol, colRange.upperBound)
+      guard rows.lowerBound <= rows.upperBound, cols.lowerBound <= cols.upperBound else { continue }
+      for row in rows {
+        for col in cols {
+          let address = CellAddress(row: row, col: col)
+          if sheet.isCoveredByMerge(address) { continue }
+          let rect = rectForCell(row: row, col: col)
+          guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
+          rect.fill()
+        }
+      }
+    }
   }
 
   /// Fill + text only. Borders are painted in a later coalesced pass.
@@ -1353,11 +1398,6 @@ final class SpreadsheetGridNSView: NSView {
 
     let isSelected = viewModel.isAddressSelected(address)
     let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-    if isSelected {
-      let washAlpha: CGFloat = isDarkMode ? 0.4 : 0.12
-      NSColor.selectedContentBackgroundColor.withAlphaComponent(washAlpha).setFill()
-      rect.fill()
-    }
 
     if let fraction = paint.dataBarFraction, let color = paint.dataBarColor {
       drawDataBar(fraction: fraction, color: color, in: rect)
@@ -2152,10 +2192,10 @@ final class SpreadsheetGridNSView: NSView {
       switch resize {
       case .column(let col, let startWidth, let startX):
         let delta = point.x - startX
-        viewModel?.setColumnWidth(col, width: (startWidth + delta) / zoomScale)
+        viewModel?.setColumnWidth(col, width: (startWidth + delta) / zoomScale, recordUndo: false)
       case .row(let row, let startHeight, let startY):
         let delta = point.y - startY
-        viewModel?.setRowHeight(row, height: (startHeight + delta) / zoomScale)
+        viewModel?.setRowHeight(row, height: (startHeight + delta) / zoomScale, recordUndo: false)
       }
       invalidateLayoutCache()
       window?.invalidateCursorRects(for: self)
@@ -2238,7 +2278,13 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
-    if activeResize != nil {
+    if let resize = activeResize {
+      switch resize {
+      case .column(let col, let startWidth, _):
+        viewModel?.commitColumnWidthResize(col: col, from: startWidth / zoomScale)
+      case .row(let row, let startHeight, _):
+        viewModel?.commitRowHeightResize(row: row, from: startHeight / zoomScale)
+      }
       activeResize = nil
       window?.invalidateCursorRects(for: self)
       let point = convert(event.locationInWindow, from: nil)
@@ -2330,23 +2376,20 @@ final class SpreadsheetGridNSView: NSView {
     let showCols = axis != .row
 
     if showRows || showCols {
-      let rowsCols = NSMenu(title: "Rows & Columns")
       if showRows {
-        addMenuItem(rowsCols, "Insert Row Above", #selector(handleMenuInsertRowAbove(_:)))
-        addMenuItem(rowsCols, "Insert Row Below", #selector(handleMenuInsertRowBelow(_:)))
-        addMenuItem(rowsCols, "Delete Row(s)", #selector(handleMenuDeleteRows(_:)))
+        addMenuItem(menu, "Insert Row Above", #selector(handleMenuInsertRowAbove(_:)))
+        addMenuItem(menu, "Insert Row Below", #selector(handleMenuInsertRowBelow(_:)))
+        addMenuItem(menu, "Delete Row(s)", #selector(handleMenuDeleteRows(_:)))
       }
       if showRows && showCols {
-        rowsCols.addItem(.separator())
+        menu.addItem(.separator())
       }
       if showCols {
-        addMenuItem(rowsCols, "Insert Column Left", #selector(handleMenuInsertColumnLeft(_:)))
-        addMenuItem(rowsCols, "Insert Column Right", #selector(handleMenuInsertColumnRight(_:)))
-        addMenuItem(rowsCols, "Delete Column(s)", #selector(handleMenuDeleteColumns(_:)))
+        addMenuItem(menu, "Insert Column Left", #selector(handleMenuInsertColumnLeft(_:)))
+        addMenuItem(menu, "Insert Column Right", #selector(handleMenuInsertColumnRight(_:)))
+        addMenuItem(menu, "Delete Column(s)", #selector(handleMenuDeleteColumns(_:)))
       }
-      let rowsColsItem = NSMenuItem(title: "Rows & Columns", action: nil, keyEquivalent: "")
-      rowsColsItem.submenu = rowsCols
-      menu.addItem(rowsColsItem)
+      menu.addItem(.separator())
     }
 
     let borders = NSMenu(title: "Borders")

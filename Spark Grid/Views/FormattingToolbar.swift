@@ -1017,7 +1017,7 @@ private struct RotateToolbarMenu: View {
       Divider()
       Button("Tilt up") { viewModel.setTextRotation(-45) }
       Button("Tilt down") { viewModel.setTextRotation(45) }
-      Button("Stack vertically") { viewModel.setTextRotation(90) }
+      Button("Stack vertically") { viewModel.setTextRotation(CellFormat.stackedTextRotation) }
       Button("Rotate up") { viewModel.setTextRotation(-90) }
       Button("Rotate down") { viewModel.setTextRotation(90) }
     } label: {

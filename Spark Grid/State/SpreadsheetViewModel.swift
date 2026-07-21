@@ -670,8 +670,9 @@ final class SpreadsheetViewModel {
     commitEdit()
   }
 
-  func autoFitColumn(_ col: Int) {
+  func autoFitColumn(_ col: Int, recordUndo: Bool = true) {
     var sheet = activeSheet
+    let oldWidth = sheet.columnWidth(for: col, default: Workbook.defaultColumnWidth)
     var maxWidth = Workbook.defaultColumnWidth
     let lastRow = max(sheet.maxPopulatedRow, 0)
     for row in 0...min(lastRow, activeSheet.effectiveRowCount - 1) {
@@ -682,12 +683,18 @@ final class SpreadsheetViewModel {
       let width = CellFormatRenderer.measuredWidth(for: text, format: cell.format) + 16
       maxWidth = max(maxWidth, width)
     }
-    sheet.columnWidths[col] = min(max(maxWidth, 48), 420)
+    let newWidth = min(max(maxWidth, 48), 420)
+    guard abs(oldWidth - newWidth) > 0.5 else { return }
+    sheet.columnWidths[col] = newWidth
     setActiveSheetPreservingFormulas(sheet)
+    if recordUndo {
+      registerColumnWidthUndo(col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Auto Fit Column")
+    }
   }
 
-  func autoFitRow(_ row: Int) {
+  func autoFitRow(_ row: Int, recordUndo: Bool = true) {
     var sheet = activeSheet
+    let oldHeight = sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
     var maxHeight = Workbook.defaultRowHeight
     let lastCol = max(sheet.maxPopulatedColumn, 0)
     for col in 0...min(lastCol, activeSheet.effectiveColumnCount - 1) {
@@ -698,34 +705,168 @@ final class SpreadsheetViewModel {
       let height = CellFormatRenderer.measuredHeight(for: text, format: cell.format) + 8
       maxHeight = max(maxHeight, height)
     }
-    sheet.rowHeights[row] = min(max(maxHeight, 22), 200)
+    let newHeight = min(max(maxHeight, 22), 200)
+    guard abs(oldHeight - newHeight) > 0.5 else { return }
+    sheet.rowHeights[row] = newHeight
     setActiveSheetPreservingFormulas(sheet)
+    if recordUndo {
+      registerRowHeightUndo(row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Auto Fit Row")
+    }
   }
 
   func autoFitAllColumns() {
+    let before = activeSheet.columnWidths
     let lastCol = max(activeSheet.maxPopulatedColumn, activeSheet.effectiveColumnCount - 1)
     for col in 0...lastCol {
-      autoFitColumn(col)
+      autoFitColumn(col, recordUndo: false)
     }
+    registerColumnWidthsUndo(before: before, after: activeSheet.columnWidths, actionName: "Auto Fit Columns")
   }
 
   func autoFitAllRows() {
+    let before = activeSheet.rowHeights
     let lastRow = max(activeSheet.maxPopulatedRow, activeSheet.effectiveRowCount - 1)
     for row in 0...lastRow where !isRowHiddenByFilter(row) {
-      autoFitRow(row)
+      autoFitRow(row, recordUndo: false)
+    }
+    registerRowHeightsUndo(before: before, after: activeSheet.rowHeights, actionName: "Auto Fit Rows")
+  }
+
+  func columnWidth(for col: Int) -> CGFloat {
+    activeSheet.columnWidth(for: col, default: Workbook.defaultColumnWidth)
+  }
+
+  func rowHeight(for row: Int) -> CGFloat {
+    activeSheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
+  }
+
+  func setColumnWidth(_ col: Int, width: CGFloat, recordUndo: Bool = true) {
+    var sheet = activeSheet
+    let oldWidth = sheet.columnWidth(for: col, default: Workbook.defaultColumnWidth)
+    let newWidth = min(max(width, 24), 600)
+    guard abs(oldWidth - newWidth) > 0.5 else { return }
+    sheet.columnWidths[col] = newWidth
+    setActiveSheetPreservingFormulas(sheet)
+    if recordUndo {
+      registerColumnWidthUndo(col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Resize Column")
     }
   }
 
-  func setColumnWidth(_ col: Int, width: CGFloat) {
+  func setRowHeight(_ row: Int, height: CGFloat, recordUndo: Bool = true) {
     var sheet = activeSheet
-    sheet.columnWidths[col] = min(max(width, 24), 600)
+    let oldHeight = sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
+    let newHeight = min(max(height, 16), 400)
+    guard abs(oldHeight - newHeight) > 0.5 else { return }
+    sheet.rowHeights[row] = newHeight
     setActiveSheetPreservingFormulas(sheet)
+    if recordUndo {
+      registerRowHeightUndo(row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Resize Row")
+    }
   }
 
-  func setRowHeight(_ row: Int, height: CGFloat) {
-    var sheet = activeSheet
-    sheet.rowHeights[row] = min(max(height, 16), 400)
-    setActiveSheetPreservingFormulas(sheet)
+  /// Call once after a drag-resize gesture (undo is deferred until mouse up).
+  func commitColumnWidthResize(col: Int, from oldWidth: CGFloat) {
+    registerColumnWidthUndo(
+      col: col,
+      oldWidth: oldWidth,
+      newWidth: columnWidth(for: col),
+      actionName: "Resize Column"
+    )
+  }
+
+  func commitRowHeightResize(row: Int, from oldHeight: CGFloat) {
+    registerRowHeightUndo(
+      row: row,
+      oldHeight: oldHeight,
+      newHeight: rowHeight(for: row),
+      actionName: "Resize Row"
+    )
+  }
+
+  private func registerColumnWidthUndo(
+    col: Int,
+    oldWidth: CGFloat,
+    newWidth: CGFloat,
+    actionName: String
+  ) {
+    guard abs(oldWidth - newWidth) > 0.5 else { return }
+    undoManager?.registerUndo(withTarget: self) { target in
+      target.setColumnWidth(col, width: oldWidth, recordUndo: false)
+      target.notifyGridRefresh()
+      target.undoManager?.registerUndo(withTarget: target) { inner in
+        inner.setColumnWidth(col, width: newWidth, recordUndo: false)
+        inner.notifyGridRefresh()
+      }
+    }
+    undoManager?.setActionName(actionName)
+  }
+
+  private func registerRowHeightUndo(
+    row: Int,
+    oldHeight: CGFloat,
+    newHeight: CGFloat,
+    actionName: String
+  ) {
+    guard abs(oldHeight - newHeight) > 0.5 else { return }
+    undoManager?.registerUndo(withTarget: self) { target in
+      target.setRowHeight(row, height: oldHeight, recordUndo: false)
+      target.notifyGridRefresh()
+      target.undoManager?.registerUndo(withTarget: target) { inner in
+        inner.setRowHeight(row, height: newHeight, recordUndo: false)
+        inner.notifyGridRefresh()
+      }
+    }
+    undoManager?.setActionName(actionName)
+  }
+
+  private func registerColumnWidthsUndo(
+    before: [Int: CGFloat],
+    after: [Int: CGFloat],
+    actionName: String
+  ) {
+    guard before != after else { return }
+    undoManager?.registerUndo(withTarget: self) { target in
+      var workbook = target.workbook
+      var sheet = workbook.activeSheet
+      sheet.columnWidths = before
+      workbook.activeSheet = sheet
+      target.workbook = workbook
+      target.notifyGridRefresh()
+      target.undoManager?.registerUndo(withTarget: target) { inner in
+        var workbook = inner.workbook
+        var sheet = workbook.activeSheet
+        sheet.columnWidths = after
+        workbook.activeSheet = sheet
+        inner.workbook = workbook
+        inner.notifyGridRefresh()
+      }
+    }
+    undoManager?.setActionName(actionName)
+  }
+
+  private func registerRowHeightsUndo(
+    before: [Int: CGFloat],
+    after: [Int: CGFloat],
+    actionName: String
+  ) {
+    guard before != after else { return }
+    undoManager?.registerUndo(withTarget: self) { target in
+      var workbook = target.workbook
+      var sheet = workbook.activeSheet
+      sheet.rowHeights = before
+      workbook.activeSheet = sheet
+      target.workbook = workbook
+      target.notifyGridRefresh()
+      target.undoManager?.registerUndo(withTarget: target) { inner in
+        var workbook = inner.workbook
+        var sheet = workbook.activeSheet
+        sheet.rowHeights = after
+        workbook.activeSheet = sheet
+        inner.workbook = workbook
+        inner.notifyGridRefresh()
+      }
+    }
+    undoManager?.setActionName(actionName)
   }
 
   // MARK: - Sheets

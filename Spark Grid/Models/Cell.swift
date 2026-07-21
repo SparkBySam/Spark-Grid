@@ -6,5 +6,7 @@ struct Cell: Codable, Equatable, Sendable {
 
     var displayText: String { raw }
 
-    var isEmpty: Bool { raw.isEmpty && format == nil }
+    var isEmpty: Bool {
+        raw.isEmpty && (format == nil || format == CellFormat())
+    }
 }

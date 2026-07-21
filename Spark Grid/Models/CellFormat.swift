@@ -15,8 +15,16 @@ struct CellFormat: Codable, Equatable, Sendable {
   var fontSize: CGFloat?
   var decimalPlaces: Int?
   var wrapText = false
+  /// Degrees for tilt/rotate, or `stackedTextRotation` (255) for one character per line (Excel OOXML).
   var textRotation: Int = 0
   var borders: CellBorders = .none
+
+  /// Excel OOXML `textRotation="255"` — upright characters stacked top-to-bottom.
+  static let stackedTextRotation = 255
+
+  var isStackedVertically: Bool {
+    textRotation == Self.stackedTextRotation
+  }
 
   enum HorizontalAlign: String, Codable, Sendable {
     case general, left, center, right

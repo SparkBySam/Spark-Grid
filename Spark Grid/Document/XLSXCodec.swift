@@ -37,6 +37,7 @@ enum XLSXCodec {
     let themeStyleColors = importThemeStyleColors(archiveData: archiveData, scheme: themeScheme)
     let dxfs = importDifferentialFormats(archiveData: archiveData, themeScheme: themeScheme)
     let underlinedFonts = underlinedFontIndices(archiveData: archiveData)
+    let textRotationsByStyleIndex = importTextRotationsByStyleIndex(archiveData: archiveData)
     var sheets: [Sheet] = []
 
     for wbk in try file.parseWorkbooks() {
@@ -49,7 +50,8 @@ enum XLSXCodec {
           sharedStrings: sharedStrings,
           styles: styles,
           underlinedFontIds: underlinedFonts,
-          themeStyleColors: themeStyleColors
+          themeStyleColors: themeStyleColors,
+          textRotationsByStyleIndex: textRotationsByStyleIndex
         )
         expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
         importColumnWidths(from: worksheet, into: &sheet)
@@ -194,7 +196,8 @@ enum XLSXCodec {
     sharedStrings: SharedStrings?,
     styles: Styles?,
     underlinedFontIds: Set<Int>,
-    themeStyleColors: ThemeResolvedStyleColors
+    themeStyleColors: ThemeResolvedStyleColors,
+    textRotationsByStyleIndex: [Int: Int]
   ) {
     for row in worksheet.data?.rows ?? [] {
       for cell in row.cells {
@@ -206,13 +209,50 @@ enum XLSXCodec {
           from: cell,
           styles: styles,
           underlinedFontIds: underlinedFontIds,
-          themeStyleColors: themeStyleColors
+          themeStyleColors: themeStyleColors,
+          textRotationsByStyleIndex: textRotationsByStyleIndex
         ) {
           model.format = format
         }
         sheet.setCell(model, at: address)
       }
     }
+  }
+
+  /// CoreXLSX omits `textRotation` on alignment — parse it from styles.xml cellXfs.
+  static func importTextRotationsByStyleIndex(archiveData: Data) -> [Int: Int] {
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else { return [:] }
+    guard let start = xml.range(of: "<cellXfs"),
+          let end = xml.range(of: "</cellXfs>", range: start.upperBound..<xml.endIndex)
+    else { return [:] }
+
+    let section = String(xml[start.lowerBound..<end.upperBound])
+    guard let xfRegex = try? NSRegularExpression(
+      pattern: #"<xf\b[^>]*>(.*?)</xf>|<xf\b[^>]*/>"#,
+      options: [.dotMatchesLineSeparators]
+    ),
+      let rotationRegex = try? NSRegularExpression(pattern: #"textRotation="(-?\d+)""#)
+    else { return [:] }
+
+    let nsSection = section as NSString
+    var rotations: [Int: Int] = [:]
+    for (index, match) in xfRegex.matches(
+      in: section,
+      options: [],
+      range: NSRange(location: 0, length: nsSection.length)
+    ).enumerated() {
+      let chunk = nsSection.substring(with: match.range)
+      let nsChunk = chunk as NSString
+      guard let rotMatch = rotationRegex.firstMatch(
+        in: chunk,
+        options: [],
+        range: NSRange(location: 0, length: nsChunk.length)
+      ), rotMatch.numberOfRanges > 1,
+        let rotation = Int(nsChunk.substring(with: rotMatch.range(at: 1)))
+      else { continue }
+      rotations[index] = rotation
+    }
+    return rotations
   }
 
   private static func cellRawValue(_ cell: CoreXLSX.Cell, sharedStrings: SharedStrings?) -> String {
@@ -232,7 +272,8 @@ enum XLSXCodec {
     from cell: CoreXLSX.Cell,
     styles: Styles,
     underlinedFontIds: Set<Int>,
-    themeStyleColors: ThemeResolvedStyleColors
+    themeStyleColors: ThemeResolvedStyleColors,
+    textRotationsByStyleIndex: [Int: Int]
   ) -> CellFormat? {
     var format = CellFormat()
     var changed = false
@@ -324,6 +365,11 @@ enum XLSXCodec {
           format.wrapText = true
           changed = true
         }
+      }
+
+      if let styleIndex = cell.styleIndex, let rotation = textRotationsByStyleIndex[styleIndex] {
+        format.textRotation = rotation
+        changed = true
       }
     }
 
@@ -679,6 +725,7 @@ enum XLSXCodec {
     let filterXML = autoFilterXML(sheet.autoFilter)
     let mergeXML = mergeCellsXML(sheet.mergedRanges)
     let cfXML = conditionalFormattingXML(sheet.conditionalFormats, dxfIndex: dxfIndex)
+    let x14cfXML = x14ConditionalFormattingXML(sheet.conditionalFormats)
     let drawingXML = includeDrawing ? sheetDrawingRelationshipXML(sheetIndex: 0) : ""
 
     let xml = """
@@ -691,6 +738,7 @@ enum XLSXCodec {
     \(mergeXML)
     \(cfXML)
     \(drawingXML)
+    \(x14cfXML)
     </worksheet>
     """
     return Data(xml.utf8)
@@ -769,7 +817,9 @@ enum XLSXCodec {
     <borders count="\(borderCount)">\(bordersXML)</borders>
     <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
     <cellXfs count="\(styles.count)">\(cellXfs)</cellXfs>
+    <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
     \(dxfsXML(dxfs))
+    <tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleLight16"/>
     </styleSheet>
     """
     return Data(xml.utf8)

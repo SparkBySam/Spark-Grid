@@ -119,6 +119,11 @@ enum CellFormatRenderer {
     onLightBackground: Bool = false
   ) {
     guard !text.isEmpty else { return }
+    let resolved = format ?? CellFormat()
+    if resolved.isStackedVertically || resolved.textRotation != 0 {
+      drawText(text, in: rect, format: format, onLightBackground: onLightBackground)
+      return
+    }
     var attrs = attributes(for: format, onLightBackground: onLightBackground)
     let paragraph = ((attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
       as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
@@ -178,8 +183,19 @@ enum CellFormatRenderer {
       return
     }
 
-    // Fast path: left-aligned, no rotation — skip size measurement.
     let alignment = verticalAlign ?? resolved.verticalAlign
+    if resolved.isStackedVertically {
+      drawStackedVerticalText(
+        text,
+        in: inset,
+        attributes: attrs,
+        horizontalAlign: resolved.horizontalAlign,
+        verticalAlign: alignment
+      )
+      return
+    }
+
+    // Fast path: left-aligned, no rotation — skip size measurement.
     if resolved.textRotation == 0,
        resolved.horizontalAlign == .general || resolved.horizontalAlign == .left
     {
@@ -213,16 +229,83 @@ enum CellFormatRenderer {
     }
   }
 
-  static func measuredWidth(for text: String, format: CellFormat?) -> CGFloat {
-    guard !text.isEmpty else { return 0 }
+  static func measuredBoundingSize(for text: String, format: CellFormat?) -> NSSize {
+    guard !text.isEmpty else { return .zero }
+    let resolved = format ?? CellFormat()
     let attrs = attributes(for: format)
-    return (text as NSString).size(withAttributes: attrs).width
+    let size = (text as NSString).size(withAttributes: attrs)
+    guard !resolved.wrapText else { return size }
+
+    if resolved.isStackedVertically {
+      let font = attrs[.font] as? NSFont ?? Self.font(for: resolved)
+      let lineHeight = font.ascender - font.descender + 1
+      var maxWidth: CGFloat = 0
+      for ch in text {
+        let width = (String(ch) as NSString).size(withAttributes: attrs).width
+        maxWidth = max(maxWidth, width)
+      }
+      return NSSize(width: maxWidth, height: lineHeight * CGFloat(text.count))
+    }
+
+    guard resolved.textRotation != 0 else { return size }
+
+    // Axis-aligned bounds of text rotated within the cell (matches drawText rotation).
+    let radians = CGFloat(resolved.textRotation) * .pi / 180
+    let cosA = abs(cos(radians))
+    let sinA = abs(sin(radians))
+    return NSSize(
+      width: size.width * cosA + size.height * sinA,
+      height: size.width * sinA + size.height * cosA
+    )
+  }
+
+  static func measuredWidth(for text: String, format: CellFormat?) -> CGFloat {
+    measuredBoundingSize(for: text, format: format).width
   }
 
   static func measuredHeight(for text: String, format: CellFormat?) -> CGFloat {
-    guard !text.isEmpty else { return 0 }
-    let attrs = attributes(for: format)
-    return (text as NSString).size(withAttributes: attrs).height
+    measuredBoundingSize(for: text, format: format).height
+  }
+
+  private static func drawStackedVerticalText(
+    _ text: String,
+    in rect: NSRect,
+    attributes attrs: [NSAttributedString.Key: Any],
+    horizontalAlign: CellFormat.HorizontalAlign,
+    verticalAlign: CellFormat.VerticalAlign
+  ) {
+    let font = attrs[.font] as? NSFont ?? NSFont.systemFont(ofSize: defaultFontSize)
+    let characters = Array(text)
+    guard !characters.isEmpty else { return }
+
+    let lineHeight = font.ascender - font.descender + 1
+    let charWidths = characters.map { (String($0) as NSString).size(withAttributes: attrs).width }
+    let blockHeight = lineHeight * CGFloat(characters.count)
+
+    let blockTopY: CGFloat
+    switch verticalAlign {
+    case .top:
+      blockTopY = rect.maxY
+    case .middle:
+      blockTopY = rect.midY + blockHeight / 2
+    case .bottom:
+      blockTopY = rect.minY + blockHeight
+    }
+
+    for (index, ch) in characters.enumerated() {
+      let chWidth = charWidths[index]
+      let x: CGFloat
+      switch horizontalAlign {
+      case .center, .general:
+        x = rect.midX - chWidth / 2
+      case .left:
+        x = rect.minX
+      case .right:
+        x = rect.maxX - chWidth
+      }
+      let y = blockTopY - font.ascender - CGFloat(index) * lineHeight
+      (String(ch) as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+    }
   }
 
   private static func alignedOrigin(
