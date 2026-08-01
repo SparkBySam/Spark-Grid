@@ -43,6 +43,18 @@ final class SpreadsheetGridNSView: NSView {
   private var editorEntryMode: EditorEntryMode = .inCellEdit
   private var isDraggingSelection = false
   private var isDraggingFill = false
+  private enum ImageResizeCorner { case bottomRight }
+  private struct ImageDragState {
+    enum Mode {
+      case move
+      case resize(ImageResizeCorner)
+    }
+    let imageID: UUID
+    let mode: Mode
+    let startPoint: NSPoint
+    let startImage: SheetImage
+  }
+  private var activeImageDrag: ImageDragState?
   private var fillSourceRange: CellRange?
   private var headerDrag: HeaderDrag?
   private let resizeHandleThickness: CGFloat = 6
@@ -1264,13 +1276,10 @@ final class SpreadsheetGridNSView: NSView {
 
   private func drawImages(in dirtyRect: NSRect) {
     guard let sheet = viewModel?.activeSheet, !sheet.images.isEmpty else { return }
+    let selectedID = viewModel?.selectedImageID
     for image in sheet.images {
       guard let nsImage = NSImage(data: image.imageData) else { continue }
-      let x = xForColumn(image.anchorCol) + SheetImage.points(fromEMU: image.colOffsetEMU)
-      let y = yForRow(image.anchorRow) + SheetImage.points(fromEMU: image.rowOffsetEMU)
-      let width = SheetImage.points(fromEMU: image.widthEMU)
-      let height = SheetImage.points(fromEMU: image.heightEMU)
-      let rect = NSRect(x: x, y: y, width: width, height: height)
+      let rect = imageRect(for: image)
       guard dirtyRect.intersects(rect), isCellRectInContentArea(rect) else { continue }
       nsImage.draw(
         in: rect,
@@ -1280,7 +1289,171 @@ final class SpreadsheetGridNSView: NSView {
         respectFlipped: true,
         hints: nil
       )
+      if image.id == selectedID {
+        drawImageSelectionChrome(in: rect)
+      }
     }
+  }
+
+  private func imageRect(for image: SheetImage) -> NSRect {
+    let x = xForColumn(image.anchorCol) + SheetImage.points(fromEMU: image.colOffsetEMU)
+    let y = yForRow(image.anchorRow) + SheetImage.points(fromEMU: image.rowOffsetEMU)
+    let width = SheetImage.points(fromEMU: image.widthEMU)
+    let height = SheetImage.points(fromEMU: image.heightEMU)
+    return NSRect(x: x, y: y, width: width, height: height)
+  }
+
+  private func drawImageSelectionChrome(in rect: NSRect) {
+    let accent = NSColor.controlAccentColor
+    accent.setStroke()
+    let border = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
+    border.lineWidth = 2
+    border.stroke()
+    let handle = NSRect(
+      x: rect.maxX - 6,
+      y: rect.maxY - 6,
+      width: 8,
+      height: 8
+    )
+    accent.setFill()
+    handle.fill()
+  }
+
+  private func imageHitTest(at point: NSPoint) -> SheetImage? {
+    guard let sheet = viewModel?.activeSheet else { return nil }
+    for image in sheet.images.reversed() {
+      if imageRect(for: image).contains(point) { return image }
+    }
+    return nil
+  }
+
+  private func imageResizeHandleHit(at point: NSPoint, image: SheetImage) -> ImageResizeCorner? {
+    let rect = imageRect(for: image)
+    let handle = NSRect(x: rect.maxX - 8, y: rect.maxY - 8, width: 12, height: 12)
+    return handle.contains(point) ? .bottomRight : nil
+  }
+
+  private func normalizeImagePlacement(
+    row: Int,
+    col: Int,
+    rowOffsetEMU: Int,
+    colOffsetEMU: Int
+  ) -> (row: Int, col: Int, rowOffsetEMU: Int, colOffsetEMU: Int) {
+    var r = max(0, row)
+    var c = max(0, col)
+    var rowPts = SheetImage.points(fromEMU: rowOffsetEMU)
+    var colPts = SheetImage.points(fromEMU: colOffsetEMU)
+    while colPts < -0.5, c > 0 {
+      c -= 1
+      colPts += columnWidth(at: c)
+    }
+    let maxCol = columnCount() - 1
+    while colPts >= columnWidth(at: c) - 0.5, c < maxCol {
+      colPts -= columnWidth(at: c)
+      c += 1
+    }
+    while rowPts < -0.5, r > 0 {
+      r -= 1
+      rowPts += rowHeight(at: r)
+    }
+    let maxRow = rowCount() - 1
+    while rowPts >= rowHeight(at: r) - 0.5, r < maxRow {
+      rowPts -= rowHeight(at: r)
+      r += 1
+    }
+    return (
+      r,
+      c,
+      SheetImage.emu(fromPoints: max(0, rowPts)),
+      SheetImage.emu(fromPoints: max(0, colPts))
+    )
+  }
+
+  private func placementForImageTopLeft(x: CGFloat, y: CGFloat) -> (row: Int, col: Int, rowOffsetEMU: Int, colOffsetEMU: Int) {
+    let col = columnAtContent(x: max(headerSize, min(x, bounds.width - 1)))
+    let row = rowAtContent(y: max(headerSize, min(y, bounds.height - 1)))
+    let colPts = x - xForColumn(col)
+    let rowPts = y - yForRow(row)
+    return normalizeImagePlacement(
+      row: row,
+      col: col,
+      rowOffsetEMU: SheetImage.emu(fromPoints: rowPts),
+      colOffsetEMU: SheetImage.emu(fromPoints: colPts)
+    )
+  }
+
+  @discardableResult
+  private func handleImageMouseDown(at point: NSPoint, event: NSEvent) -> Bool {
+    guard let viewModel else { return false }
+    if let selectedID = viewModel.selectedImageID,
+       let selected = viewModel.image(with: selectedID),
+       imageResizeHandleHit(at: point, image: selected) != nil
+    {
+      viewModel.selectImage(id: selectedID)
+      activeImageDrag = ImageDragState(
+        imageID: selectedID,
+        mode: .resize(.bottomRight),
+        startPoint: point,
+        startImage: selected
+      )
+      isDraggingSelection = false
+      return true
+    }
+    if let hit = imageHitTest(at: point) {
+      viewModel.selectImage(id: hit.id)
+      activeImageDrag = ImageDragState(
+        imageID: hit.id,
+        mode: .move,
+        startPoint: point,
+        startImage: hit
+      )
+      isDraggingSelection = false
+      return true
+    }
+    return false
+  }
+
+  private func applyImageDrag(to point: NSPoint) {
+    guard let drag = activeImageDrag, let viewModel else { return }
+    let deltaX = point.x - drag.startPoint.x
+    let deltaY = point.y - drag.startPoint.y
+    let startRect = imageRect(for: drag.startImage)
+    switch drag.mode {
+    case .move:
+      let placement = placementForImageTopLeft(
+        x: startRect.minX + deltaX,
+        y: startRect.minY + deltaY
+      )
+      viewModel.setImagePlacement(
+        id: drag.imageID,
+        anchorRow: placement.row,
+        anchorCol: placement.col,
+        rowOffsetEMU: placement.rowOffsetEMU,
+        colOffsetEMU: placement.colOffsetEMU
+      )
+    case .resize(.bottomRight):
+      let newWidth = max(12, startRect.width + deltaX)
+      let newHeight = max(12, startRect.height + deltaY)
+      viewModel.setImagePlacement(
+        id: drag.imageID,
+        anchorRow: drag.startImage.anchorRow,
+        anchorCol: drag.startImage.anchorCol,
+        rowOffsetEMU: drag.startImage.rowOffsetEMU,
+        colOffsetEMU: drag.startImage.colOffsetEMU,
+        widthEMU: SheetImage.emu(fromPoints: newWidth),
+        heightEMU: SheetImage.emu(fromPoints: newHeight)
+      )
+    }
+    needsDisplay = true
+  }
+
+  private func finishImageDragIfNeeded() {
+    guard let drag = activeImageDrag, let viewModel else {
+      activeImageDrag = nil
+      return
+    }
+    viewModel.commitImagePlacement(id: drag.imageID, before: drag.startImage)
+    activeImageDrag = nil
   }
 
   private func drawCells(in dirtyRect: NSRect) {
@@ -2070,6 +2243,12 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
+    if handleImageMouseDown(at: point, event: event) {
+      needsDisplay = true
+      return
+    }
+    viewModel?.selectImage(id: nil)
+
     let rawAddress = addressAtContent(point: point)
     let address = viewModel?.activeSheet.mergeAnchor(for: rawAddress) ?? rawAddress
     if rowHeight(at: address.row) <= 0 {
@@ -2228,6 +2407,11 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
+    if activeImageDrag != nil {
+      applyImageDrag(to: point)
+      return
+    }
+
     if let headerDrag {
       switch headerDrag {
       case .columns(let anchor):
@@ -2283,6 +2467,11 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func mouseUp(with event: NSEvent) {
+    if activeImageDrag != nil {
+      finishImageDragIfNeeded()
+      needsDisplay = true
+    }
+
     if isDraggingFill, let viewModel, let source = fillSourceRange {
       let point = convert(event.locationInWindow, from: nil)
       let clamped = NSPoint(
@@ -2614,6 +2803,13 @@ final class SpreadsheetGridNSView: NSView {
     }
 
     switch event.keyCode {
+    case 51, 117:
+      if viewModel.selectedImageID != nil {
+        viewModel.deleteSelectedImage()
+        needsDisplay = true
+        return
+      }
+      viewModel.clearSelection()
     case 123: viewModel.moveSelection(rowDelta: 0, colDelta: -1, extending: event.modifierFlags.contains(.shift))
     case 124: viewModel.moveSelection(rowDelta: 0, colDelta: 1, extending: event.modifierFlags.contains(.shift))
     case 125: viewModel.moveSelection(rowDelta: 1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
@@ -2625,8 +2821,6 @@ final class SpreadsheetGridNSView: NSView {
       return
     case 48:
       viewModel.moveSelection(rowDelta: 0, colDelta: event.modifierFlags.contains(.shift) ? -1 : 1, extending: event.modifierFlags.contains(.shift))
-    case 51, 117:
-      viewModel.clearSelection()
     default:
       if let chars = event.characters, chars.count == 1, let scalar = chars.unicodeScalars.first {
         let isPrintable = CharacterSet.alphanumerics.contains(scalar)

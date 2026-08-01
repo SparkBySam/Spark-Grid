@@ -34,6 +34,8 @@ final class SpreadsheetViewModel {
   private(set) var selectionRevision = 0
   /// Bumped when find/navigation wants the grid to scroll the selection into view.
   var scrollRequestToken = 0
+  /// Selected embedded picture on the active sheet, if any.
+  var selectedImageID: UUID?
 
   // MARK: - Find / Replace
   var isFindBarVisible = false

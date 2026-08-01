@@ -146,6 +146,22 @@ enum SheetStructureMutation {
       }
       return next
     }
+    sheet.images = sheet.images.compactMap { image in
+      var next = image
+      switch axis {
+      case .row:
+        guard let anchor = shiftIndex(image.anchorRow, index: index, delta: delta, deleteCount: deleteCount) else {
+          return nil
+        }
+        next.anchorRow = anchor
+      case .column:
+        guard let anchor = shiftIndex(image.anchorCol, index: index, delta: delta, deleteCount: deleteCount) else {
+          return nil
+        }
+        next.anchorCol = anchor
+      }
+      return next
+    }
   }
 
   private static func shiftRange(

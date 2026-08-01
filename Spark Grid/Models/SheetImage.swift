@@ -44,4 +44,8 @@ struct SheetImage: Identifiable, Codable, Equatable, Sendable {
   static func points(fromEMU emu: Int) -> CGFloat {
     CGFloat(emu) / emuPerPoint
   }
+
+  static func emu(fromPoints points: CGFloat) -> Int {
+    Int((points * emuPerPoint).rounded())
+  }
 }
