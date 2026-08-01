@@ -636,7 +636,20 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func updateCursor(for point: NSPoint) {
+    if activeImageDrag != nil {
+      switch activeImageDrag?.mode {
+      case .resize:
+        NSCursor.crosshair.set()
+      default:
+        NSCursor.closedHand.set()
+      }
+      return
+    }
     guard activeResize == nil else { return }
+    if let imageCursor = imageCursor(at: point) {
+      imageCursor.set()
+      return
+    }
     if isPointInFillHandle(point) {
       NSCursor.crosshair.set()
       return
@@ -702,6 +715,18 @@ final class SpreadsheetGridNSView: NSView {
         if topHandle.maxY > headerSize {
           addCursorRect(topHandle, cursor: .resizeUpDown)
         }
+      }
+    }
+
+    if let sheet = viewModel?.activeSheet {
+      let selectedID = viewModel?.selectedImageID
+      for image in sheet.images {
+        let rect = imageRect(for: image)
+        guard rect.intersects(contentRect) else { continue }
+        if image.id == selectedID {
+          addCursorRect(imageResizeHandleRect(for: rect), cursor: .crosshair)
+        }
+        addCursorRect(rect, cursor: .openHand)
       }
     }
   }
@@ -1309,14 +1334,33 @@ final class SpreadsheetGridNSView: NSView {
     let border = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
     border.lineWidth = 2
     border.stroke()
-    let handle = NSRect(
-      x: rect.maxX - 6,
-      y: rect.maxY - 6,
-      width: 8,
-      height: 8
-    )
-    accent.setFill()
+    let handle = imageResizeHandleRect(for: rect)
+    NSColor.windowBackgroundColor.setFill()
     handle.fill()
+    accent.setStroke()
+    let handleBorder = NSBezierPath(rect: handle.insetBy(dx: 0.5, dy: 0.5))
+    handleBorder.lineWidth = 1
+    handleBorder.stroke()
+  }
+
+  private func imageResizeHandleRect(for imageRect: NSRect) -> NSRect {
+    NSRect(x: imageRect.maxX - 7, y: imageRect.maxY - 7, width: 14, height: 14)
+  }
+
+  private func imageCursor(at point: NSPoint) -> NSCursor? {
+    guard let viewModel else { return nil }
+    if let selected = viewModel.selectedImageID.flatMap({ viewModel.image(with: $0) }) {
+      if imageResizeHandleRect(for: imageRect(for: selected)).contains(point) {
+        return .crosshair
+      }
+      if imageRect(for: selected).contains(point) {
+        return activeImageDrag != nil ? .closedHand : .openHand
+      }
+    }
+    if let hit = imageHitTest(at: point) {
+      return activeImageDrag?.imageID == hit.id ? .closedHand : .openHand
+    }
+    return nil
   }
 
   private func imageHitTest(at point: NSPoint) -> SheetImage? {
@@ -1329,8 +1373,7 @@ final class SpreadsheetGridNSView: NSView {
 
   private func imageResizeHandleHit(at point: NSPoint, image: SheetImage) -> ImageResizeCorner? {
     let rect = imageRect(for: image)
-    let handle = NSRect(x: rect.maxX - 8, y: rect.maxY - 8, width: 12, height: 12)
-    return handle.contains(point) ? .bottomRight : nil
+    return imageResizeHandleRect(for: rect).contains(point) ? .bottomRight : nil
   }
 
   private func normalizeImagePlacement(
@@ -2409,6 +2452,7 @@ final class SpreadsheetGridNSView: NSView {
 
     if activeImageDrag != nil {
       applyImageDrag(to: point)
+      updateCursor(for: point)
       return
     }
 
