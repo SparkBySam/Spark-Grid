@@ -49,6 +49,8 @@ enum BugBashRunner {
     results.append(dataBarRoundTrip())
     results.append(excelChartParts())
     results.append(imageImport())
+    results.append(chartPreviewSeries())
+    results.append(MainActor.assumeIsolated { insertPictureModel() })
     results.append(worksheetElementOrder())
     results.append(enterpriseFilterImport())
     results.append(MainActor.assumeIsolated { findScopePersistsAfterJump() })
@@ -226,6 +228,53 @@ enum BugBashRunner {
     } catch {
       return Result(name: "image round-trip", passed: true, detail: "synthetic ok; desktop: \(error.localizedDescription)")
     }
+  }
+
+  private static func chartPreviewSeries() -> Result {
+    let range = CellRange(
+      start: CellAddress(row: 1, col: 1),
+      end: CellAddress(row: 4, col: 1)
+    )
+    let points = ChartPreviewSeries.points(
+      in: range,
+      labelFor: { "Row \($0.row)" },
+      numberFor: { Double($0.row) }
+    )
+    guard points.count == 4, points[0].label == "Row 1", points[0].value == 1 else {
+      return Result(name: "chart preview series", passed: false, detail: "\(points)")
+    }
+    return Result(name: "chart preview series", passed: true, detail: "single-column ok")
+  }
+
+  @MainActor
+  private static func insertPictureModel() -> Result {
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Test")]))
+    vm.selectRange(from: CellAddress(row: 2, col: 2), to: CellAddress(row: 2, col: 2))
+    guard let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 4,
+      pixelsHigh: 4,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ),
+      let png = rep.representation(using: .png, properties: [:])
+    else {
+      return Result(name: "insert picture", passed: false, detail: "png setup failed")
+    }
+    vm.insertImage(data: png, contentType: "image/png")
+    guard vm.activeSheet.images.count == 1,
+          vm.activeSheet.images[0].anchorRow == 2,
+          vm.activeSheet.images[0].anchorCol == 2,
+          vm.selectedImageID == vm.activeSheet.images[0].id
+    else {
+      return Result(name: "insert picture", passed: false, detail: "image not placed at selection")
+    }
+    return Result(name: "insert picture", passed: true, detail: "anchored at selection")
   }
 
   private static func dataBarRoundTrip() -> Result {

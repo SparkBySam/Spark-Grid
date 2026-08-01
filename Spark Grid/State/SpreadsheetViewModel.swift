@@ -1722,6 +1722,10 @@ final class SpreadsheetViewModel {
   }
 
   func pasteFromPasteboard() {
+    if pasteImageFromPasteboard() {
+      syncEditTextFromSelection()
+      return
+    }
     guard let text = NSPasteboard.general.string(forType: .string) else { return }
     let grid = SpreadsheetClipboard.parseGrid(text)
     if grid.isEmpty {

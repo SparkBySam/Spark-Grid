@@ -1,6 +1,76 @@
+import AppKit
 import Foundation
 
 extension SpreadsheetViewModel {
+  func insertImageFromFile(url: URL) {
+    guard let data = try? Data(contentsOf: url) else { return }
+    let contentType = Self.contentType(forPathExtension: url.pathExtension)
+    insertImage(data: data, contentType: contentType)
+  }
+
+  @discardableResult
+  func pasteImageFromPasteboard() -> Bool {
+    let pasteboard = NSPasteboard.general
+    if let png = pasteboard.data(forType: .png) {
+      insertImage(data: png, contentType: "image/png")
+      return true
+    }
+    if let jpeg = pasteboard.data(forType: NSPasteboard.PasteboardType("public.jpeg")) {
+      insertImage(data: jpeg, contentType: "image/jpeg")
+      return true
+    }
+    if let tiff = pasteboard.data(forType: .tiff),
+       let rep = NSBitmapImageRep(data: tiff),
+       let png = rep.representation(using: .png, properties: [:])
+    {
+      insertImage(data: png, contentType: "image/png")
+      return true
+    }
+    return false
+  }
+
+  func insertImage(data: Data, contentType: String, at anchor: CellAddress? = nil) {
+    commitEditIfNeeded()
+    let placement = anchor ?? selectionAnchor
+    let (widthEMU, heightEMU) = Self.defaultImageEMUSize(for: data)
+    let image = SheetImage(
+      anchorRow: placement.row,
+      anchorCol: placement.col,
+      widthEMU: widthEMU,
+      heightEMU: heightEMU,
+      imageData: data,
+      contentType: contentType
+    )
+    var sheet = activeSheet
+    let before = sheet.images
+    sheet.images.append(image)
+    applyImages(sheet.images, undoBefore: before, actionName: "Insert Picture")
+    selectedImageID = image.id
+  }
+
+  private static func defaultImageEMUSize(for data: Data) -> (Int, Int) {
+    let defaultWidth = Workbook.defaultColumnWidth * 4
+    let defaultHeight = Workbook.defaultRowHeight * 3
+    guard let image = NSImage(data: data), image.size.width > 1, image.size.height > 1 else {
+      return (
+        SheetImage.emu(fromPoints: defaultWidth),
+        SheetImage.emu(fromPoints: defaultHeight)
+      )
+    }
+    let aspect = image.size.height / image.size.width
+    let width = defaultWidth
+    let height = max(Workbook.defaultRowHeight, width * aspect)
+    return (SheetImage.emu(fromPoints: width), SheetImage.emu(fromPoints: height))
+  }
+
+  private static func contentType(forPathExtension ext: String) -> String {
+    switch ext.lowercased() {
+    case "jpg", "jpeg": return "image/jpeg"
+    case "gif": return "image/gif"
+    default: return "image/png"
+    }
+  }
+
   func selectImage(id: UUID?) {
     guard selectedImageID != id else { return }
     selectedImageID = id
@@ -46,6 +116,20 @@ extension SpreadsheetViewModel {
   func deleteSelectedImage() {
     guard let id = selectedImageID else { return }
     deleteImage(id: id)
+  }
+
+  @discardableResult
+  func copySelectedImageToPasteboard() -> Bool {
+    guard let id = selectedImageID, let image = image(with: id) else { return false }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    let type = NSPasteboard.PasteboardType(image.contentType)
+    return pasteboard.setData(image.imageData, forType: type)
+  }
+
+  func cutSelectedImage() {
+    guard copySelectedImageToPasteboard() else { return }
+    deleteSelectedImage()
   }
 
   func deleteImage(id: UUID) {

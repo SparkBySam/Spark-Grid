@@ -3,8 +3,40 @@ import SwiftUI
 struct AutosaveStatusView: View {
   @Bindable var store: SpreadsheetDocumentStore
   @Bindable private var settings = AppSettings.shared
+  @State private var showSettings = false
 
   var body: some View {
+    Button {
+      showSettings.toggle()
+    } label: {
+      statusIcon
+    }
+    .buttonStyle(.plain)
+    .help(helpText)
+    .popover(isPresented: $showSettings, arrowEdge: .bottom) {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Autosave")
+          .font(.headline)
+        Toggle("Enable autosave", isOn: $settings.autosaveEnabled)
+        if settings.autosaveEnabled {
+          Picker("Save interval", selection: $settings.autosaveIntervalSeconds) {
+            ForEach(AppSettings.autosaveIntervalOptions, id: \.self) { seconds in
+              Text(AppSettings.label(forInterval: seconds)).tag(seconds)
+            }
+          }
+        }
+        Text(helpText)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(14)
+      .frame(width: 260)
+    }
+  }
+
+  @ViewBuilder
+  private var statusIcon: some View {
     Group {
       if !settings.autosaveEnabled {
         Image(systemName: "icloud.slash")
@@ -26,12 +58,11 @@ struct AutosaveStatusView: View {
       }
     }
     .frame(width: 20, height: 20)
-    .help(helpText)
   }
 
   private var helpText: String {
     if !settings.autosaveEnabled {
-      return "Autosave is off"
+      return "Autosave is off — click for settings"
     }
     if store.isAutosaving {
       return "Autosaving…"

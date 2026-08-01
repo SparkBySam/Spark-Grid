@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SpreadsheetStructureCommands: Commands {
   @FocusedValue(\.spreadsheetViewModel) private var focusedViewModel: SpreadsheetViewModel?
@@ -78,6 +79,13 @@ struct SpreadsheetStructureCommands: Commands {
     }
 
     CommandMenu("Insert") {
+      Button("Picture…") {
+        Self.insertPicture(viewModel: viewModel)
+      }
+      .disabled(viewModel == nil)
+
+      Divider()
+
       Menu("Chart") {
         Button("Bar Chart") { viewModel?.insertChart(kind: .bar) }
         Button("Line Chart") { viewModel?.insertChart(kind: .line) }
@@ -92,6 +100,17 @@ struct SpreadsheetStructureCommands: Commands {
       }
       .keyboardShortcut("p", modifiers: .command)
     }
+  }
+
+  private static func insertPicture(viewModel: SpreadsheetViewModel?) {
+    guard let viewModel else { return }
+    let panel = NSOpenPanel()
+    panel.title = "Insert Picture"
+    panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    viewModel.insertImageFromFile(url: url)
   }
 
   private static func promptDefineNamedRange(viewModel: SpreadsheetViewModel?) {

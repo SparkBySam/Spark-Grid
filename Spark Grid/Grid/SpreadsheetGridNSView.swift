@@ -743,7 +743,6 @@ final class SpreadsheetGridNSView: NSView {
       ctx.saveGraphicsState()
       NSBezierPath(rect: contentRect).addClip()
       drawCells(in: dirtyRect)
-      drawImages(in: dirtyRect)
       if !skipGridlines {
         drawGridLines(in: dirtyRect)
       }
@@ -763,6 +762,14 @@ final class SpreadsheetGridNSView: NSView {
         }
         ctx.restoreGraphicsState()
       }
+    }
+
+    // Pictures float above cell fills and gridlines (scrollable + frozen).
+    if let ctx = NSGraphicsContext.current {
+      ctx.saveGraphicsState()
+      NSBezierPath(rect: contentRect).addClip()
+      drawImages(in: dirtyRect)
+      ctx.restoreGraphicsState()
     }
 
     // 2.5 Opaque header gutters so scrolled cells cannot bleed into labels.
@@ -2563,6 +2570,12 @@ final class SpreadsheetGridNSView: NSView {
   override func menu(for event: NSEvent) -> NSMenu? {
     let point = convert(event.locationInWindow, from: nil)
 
+    if let viewModel, contentRect.contains(point), let hit = imageHitTest(at: point) {
+      viewModel.selectImage(id: hit.id)
+      needsDisplay = true
+      return imageContextMenu()
+    }
+
     if let viewModel {
       switch headerHit(at: point) {
       case .row(let row):
@@ -2572,6 +2585,7 @@ final class SpreadsheetGridNSView: NSView {
         viewModel.selectColumn(col)
         needsDisplay = true
       case .content:
+        viewModel.selectImage(id: nil)
         let address = addressAtContent(point: point)
         if !viewModel.isAddressSelected(address) {
           viewModel.selectRange(from: address, to: address)
@@ -2593,6 +2607,19 @@ final class SpreadsheetGridNSView: NSView {
     addPrimaryContextActions(to: menu)
     menu.addItem(.separator())
     addStructureSubmenus(to: menu)
+    return menu
+  }
+
+  private func imageContextMenu() -> NSMenu {
+    let menu = NSMenu()
+    let cut = menu.addItem(withTitle: "Cut", action: #selector(handleMenuCutImage(_:)), keyEquivalent: "")
+    cut.target = self
+    let copy = menu.addItem(withTitle: "Copy", action: #selector(handleMenuCopyImage(_:)), keyEquivalent: "")
+    copy.target = self
+    let paste = menu.addItem(withTitle: "Paste", action: #selector(handleMenuPaste(_:)), keyEquivalent: "")
+    paste.target = self
+    menu.addItem(.separator())
+    addMenuItem(menu, "Delete Picture", #selector(handleMenuDeleteImage(_:)))
     return menu
   }
 
@@ -2693,6 +2720,20 @@ final class SpreadsheetGridNSView: NSView {
 
   @objc private func handleMenuPaste(_ sender: Any?) {
     viewModel?.pasteFromPasteboard()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuCutImage(_ sender: Any?) {
+    viewModel?.cutSelectedImage()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuCopyImage(_ sender: Any?) {
+    viewModel?.copySelectedImageToPasteboard()
+  }
+
+  @objc private func handleMenuDeleteImage(_ sender: Any?) {
+    viewModel?.deleteSelectedImage()
     syncDisplay()
   }
 

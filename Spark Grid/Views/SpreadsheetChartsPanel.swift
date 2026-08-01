@@ -124,6 +124,24 @@ struct SheetChartView: View {
   @State private var cachedToken = ""
 
   var body: some View {
+    Group {
+      if cachedPoints.isEmpty {
+        Text("No numeric data in range")
+          .font(.system(size: 11))
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        chartBody
+      }
+    }
+    .onAppear { refreshPoints() }
+    .onChange(of: cacheToken) { _, _ in
+      refreshPoints()
+    }
+  }
+
+  @ViewBuilder
+  private var chartBody: some View {
     Chart(cachedPoints) { point in
       switch chart.kind {
       case .bar:
@@ -156,10 +174,6 @@ struct SheetChartView: View {
         AxisValueLabel()
       }
     }
-    .onAppear { refreshPoints() }
-    .onChange(of: cacheToken) { _, _ in
-      refreshPoints()
-    }
   }
 
   private var cacheToken: String {
@@ -175,31 +189,10 @@ struct SheetChartView: View {
   }
 
   private static func computePoints(chart: SheetChart, viewModel: SpreadsheetViewModel) -> [Point] {
-    let n = chart.dataRange.normalized
-    var result: [Point] = []
-    let labelCol = n.minCol
-    let valueCol = min(n.maxCol, n.minCol + 1)
-    let startRow = n.minRow == n.maxRow ? n.minRow : n.minRow + 1
-    for (index, row) in (startRow...n.maxRow).enumerated() {
-      let labelAddress = CellAddress(row: row, col: labelCol)
-      let valueAddress = CellAddress(row: row, col: valueCol)
-      let label = viewModel.displayString(at: labelAddress)
-      let value = viewModel.displayValue(at: valueAddress).asNumber
-        ?? viewModel.displayValue(at: labelAddress).asNumber
-      guard let value else { continue }
-      let displayLabel = label.isEmpty ? "\(index + 1)" : label
-      result.append(Point(id: index, label: displayLabel, value: value))
-    }
-    if result.isEmpty {
-      for (index, row) in (n.minRow...n.maxRow).enumerated() {
-        for col in n.minCol...n.maxCol {
-          if let value = viewModel.displayValue(at: CellAddress(row: row, col: col)).asNumber {
-            result.append(Point(id: result.count, label: "\(index + 1)", value: value))
-            break
-          }
-        }
-      }
-    }
-    return result
+    ChartPreviewSeries.points(
+      in: chart.dataRange,
+      labelFor: { viewModel.displayString(at: $0) },
+      numberFor: { viewModel.displayValue(at: $0).asNumber }
+    ).map { Point(id: $0.id, label: $0.label, value: $0.value) }
   }
 }
