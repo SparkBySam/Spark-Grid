@@ -71,10 +71,41 @@ extension SpreadsheetViewModel {
     }
   }
 
-  func selectImage(id: UUID?) {
+  func selectImage(id: UUID?, bringToFront: Bool = false) {
+    if let id, bringToFront {
+      reorderImage(id: id, toFront: true, recordUndo: false)
+    }
     guard selectedImageID != id else { return }
     selectedImageID = id
     notifyGridRefresh()
+  }
+
+  func bringSelectedImageToFront() {
+    guard let id = selectedImageID else { return }
+    reorderImage(id: id, toFront: true, recordUndo: true, actionName: "Bring Picture to Front")
+  }
+
+  func sendSelectedImageToBack() {
+    guard let id = selectedImageID else { return }
+    reorderImage(id: id, toFront: false, recordUndo: true, actionName: "Send Picture to Back")
+  }
+
+  private func reorderImage(id: UUID, toFront: Bool, recordUndo: Bool, actionName: String = "Reorder Picture") {
+    var sheet = activeSheet
+    guard let index = sheet.images.firstIndex(where: { $0.id == id }) else { return }
+    let before = sheet.images
+    let image = sheet.images.remove(at: index)
+    if toFront {
+      sheet.images.append(image)
+    } else {
+      sheet.images.insert(image, at: 0)
+    }
+    if recordUndo {
+      applyImages(sheet.images, undoBefore: before, actionName: actionName)
+    } else {
+      setActiveSheetPreservingFormulas(sheet)
+      notifyGridRefresh()
+    }
   }
 
   func image(with id: UUID) -> SheetImage? {

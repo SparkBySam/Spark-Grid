@@ -2,6 +2,8 @@ import Foundation
 
 /// Infers label/value pairs for chart sidebar previews from an arbitrary selection shape.
 enum ChartPreviewSeries {
+  static let maxPreviewPoints = 24
+
   struct Point: Identifiable {
     let id: Int
     let label: String
@@ -9,6 +11,23 @@ enum ChartPreviewSeries {
   }
 
   static func points(
+    in range: CellRange,
+    labelFor: (CellAddress) -> String,
+    numberFor: (CellAddress) -> Double?
+  ) -> [Point] {
+    series(in: range, labelFor: labelFor, numberFor: numberFor).points
+  }
+
+  static func series(
+    in range: CellRange,
+    labelFor: (CellAddress) -> String,
+    numberFor: (CellAddress) -> Double?
+  ) -> (points: [Point], totalCount: Int) {
+    let uncapped = uncappedPoints(in: range, labelFor: labelFor, numberFor: numberFor)
+    return (capped(uncapped), uncapped.count)
+  }
+
+  private static func uncappedPoints(
     in range: CellRange,
     labelFor: (CellAddress) -> String,
     numberFor: (CellAddress) -> Double?
@@ -57,6 +76,11 @@ enum ChartPreviewSeries {
       index += 1
     }
     return result
+  }
+
+  private static func capped(_ points: [Point]) -> [Point] {
+    guard points.count > maxPreviewPoints else { return points }
+    return Array(points.prefix(maxPreviewPoints))
   }
 
   private static func seriesFromSingleColumn(

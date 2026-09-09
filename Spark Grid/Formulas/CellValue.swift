@@ -113,6 +113,21 @@ nonisolated enum CellValue: Equatable, Sendable {
     }
   }
 
+  /// Numeric value for chart previews — blanks and empty text are omitted, not treated as zero.
+  var asChartNumber: Double? {
+    switch self {
+    case .number(let n): return n
+    case .bool(let b): return b ? 1 : 0
+    case .blank: return nil
+    case .string(let s):
+      let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+      if trimmed.isEmpty { return nil }
+      return Double(trimmed.replacingOccurrences(of: ",", with: ""))
+    case .error:
+      return nil
+    }
+  }
+
   var asBool: Bool? {
     switch self {
     case .bool(let b): return b

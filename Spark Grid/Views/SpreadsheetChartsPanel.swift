@@ -6,7 +6,7 @@ struct SpreadsheetChartsPanel: View {
   @Bindable var viewModel: SpreadsheetViewModel
   @Binding var isCollapsed: Bool
 
-  private let expandedWidth: CGFloat = 280
+  private let expandedWidth: CGFloat = 320
   private let collapsedWidth: CGFloat = 28
 
   var body: some View {
@@ -79,34 +79,44 @@ struct SpreadsheetChartsPanel: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 10) {
           ForEach(charts) { chart in
-            VStack(alignment: .leading, spacing: 6) {
-              HStack(spacing: 6) {
-                Text(chart.title)
-                  .font(.system(size: 12, weight: .semibold))
-                  .lineLimit(1)
-                Spacer(minLength: 0)
-                Button {
-                  viewModel.removeChart(id: chart.id)
-                } label: {
-                  Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Delete chart")
-              }
-              SheetChartView(chart: chart, viewModel: viewModel)
-                .frame(height: 140)
-            }
-            .padding(8)
-            .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+            chartCard(chart)
           }
         }
         .padding(10)
       }
     }
+  }
+
+  private func chartCard(_ chart: SheetChart) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(chart.title)
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+          Text(chart.dataRange.a1Description)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+        Button {
+          viewModel.removeChart(id: chart.id)
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 20, height: 20)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Delete chart")
+      }
+      SheetChartView(chart: chart, viewModel: viewModel)
+        .frame(height: 200)
+    }
+    .padding(8)
+    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
   }
 }
 
@@ -121,6 +131,7 @@ struct SheetChartView: View {
   }
 
   @State private var cachedPoints: [Point] = []
+  @State private var cachedTotalCount = 0
   @State private var cachedToken = ""
 
   var body: some View {
@@ -131,7 +142,14 @@ struct SheetChartView: View {
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
-        chartBody
+        VStack(alignment: .leading, spacing: 4) {
+          chartBody
+          if cachedTotalCount > ChartPreviewSeries.maxPreviewPoints {
+            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(cachedTotalCount) values")
+              .font(.system(size: 9))
+              .foregroundStyle(.tertiary)
+          }
+        }
       }
     }
     .onAppear { refreshPoints() }
@@ -146,33 +164,62 @@ struct SheetChartView: View {
       switch chart.kind {
       case .bar:
         BarMark(
-          x: .value("Label", point.label),
+          x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
+        .foregroundStyle(Color.accentColor.gradient)
       case .line:
         LineMark(
-          x: .value("Label", point.label),
+          x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
+        .foregroundStyle(Color.accentColor)
         PointMark(
-          x: .value("Label", point.label),
+          x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
+        .foregroundStyle(Color.accentColor)
       case .area:
         AreaMark(
-          x: .value("Label", point.label),
+          x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
+        .foregroundStyle(Color.accentColor.opacity(0.25).gradient)
         LineMark(
-          x: .value("Label", point.label),
+          x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
+        .foregroundStyle(Color.accentColor)
+      }
+    }
+    .chartYAxis {
+      AxisMarks(position: .leading) { value in
+        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+          .foregroundStyle(Color.secondary.opacity(0.35))
+        AxisValueLabel {
+          if let number = value.as(Double.self) {
+            Text(Self.formatAxisNumber(number))
+              .font(.system(size: 9))
+          }
+        }
       }
     }
     .chartXAxis {
-      AxisMarks(values: .automatic) { _ in
-        AxisValueLabel()
+      AxisMarks(values: .automatic) { value in
+        if let index = value.as(Int.self), let point = cachedPoints.first(where: { $0.id == index }) {
+          AxisValueLabel(centered: true) {
+            Text(Self.truncatedLabel(point.label))
+              .font(.system(size: 9))
+              .rotationEffect(cachedPoints.count > 6 ? .degrees(-45) : .zero)
+          }
+        }
       }
+    }
+    .chartPlotStyle { plot in
+      plot.padding(.top, 6)
+        .padding(.bottom, cachedPoints.count > 6 ? 18 : 4)
+        .padding(.leading, 4)
+        .padding(.trailing, 8)
     }
   }
 
@@ -184,15 +231,50 @@ struct SheetChartView: View {
   private func refreshPoints() {
     let token = cacheToken
     guard token != cachedToken else { return }
-    cachedPoints = Self.computePoints(chart: chart, viewModel: viewModel)
+    let computed = Self.computePoints(chart: chart, viewModel: viewModel)
+    cachedTotalCount = computed.totalCount
+    cachedPoints = computed.points
     cachedToken = token
   }
 
-  private static func computePoints(chart: SheetChart, viewModel: SpreadsheetViewModel) -> [Point] {
-    ChartPreviewSeries.points(
+  private static func computePoints(
+    chart: SheetChart,
+    viewModel: SpreadsheetViewModel
+  ) -> (points: [Point], totalCount: Int) {
+    let all = ChartPreviewSeries.series(
       in: chart.dataRange,
       labelFor: { viewModel.displayString(at: $0) },
-      numberFor: { viewModel.displayValue(at: $0).asNumber }
-    ).map { Point(id: $0.id, label: $0.label, value: $0.value) }
+      numberFor: { viewModel.displayValue(at: $0).asChartNumber }
+    )
+    let points = all.points.map { Point(id: $0.id, label: $0.label, value: $0.value) }
+    return (points, all.totalCount)
+  }
+
+  private static func formatAxisNumber(_ value: Double) -> String {
+    let absValue = abs(value)
+    if absValue >= 1_000_000 {
+      return String(format: "%.1fM", value / 1_000_000)
+    }
+    if absValue >= 10_000 {
+      return String(format: "%.0fK", value / 1_000)
+    }
+    if value.rounded() == value, absValue < 1e9 {
+      return String(Int(value))
+    }
+    return String(format: "%.1g", value)
+  }
+
+  private static func truncatedLabel(_ label: String) -> String {
+    guard label.count > 10 else { return label }
+    return String(label.prefix(9)) + "…"
+  }
+}
+
+private extension CellRange {
+  var a1Description: String {
+    let n = normalized
+    let start = CellAddress(row: n.minRow, col: n.minCol).a1
+    let end = CellAddress(row: n.maxRow, col: n.maxCol).a1
+    return start == end ? start : "\(start):\(end)"
   }
 }

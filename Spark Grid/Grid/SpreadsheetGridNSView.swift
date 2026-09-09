@@ -75,6 +75,19 @@ final class SpreadsheetGridNSView: NSView {
 
   private var activeResize: ResizeTarget?
 
+  private enum AutoscrollDragKind {
+    case selection
+    case fill(CellRange)
+    case headerColumns(Int)
+    case headerRows(Int)
+  }
+
+  private var autoscrollTimer: Timer?
+  private var autoscrollLastPoint: NSPoint = .zero
+  private var autoscrollDragKind: AutoscrollDragKind?
+  private let autoscrollMargin: CGFloat = 24
+  private let autoscrollStep: CGFloat = 14
+
   private enum HeaderHit {
     case corner
     case column(Int)
@@ -515,19 +528,99 @@ final class SpreadsheetGridNSView: NSView {
 
   private func ensureSelectionVisible() {
     guard let viewModel else { return }
-    let anchor = rectForCell(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
+    ensureCellVisible(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
+    ensureCellVisible(row: viewModel.selectionEnd.row, col: viewModel.selectionEnd.col)
+  }
+
+  private func ensureCellVisible(row: Int, col: Int) {
+    let cellRect = rectForCell(row: row, col: col)
     let visible = contentRect
-    if anchor.minX < visible.minX {
-      scrollOrigin.x -= visible.minX - anchor.minX
-    } else if anchor.maxX > visible.maxX {
-      scrollOrigin.x += anchor.maxX - visible.maxX
+    if cellRect.minX < visible.minX {
+      scrollOrigin.x -= visible.minX - cellRect.minX
+    } else if cellRect.maxX > visible.maxX {
+      scrollOrigin.x += cellRect.maxX - visible.maxX
     }
-    if anchor.minY < visible.minY {
-      scrollOrigin.y -= visible.minY - anchor.minY
-    } else if anchor.maxY > visible.maxY {
-      scrollOrigin.y += anchor.maxY - visible.maxY
+    if cellRect.minY < visible.minY {
+      scrollOrigin.y -= visible.minY - cellRect.minY
+    } else if cellRect.maxY > visible.maxY {
+      scrollOrigin.y += cellRect.maxY - visible.maxY
     }
     clampScrollOrigin()
+  }
+
+  private func addressAtDragPoint(_ point: NSPoint) -> CellAddress {
+    let x = max(headerSize, min(point.x, bounds.width - 1))
+    let y = max(headerSize, min(point.y, bounds.height - 1))
+    return addressAtContent(point: NSPoint(x: x, y: y))
+  }
+
+  private func autoscrollDelta(for point: NSPoint) -> CGPoint {
+    var delta = CGPoint.zero
+    if point.x > contentRect.maxX - autoscrollMargin {
+      delta.x = autoscrollStep
+    } else if point.x < contentRect.minX + autoscrollMargin {
+      delta.x = -autoscrollStep
+    }
+    if point.y > contentRect.maxY - autoscrollMargin {
+      delta.y = autoscrollStep
+    } else if point.y < contentRect.minY + autoscrollMargin {
+      delta.y = -autoscrollStep
+    }
+    return delta
+  }
+
+  private func updateAutoscrollTimer(at point: NSPoint, kind: AutoscrollDragKind) {
+    autoscrollLastPoint = point
+    autoscrollDragKind = kind
+    let delta = autoscrollDelta(for: point)
+    if delta == .zero {
+      stopAutoscrollTimer()
+      return
+    }
+    guard autoscrollTimer == nil else { return }
+    autoscrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+      self?.autoscrollTick()
+    }
+  }
+
+  private func stopAutoscrollTimer() {
+    autoscrollTimer?.invalidate()
+    autoscrollTimer = nil
+    autoscrollDragKind = nil
+  }
+
+  private func autoscrollTick() {
+    guard let kind = autoscrollDragKind else { return }
+    let delta = autoscrollDelta(for: autoscrollLastPoint)
+    guard delta != .zero else { return }
+    scrollOrigin.x += delta.x
+    scrollOrigin.y += delta.y
+    clampScrollOrigin()
+    applyAutoscrollDrag(kind: kind, at: autoscrollLastPoint)
+    updateEditorFrame()
+    needsDisplay = true
+  }
+
+  private func applyAutoscrollDrag(kind: AutoscrollDragKind, at point: NSPoint) {
+    guard let viewModel else { return }
+    switch kind {
+    case .selection:
+      viewModel.extendSelection(to: addressAtDragPoint(point))
+    case .fill(let source):
+      let end = addressAtDragPoint(point)
+      let normalized = source.normalized
+      let fillEnd = CellAddress(
+        row: max(normalized.maxRow, end.row),
+        col: max(normalized.maxCol, end.col)
+      )
+      viewModel.extendSelection(to: fillEnd)
+    case .headerColumns(let anchor):
+      let col = addressAtDragPoint(point).col
+      viewModel.selectColumns(from: anchor, to: col)
+    case .headerRows(let anchor):
+      let row = addressAtDragPoint(point).row
+      viewModel.selectRows(from: anchor, to: row)
+    }
   }
 
   private func headerHit(at point: NSPoint) -> HeaderHit {
@@ -1439,7 +1532,7 @@ final class SpreadsheetGridNSView: NSView {
        let selected = viewModel.image(with: selectedID),
        imageResizeHandleHit(at: point, image: selected) != nil
     {
-      viewModel.selectImage(id: selectedID)
+      viewModel.selectImage(id: selectedID, bringToFront: true)
       activeImageDrag = ImageDragState(
         imageID: selectedID,
         mode: .resize(.bottomRight),
@@ -1450,7 +1543,7 @@ final class SpreadsheetGridNSView: NSView {
       return true
     }
     if let hit = imageHitTest(at: point) {
-      viewModel.selectImage(id: hit.id)
+      viewModel.selectImage(id: hit.id, bringToFront: true)
       activeImageDrag = ImageDragState(
         imageID: hit.id,
         mode: .move,
@@ -1482,8 +1575,12 @@ final class SpreadsheetGridNSView: NSView {
         colOffsetEMU: placement.colOffsetEMU
       )
     case .resize(.bottomRight):
-      let newWidth = max(12, startRect.width + deltaX)
-      let newHeight = max(12, startRect.height + deltaY)
+      let startAspect = startRect.height / max(startRect.width, 1)
+      var newWidth = max(12, startRect.width + deltaX)
+      var newHeight = max(12, startRect.height + deltaY)
+      if !NSEvent.modifierFlags.contains(.shift) {
+        newHeight = max(12, newWidth * startAspect)
+      }
       viewModel.setImagePlacement(
         id: drag.imageID,
         anchorRow: drag.startImage.anchorRow,
@@ -2313,6 +2410,7 @@ final class SpreadsheetGridNSView: NSView {
     }
     if event.modifierFlags.contains(.command) {
       viewModel?.commandClickCell(address)
+      isDraggingSelection = true
       needsDisplay = true
       return
     }
@@ -2466,70 +2564,47 @@ final class SpreadsheetGridNSView: NSView {
     if let headerDrag {
       switch headerDrag {
       case .columns(let anchor):
-        let col: Int
-        if point.y < headerSize, point.x >= headerSize {
-          col = columnAtContent(x: max(headerSize, min(point.x, bounds.width - 1)))
-        } else if contentRect.contains(point) {
-          col = addressAtContent(point: point).col
-        } else {
-          col = columnAtContent(x: max(headerSize, min(point.x, bounds.width - 1)))
-        }
-        viewModel?.selectColumns(from: anchor, to: col)
+        viewModel?.selectColumns(from: anchor, to: addressAtDragPoint(point).col)
+        updateAutoscrollTimer(at: point, kind: .headerColumns(anchor))
         needsDisplay = true
         return
       case .rows(let anchor):
-        let row: Int
-        if point.x < headerSize, point.y >= headerSize {
-          row = rowAtContent(y: max(headerSize, min(point.y, bounds.height - 1)))
-        } else if contentRect.contains(point) {
-          row = addressAtContent(point: point).row
-        } else {
-          row = rowAtContent(y: max(headerSize, min(point.y, bounds.height - 1)))
-        }
-        viewModel?.selectRows(from: anchor, to: row)
+        viewModel?.selectRows(from: anchor, to: addressAtDragPoint(point).row)
+        updateAutoscrollTimer(at: point, kind: .headerRows(anchor))
         needsDisplay = true
         return
       }
     }
 
     if isDraggingFill, let viewModel, let source = fillSourceRange {
-      let clamped = NSPoint(
-        x: max(contentRect.minX, min(point.x, contentRect.maxX - 1)),
-        y: max(contentRect.minY, min(point.y, contentRect.maxY - 1))
-      )
-      let end = addressAtContent(point: clamped)
+      let end = addressAtDragPoint(point)
       let normalized = source.normalized
       let fillEnd = CellAddress(
         row: max(normalized.maxRow, end.row),
         col: max(normalized.maxCol, end.col)
       )
       viewModel.extendSelection(to: fillEnd)
+      updateAutoscrollTimer(at: point, kind: .fill(source))
       scrollSelectionIntoView()
       return
     }
 
     guard isDraggingSelection, let viewModel else { return }
-    let clamped = NSPoint(
-      x: max(contentRect.minX, min(point.x, contentRect.maxX - 1)),
-      y: max(contentRect.minY, min(point.y, contentRect.maxY - 1))
-    )
-    viewModel.extendSelection(to: addressAtContent(point: clamped))
+    viewModel.extendSelection(to: addressAtDragPoint(point))
+    updateAutoscrollTimer(at: point, kind: .selection)
     scrollSelectionIntoView()
   }
 
   override func mouseUp(with event: NSEvent) {
+    stopAutoscrollTimer()
+
     if activeImageDrag != nil {
       finishImageDragIfNeeded()
       needsDisplay = true
     }
 
     if isDraggingFill, let viewModel, let source = fillSourceRange {
-      let point = convert(event.locationInWindow, from: nil)
-      let clamped = NSPoint(
-        x: max(contentRect.minX, min(point.x, contentRect.maxX - 1)),
-        y: max(contentRect.minY, min(point.y, contentRect.maxY - 1))
-      )
-      let end = addressAtContent(point: clamped)
+      let end = addressAtDragPoint(convert(event.locationInWindow, from: nil))
       let normalized = source.normalized
       if end.row > normalized.maxRow || end.col > normalized.maxCol {
         viewModel.fillSelection(from: source, to: end)
@@ -2571,7 +2646,7 @@ final class SpreadsheetGridNSView: NSView {
     let point = convert(event.locationInWindow, from: nil)
 
     if let viewModel, contentRect.contains(point), let hit = imageHitTest(at: point) {
-      viewModel.selectImage(id: hit.id)
+      viewModel.selectImage(id: hit.id, bringToFront: true)
       needsDisplay = true
       return imageContextMenu()
     }
@@ -2618,6 +2693,9 @@ final class SpreadsheetGridNSView: NSView {
     copy.target = self
     let paste = menu.addItem(withTitle: "Paste", action: #selector(handleMenuPaste(_:)), keyEquivalent: "")
     paste.target = self
+    menu.addItem(.separator())
+    addMenuItem(menu, "Bring to Front", #selector(handleMenuBringImageToFront(_:)))
+    addMenuItem(menu, "Send to Back", #selector(handleMenuSendImageToBack(_:)))
     menu.addItem(.separator())
     addMenuItem(menu, "Delete Picture", #selector(handleMenuDeleteImage(_:)))
     return menu
@@ -2734,6 +2812,16 @@ final class SpreadsheetGridNSView: NSView {
 
   @objc private func handleMenuDeleteImage(_ sender: Any?) {
     viewModel?.deleteSelectedImage()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuBringImageToFront(_ sender: Any?) {
+    viewModel?.bringSelectedImageToFront()
+    syncDisplay()
+  }
+
+  @objc private func handleMenuSendImageToBack(_ sender: Any?) {
+    viewModel?.sendSelectedImageToBack()
     syncDisplay()
   }
 
@@ -2895,10 +2983,38 @@ final class SpreadsheetGridNSView: NSView {
         return
       }
       viewModel.clearSelection()
-    case 123: viewModel.moveSelection(rowDelta: 0, colDelta: -1, extending: event.modifierFlags.contains(.shift))
-    case 124: viewModel.moveSelection(rowDelta: 0, colDelta: 1, extending: event.modifierFlags.contains(.shift))
-    case 125: viewModel.moveSelection(rowDelta: 1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
-    case 126: viewModel.moveSelection(rowDelta: -1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
+    case 53:
+      if viewModel.selectedImageID != nil {
+        viewModel.selectImage(id: nil)
+        needsDisplay = true
+        return
+      }
+    case 123, 124, 125, 126:
+      if let imageID = viewModel.selectedImageID, let image = viewModel.image(with: imageID) {
+        let nudge = event.modifierFlags.contains(.shift) ? 8.0 : 1.0
+        let deltaX: CGFloat = event.keyCode == 123 ? -nudge : event.keyCode == 124 ? nudge : 0
+        let deltaY: CGFloat = event.keyCode == 125 ? -nudge : event.keyCode == 126 ? nudge : 0
+        let before = image
+        let rect = imageRect(for: image)
+        let placement = placementForImageTopLeft(x: rect.minX + deltaX, y: rect.minY + deltaY)
+        viewModel.setImagePlacement(
+          id: imageID,
+          anchorRow: placement.row,
+          anchorCol: placement.col,
+          rowOffsetEMU: placement.rowOffsetEMU,
+          colOffsetEMU: placement.colOffsetEMU
+        )
+        viewModel.commitImagePlacement(id: imageID, before: before, actionName: "Move Picture")
+        needsDisplay = true
+        return
+      }
+      switch event.keyCode {
+      case 123: viewModel.moveSelection(rowDelta: 0, colDelta: -1, extending: event.modifierFlags.contains(.shift))
+      case 124: viewModel.moveSelection(rowDelta: 0, colDelta: 1, extending: event.modifierFlags.contains(.shift))
+      case 125: viewModel.moveSelection(rowDelta: 1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
+      case 126: viewModel.moveSelection(rowDelta: -1, colDelta: 0, extending: event.modifierFlags.contains(.shift))
+      default: break
+      }
     case 36:
       editorEntryMode = .inCellEdit
       viewModel.beginEditing()
@@ -2934,6 +3050,10 @@ final class SpreadsheetGridNSView: NSView {
       return true
     }
     if settings.matches(.copy, event: event) {
+      if viewModel?.selectedImageID != nil {
+        viewModel?.copySelectedImageToPasteboard()
+        return true
+      }
       if let text = viewModel?.copySelection() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -2941,6 +3061,11 @@ final class SpreadsheetGridNSView: NSView {
       }
     }
     if settings.matches(.cut, event: event) {
+      if viewModel?.selectedImageID != nil {
+        viewModel?.cutSelectedImage()
+        syncDisplay()
+        return true
+      }
       viewModel?.cutSelection()
       syncDisplay()
       return true

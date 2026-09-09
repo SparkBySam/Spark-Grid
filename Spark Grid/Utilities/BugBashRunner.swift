@@ -28,12 +28,9 @@ enum BugBashRunner {
 
   static func runAll() -> [Result] {
     var results: [Result] = []
-    results.append(importSmoke(path: "/Users/samparker/Downloads/FIT_test.xlsx", label: "FIT_test"))
-    results.append(importSmoke(path: "/Users/samparker/Downloads/SourceSummary_cf_bash.xlsx", label: "CF bash"))
-    results.append(importSmoke(
-      path: "/Users/samparker/Downloads/Enterprise Report_Queen City Harley-Davidson_2026-04-09_to_2026-07-15_export_1784222143023.xlsx",
-      label: "Enterprise themed"
-    ))
+    results.append(importSmoke(fixture: .formulas, label: "formulas"))
+    results.append(importSmoke(fixture: .conditionalFormat, label: "CF bash"))
+    results.append(importSmoke(fixture: .enterpriseThemed, label: "enterprise themed"))
     results.append(percentConditionalCompare())
     results.append(mergeRoundTrip())
     results.append(filterCriteriaRoundTrip())
@@ -61,10 +58,47 @@ enum BugBashRunner {
     return results
   }
 
+  /// Optional local xlsx samples for import/round-trip checks.
+  /// Set `SPARK_GRID_FIXTURES` to a directory of generic filenames, or override a single
+  /// file with the matching `SPARK_GRID_FIXTURE_*` env var (absolute path).
+  private enum Fixture: String {
+    case formulas
+    case conditionalFormat = "conditional_format"
+    case enterpriseThemed = "enterprise_themed"
+    case enterpriseImages = "enterprise_images"
+
+    var envKey: String {
+      switch self {
+      case .formulas: return "SPARK_GRID_FIXTURE_FORMULAS"
+      case .conditionalFormat: return "SPARK_GRID_FIXTURE_CF"
+      case .enterpriseThemed: return "SPARK_GRID_FIXTURE_ENTERPRISE"
+      case .enterpriseImages: return "SPARK_GRID_FIXTURE_ENTERPRISE_IMAGES"
+      }
+    }
+
+    var fileName: String { "\(rawValue).xlsx" }
+  }
+
+  private static func fixturePath(_ fixture: Fixture) -> String? {
+    let env = ProcessInfo.processInfo.environment
+    if let explicit = env[fixture.envKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !explicit.isEmpty,
+       FileManager.default.fileExists(atPath: explicit)
+    {
+      return explicit
+    }
+    if let dir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !dir.isEmpty
+    {
+      let path = (dir as NSString).appendingPathComponent(fixture.fileName)
+      if FileManager.default.fileExists(atPath: path) { return path }
+    }
+    return nil
+  }
+
   private static func sharedFormulaRoundTrip() -> Result {
-    let path = "/Users/samparker/Downloads/FIT_test.xlsx"
-    guard FileManager.default.fileExists(atPath: path) else {
-      return Result(name: "shared formula round-trip", passed: true, detail: "skipped (file missing)")
+    guard let path = fixturePath(.formulas) else {
+      return Result(name: "shared formula round-trip", passed: true, detail: "skipped (no fixture)")
     }
     do {
       let original = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: path))
@@ -93,9 +127,8 @@ enum BugBashRunner {
   }
 
   private static func conditionalFormatImport() -> Result {
-    let path = "/Users/samparker/Downloads/SourceSummary_cf_bash.xlsx"
-    guard FileManager.default.fileExists(atPath: path) else {
-      return Result(name: "CF import", passed: true, detail: "skipped (file missing)")
+    guard let path = fixturePath(.conditionalFormat) else {
+      return Result(name: "CF import", passed: true, detail: "skipped (no fixture)")
     }
     do {
       let wb = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: path))
@@ -214,19 +247,18 @@ enum BugBashRunner {
       return Result(name: "image round-trip", passed: false, detail: error.localizedDescription)
     }
 
-    let desktop = "/Users/samparker/Desktop/Enterprise Report_Queen City Harley-Davidson_2026-07-18_to_2026-07-18_export_1784598505245.xlsx"
-    guard FileManager.default.isReadableFile(atPath: desktop) else {
-      return Result(name: "image round-trip", passed: true, detail: "synthetic ok; desktop skipped")
+    guard let samplePath = fixturePath(.enterpriseImages) else {
+      return Result(name: "image round-trip", passed: true, detail: "synthetic ok; sample fixture skipped")
     }
     do {
-      let wb = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: desktop))
+      let wb = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: samplePath))
       let imageCount = wb.sheets.reduce(0) { $0 + $1.images.count }
       guard imageCount > 0 else {
-        return Result(name: "image desktop import", passed: false, detail: "no images from desktop file")
+        return Result(name: "image sample import", passed: false, detail: "no images in sample fixture")
       }
-      return Result(name: "image round-trip", passed: true, detail: "synthetic + \(imageCount) desktop image(s)")
+      return Result(name: "image round-trip", passed: true, detail: "synthetic + \(imageCount) sample image(s)")
     } catch {
-      return Result(name: "image round-trip", passed: true, detail: "synthetic ok; desktop: \(error.localizedDescription)")
+      return Result(name: "image round-trip", passed: true, detail: "synthetic ok; sample: \(error.localizedDescription)")
     }
   }
 
@@ -376,9 +408,8 @@ enum BugBashRunner {
   }
 
   private static func enterpriseFilterImport() -> Result {
-    let path = "/Users/samparker/Downloads/Enterprise Report_Queen City Harley-Davidson_2026-04-09_to_2026-07-15_export_1784222143023.xlsx"
-    guard FileManager.default.fileExists(atPath: path) else {
-      return Result(name: "enterprise filter import", passed: true, detail: "skipped (file missing)")
+    guard let path = fixturePath(.enterpriseThemed) else {
+      return Result(name: "enterprise filter import", passed: true, detail: "skipped (no fixture)")
     }
     do {
       let wb = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: path))
@@ -412,11 +443,11 @@ enum BugBashRunner {
     }
   }
 
-  private static func importSmoke(path: String, label: String) -> Result {
-    let url = URL(fileURLWithPath: path)
-    guard FileManager.default.fileExists(atPath: path) else {
-      return Result(name: "import \(label)", passed: true, detail: "skipped (file missing)")
+  private static func importSmoke(fixture: Fixture, label: String) -> Result {
+    guard let path = fixturePath(fixture) else {
+      return Result(name: "import \(label)", passed: true, detail: "skipped (no fixture)")
     }
+    let url = URL(fileURLWithPath: path)
     do {
       let wb = try XLSXCodec.importWorkbook(from: url)
       guard !wb.sheets.isEmpty else {
@@ -620,11 +651,10 @@ enum BugBashRunner {
   }
 
   private static func themeSchemeParse() -> Result {
-    let path = "/Users/samparker/Downloads/Enterprise Report_Queen City Harley-Davidson_2026-04-09_to_2026-07-15_export_1784222143023.xlsx"
-    guard FileManager.default.fileExists(atPath: path),
+    guard let path = fixturePath(.enterpriseThemed),
           let data = try? Data(contentsOf: URL(fileURLWithPath: path))
     else {
-      return Result(name: "theme parse", passed: true, detail: "skipped (file missing)")
+      return Result(name: "theme parse", passed: true, detail: "skipped (no fixture)")
     }
     // File may have been re-saved without a theme part (e.g. after Excel repair).
     guard XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/theme/theme1.xml") != nil else {
