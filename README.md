@@ -1,8 +1,22 @@
 # Spark Grid
 
+> **Status: WIP** — active prototype / portfolio work-in-progress. APIs, UX, and Excel fidelity are unfinished and may change without notice. Not production software.
+
 Native macOS spreadsheet app with Excel `.xlsx` round-trip.
 
 Spark Grid opens, edits, and saves real workbooks — formulas, formatting, filters, conditional formatting, charts, and embedded images — using a SwiftUI shell and a custom AppKit grid for performance.
+
+## Current focus
+
+Rough edges still being worked through:
+
+- Chart UX (sidebar previews vs on-sheet charts)
+- Picture interaction polish
+- Selection / scroll behavior
+- Broader Excel formula and interchange coverage
+- Automated bug-bash against local fixtures
+
+Expect incomplete features, rough edges, and breaking changes.
 
 ## Requirements
 
@@ -25,7 +39,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Launch the Debug app from Xcode, or open the product under DerivedData.
 
-## Features
+## Features (in progress)
 
 - Spreadsheet grid with selection, fill handle, freeze panes, merges, zoom
 - Formula bar, lexer/parser/evaluator, autocomplete, named ranges
@@ -76,4 +90,4 @@ Missing fixtures are skipped (tests still pass).
 
 ## License
 
-All rights reserved unless a license file is added to this repository.
+All rights reserved unless a license file is added to this repository. Work-in-progress code — use / fork at your own risk.
