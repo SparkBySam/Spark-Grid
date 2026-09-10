@@ -526,10 +526,12 @@ final class SpreadsheetGridNSView: NSView {
     scrollOrigin.y = min(max(0, scrollOrigin.y), maxY)
   }
 
-  private func ensureSelectionVisible() {
-    guard let viewModel else { return }
+  private func ensureSelectionVisible() -> Bool {
+    guard let viewModel else { return false }
+    let before = scrollOrigin
     ensureCellVisible(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
     ensureCellVisible(row: viewModel.selectionEnd.row, col: viewModel.selectionEnd.col)
+    return before != scrollOrigin
   }
 
   private func ensureCellVisible(row: Int, col: Int) {
@@ -2286,9 +2288,13 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   func scrollSelectionIntoView() {
-    ensureSelectionVisible()
+    let didScroll = ensureSelectionVisible()
     updateEditorFrame()
-    needsDisplay = true
+    // Arrow-key navigation relies on selectionRevision → refreshSelectionDisplay().
+    // Only force a full redraw when the viewport actually moved.
+    if didScroll {
+      needsDisplay = true
+    }
   }
 
   // MARK: - Mouse

@@ -14,6 +14,7 @@ enum SheetStructureMutation {
       }
     }
     sheet.cells = newCells
+    sheet.recomputePopulatedExtents()
     sheet.rowHeights = shiftKeyedValues(sheet.rowHeights, threshold: index, delta: count)
     if sheet.frozenRows > index {
       sheet.frozenRows += count
@@ -37,6 +38,7 @@ enum SheetStructureMutation {
       }
     }
     sheet.cells = newCells
+    sheet.recomputePopulatedExtents()
     sheet.rowHeights = deleteKeyedValues(sheet.rowHeights, range: index..<(index + count))
     sheet.rowHeights = shiftKeyedValues(sheet.rowHeights, threshold: index + count, delta: -count)
     sheet.frozenRows = max(0, min(sheet.frozenRows, index))
@@ -56,6 +58,7 @@ enum SheetStructureMutation {
       }
     }
     sheet.cells = newCells
+    sheet.recomputePopulatedExtents()
     sheet.columnWidths = shiftKeyedValues(sheet.columnWidths, threshold: index, delta: count)
     if sheet.frozenColumns > index {
       sheet.frozenColumns += count
@@ -79,6 +82,7 @@ enum SheetStructureMutation {
       }
     }
     sheet.cells = newCells
+    sheet.recomputePopulatedExtents()
     sheet.columnWidths = deleteKeyedValues(sheet.columnWidths, range: index..<(index + count))
     sheet.columnWidths = shiftKeyedValues(sheet.columnWidths, threshold: index + count, delta: -count)
     sheet.frozenColumns = max(0, min(sheet.frozenColumns, index))

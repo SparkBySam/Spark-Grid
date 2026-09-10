@@ -37,6 +37,10 @@ final class SpreadsheetViewModel {
   /// Selected embedded picture on the active sheet, if any.
   var selectedImageID: UUID?
 
+  /// Insert Chart sheet presentation.
+  var isInsertChartPresented = false
+  var pendingChartKind: SheetChart.Kind = .bar
+
   // MARK: - Find / Replace
   var isFindBarVisible = false
   var isFindReplaceMode = false
@@ -145,7 +149,7 @@ final class SpreadsheetViewModel {
   private func noteSelectionChanged() {
     selectionRevision &+= 1
     focusedFormulaHighlightIndex = nil
-    // Selection of a formula cell should refresh dashed range overlays.
+    // Keep dashed formula overlays in sync when leaving/entering formula cells.
     formulaHighlightRevision &+= 1
   }
 
@@ -1503,6 +1507,7 @@ final class SpreadsheetViewModel {
         }
       }
       if changed {
+        // Same addresses — populated extents stay valid.
         workbook.sheets[sheetIndex].cells = cells
       }
     }

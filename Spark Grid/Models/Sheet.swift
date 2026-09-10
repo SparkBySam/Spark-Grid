@@ -23,6 +23,12 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     /// Explicit grid height when it exceeds populated data (e.g. after insert past the last row).
     var gridRowCount: Int?
 
+    /// Cached max populated indices for O(1) `effectiveRowCount` / `effectiveColumnCount`.
+    /// Not persisted — recomputed after decode and bulk cell replacement.
+    private var cachedMaxPopulatedRow: Int = -1
+    private var cachedMaxPopulatedColumn: Int = -1
+    private var populatedExtentsValid: Bool = false
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -53,6 +59,7 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         self.images = images
         self.gridColumnCount = gridColumnCount
         self.gridRowCount = gridRowCount
+        recomputePopulatedExtents()
     }
 
     enum CodingKeys: String, CodingKey {
@@ -77,6 +84,7 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         images = try c.decodeIfPresent([SheetImage].self, forKey: .images) ?? []
         gridColumnCount = try c.decodeIfPresent(Int.self, forKey: .gridColumnCount)
         gridRowCount = try c.decodeIfPresent(Int.self, forKey: .gridRowCount)
+        recomputePopulatedExtents()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -97,16 +105,63 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         try c.encodeIfPresent(gridRowCount, forKey: .gridRowCount)
     }
 
+    static func == (lhs: Sheet, rhs: Sheet) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.cells == rhs.cells
+            && lhs.columnWidths == rhs.columnWidths
+            && lhs.rowHeights == rhs.rowHeights
+            && lhs.frozenRows == rhs.frozenRows
+            && lhs.frozenColumns == rhs.frozenColumns
+            && lhs.conditionalFormats == rhs.conditionalFormats
+            && lhs.autoFilter == rhs.autoFilter
+            && lhs.mergedRanges == rhs.mergedRanges
+            && lhs.charts == rhs.charts
+            && lhs.images == rhs.images
+            && lhs.gridColumnCount == rhs.gridColumnCount
+            && lhs.gridRowCount == rhs.gridRowCount
+    }
+
     func cell(at address: CellAddress) -> Cell {
         cells[address] ?? Cell()
     }
 
     mutating func setCell(_ cell: Cell, at address: CellAddress) {
         if cell.isEmpty {
-            cells.removeValue(forKey: address)
+            guard cells.removeValue(forKey: address) != nil else { return }
+            if populatedExtentsValid,
+               address.row == cachedMaxPopulatedRow || address.col == cachedMaxPopulatedColumn
+            {
+                recomputePopulatedExtents()
+            }
         } else {
             cells[address] = cell
+            if populatedExtentsValid {
+                cachedMaxPopulatedRow = max(cachedMaxPopulatedRow, address.row)
+                cachedMaxPopulatedColumn = max(cachedMaxPopulatedColumn, address.col)
+            } else {
+                recomputePopulatedExtents()
+            }
         }
+    }
+
+    /// Bulk-replace the cell map and refresh populated-extent caches once.
+    mutating func replaceCells(_ newCells: [CellAddress: Cell]) {
+        cells = newCells
+        recomputePopulatedExtents()
+    }
+
+    /// Call after direct `cells` dictionary surgery that may change extents.
+    mutating func recomputePopulatedExtents() {
+        var maxRow = -1
+        var maxCol = -1
+        for address in cells.keys {
+            if address.row > maxRow { maxRow = address.row }
+            if address.col > maxCol { maxCol = address.col }
+        }
+        cachedMaxPopulatedRow = maxRow
+        cachedMaxPopulatedColumn = maxCol
+        populatedExtentsValid = true
     }
 
     func columnWidth(for col: Int, default defaultWidth: CGFloat) -> CGFloat {
@@ -119,17 +174,28 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
 
     /// Highest row index that contains data (for CSV export).
     var maxPopulatedRow: Int {
-        cells.keys.map(\.row).max() ?? -1
+        if populatedExtentsValid { return cachedMaxPopulatedRow }
+        return cells.keys.map(\.row).max() ?? -1
     }
 
     /// Highest column index that contains data (for CSV export).
     var maxPopulatedColumn: Int {
-        cells.keys.map(\.col).max() ?? -1
+        if populatedExtentsValid { return cachedMaxPopulatedColumn }
+        return cells.keys.map(\.col).max() ?? -1
     }
 
     /// Tight bounds around every non-empty cell, if any.
     var populatedBounds: CellRange? {
         guard !cells.isEmpty else { return nil }
+        if populatedExtentsValid {
+            // Still need min for bounds — scan once is rare (export / print paths).
+            let rows = cells.keys.map(\.row)
+            let cols = cells.keys.map(\.col)
+            return CellRange(
+                start: CellAddress(row: rows.min() ?? 0, col: cols.min() ?? 0),
+                end: CellAddress(row: cachedMaxPopulatedRow, col: cachedMaxPopulatedColumn)
+            )
+        }
         let rows = cells.keys.map(\.row)
         let cols = cells.keys.map(\.col)
         return CellRange(

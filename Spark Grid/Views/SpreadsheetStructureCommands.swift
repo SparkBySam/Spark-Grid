@@ -87,9 +87,11 @@ struct SpreadsheetStructureCommands: Commands {
       Divider()
 
       Menu("Chart") {
-        Button("Bar Chart") { viewModel?.insertChart(kind: .bar) }
-        Button("Line Chart") { viewModel?.insertChart(kind: .line) }
-        Button("Area Chart") { viewModel?.insertChart(kind: .area) }
+        Button("Chart…") { viewModel?.beginInsertChart() }
+        Divider()
+        Button("Bar Chart…") { viewModel?.beginInsertChart(preferredKind: .bar) }
+        Button("Line Chart…") { viewModel?.beginInsertChart(preferredKind: .line) }
+        Button("Area Chart…") { viewModel?.beginInsertChart(preferredKind: .area) }
       }
       .disabled(viewModel == nil)
     }

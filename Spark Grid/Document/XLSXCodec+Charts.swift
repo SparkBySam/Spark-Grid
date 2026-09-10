@@ -121,13 +121,20 @@ extension XLSXCodec {
   private static func excelChartXML(_ chart: SheetChart, sheetName: String) -> String {
     let n = chart.dataRange.normalized
     let safeSheet = sheetName.replacingOccurrences(of: "'", with: "''")
-    let catStart = CellAddress(row: n.minRow + (n.minRow == n.maxRow ? 0 : 1), col: n.minCol).a1
-    let catEnd = CellAddress(row: n.maxRow, col: n.minCol).a1
-    let valCol = min(n.maxCol, n.minCol + (n.minCol == n.maxCol ? 0 : 1))
-    let valStart = CellAddress(row: n.minRow + (n.minRow == n.maxRow ? 0 : 1), col: valCol).a1
+    let hasHeader = chart.hasHeaderRow && n.maxRow > n.minRow
+    let dataStartRow = hasHeader ? n.minRow + 1 : n.minRow
+    let catCol = chart.categoryColumn ?? n.minCol
+    let valCol = chart.valueColumn ?? min(n.maxCol, n.minCol + (n.minCol == n.maxCol ? 0 : 1))
+    let catStart = CellAddress(row: dataStartRow, col: catCol).a1
+    let catEnd = CellAddress(row: n.maxRow, col: catCol).a1
+    let valStart = CellAddress(row: dataStartRow, col: valCol).a1
     let valEnd = CellAddress(row: n.maxRow, col: valCol).a1
     let catRef = "'\(safeSheet)'!\(catStart):\(catEnd)"
     let valRef = "'\(safeSheet)'!\(valStart):\(valEnd)"
+
+    // Count mode is Spark-native; Excel export still points at the category column
+    // as both cats and a placeholder val ref so the part remains valid.
+    let exportValRef = chart.valueMode == .count ? catRef : valRef
 
     let seriesInner: String
     switch chart.kind {
@@ -140,7 +147,7 @@ extension XLSXCodec {
           <c:idx val="0"/><c:order val="0"/>
           <c:tx><c:v>\(escapeXML(chart.title))</c:v></c:tx>
           <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-          <c:val><c:numRef><c:f>\(escapeXML(valRef))</c:f></c:numRef></c:val>
+          <c:val><c:numRef><c:f>\(escapeXML(exportValRef))</c:f></c:numRef></c:val>
         </c:ser>
         <c:axId val="1"/><c:axId val="2"/>
       </c:barChart>
@@ -153,7 +160,7 @@ extension XLSXCodec {
           <c:idx val="0"/><c:order val="0"/>
           <c:tx><c:v>\(escapeXML(chart.title))</c:v></c:tx>
           <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-          <c:val><c:numRef><c:f>\(escapeXML(valRef))</c:f></c:numRef></c:val>
+          <c:val><c:numRef><c:f>\(escapeXML(exportValRef))</c:f></c:numRef></c:val>
         </c:ser>
         <c:axId val="1"/><c:axId val="2"/>
       </c:lineChart>
@@ -166,7 +173,7 @@ extension XLSXCodec {
           <c:idx val="0"/><c:order val="0"/>
           <c:tx><c:v>\(escapeXML(chart.title))</c:v></c:tx>
           <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-          <c:val><c:numRef><c:f>\(escapeXML(valRef))</c:f></c:numRef></c:val>
+          <c:val><c:numRef><c:f>\(escapeXML(exportValRef))</c:f></c:numRef></c:val>
         </c:ser>
         <c:axId val="1"/><c:axId val="2"/>
       </c:areaChart>

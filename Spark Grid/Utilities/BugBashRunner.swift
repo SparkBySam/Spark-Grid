@@ -263,19 +263,56 @@ enum BugBashRunner {
   }
 
   private static func chartPreviewSeries() -> Result {
+    // Count-by-category (CRM-style): dates in col 0, junk ids in col 1.
     let range = CellRange(
-      start: CellAddress(row: 1, col: 1),
-      end: CellAddress(row: 4, col: 1)
+      start: CellAddress(row: 0, col: 0),
+      end: CellAddress(row: 3, col: 1)
     )
-    let points = ChartPreviewSeries.points(
-      in: range,
-      labelFor: { "Row \($0.row)" },
-      numberFor: { Double($0.row) }
+    let labels = ["Lead Date", "8/1/26", "8/1/26", "8/2/26"]
+    let ids = ["Lead ID", "100", "200", "300"]
+    let chart = SheetChart(
+      kind: .bar,
+      title: "Count by Lead Date",
+      dataRange: range,
+      categoryColumn: 0,
+      valueColumn: 1,
+      hasHeaderRow: true,
+      valueMode: .count,
+      anchorRow: 5,
+      anchorCol: 0
     )
-    guard points.count == 4, points[0].label == "Row 1", points[0].value == 1 else {
-      return Result(name: "chart preview series", passed: false, detail: "\(points)")
+    let series = ChartPreviewSeries.points(
+      for: chart,
+      labelFor: { address in
+        address.col == 0 ? labels[address.row] : ids[address.row]
+      },
+      numberFor: { address in
+        address.col == 1 ? Double(ids[address.row]) : nil
+      }
+    )
+    guard series.points.count == 2,
+          series.points[0].label == "8/1/26",
+          series.points[0].value == 2,
+          series.points[1].label == "8/2/26",
+          series.points[1].value == 1
+    else {
+      return Result(name: "chart preview series", passed: false, detail: "\(series.points)")
     }
-    return Result(name: "chart preview series", passed: true, detail: "single-column ok")
+
+    let suggestion = ChartPreviewSeries.suggest(
+      in: range,
+      labelFor: { address in
+        address.col == 0 ? labels[address.row] : ids[address.row]
+      },
+      numberFor: { address in
+        // Treat Lead ID as non-chart numeric noise: only pure small ints from a metrics col.
+        nil
+      }
+    )
+    guard suggestion.valueMode == .count, suggestion.categoryColumn == 0 else {
+      return Result(name: "chart preview series", passed: false, detail: "bad suggestion \(suggestion)")
+    }
+    return Result(name: "chart preview series", passed: true, detail: "count-by-category ok")
   }
 
   @MainActor

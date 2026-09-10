@@ -158,6 +158,9 @@ struct SpreadsheetWindowView: View {
         isChartsPanelCollapsed = false
       }
     }
+    .sheet(isPresented: $viewModel.isInsertChartPresented) {
+      InsertChartSheet(viewModel: viewModel)
+    }
     .focusedValue(\.spreadsheetViewModel, viewModel)
     .onChange(of: store.displayTitle) { _, title in
       WindowTitleUpdater.apply(title: title)

@@ -51,7 +51,7 @@ struct SpreadsheetDocument: FileDocument {
     }
     let text = decodeText(from: data)
     var sheet = Sheet(name: sheetName)
-    sheet.cells = CSVCodec.importCSV(text)
+    sheet.replaceCells(CSVCodec.importCSV(text))
     return Workbook(sheets: [sheet])
   }
 

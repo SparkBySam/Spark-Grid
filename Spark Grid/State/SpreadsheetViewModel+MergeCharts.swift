@@ -121,24 +121,28 @@ extension SpreadsheetViewModel {
   }
 
   func insertChart(kind: SheetChart.Kind) {
-    commitEditIfNeeded()
-    let dataRange = selectionRange
-    let n = dataRange.normalized
-    guard n.minRow != n.maxRow || n.minCol != n.maxCol else { return }
+    beginInsertChart(preferredKind: kind)
+  }
 
-    let anchorRow = min(activeSheet.effectiveRowCount - 1, n.maxRow + 2)
-    let anchorCol = n.minCol
-    let chart = SheetChart(
-      kind: kind,
-      title: "\(kind.title) Chart",
-      dataRange: dataRange,
-      anchorRow: anchorRow,
-      anchorCol: anchorCol
-    )
+  func beginInsertChart(preferredKind: SheetChart.Kind = .bar) {
+    commitEditIfNeeded()
+    let n = selectionRange.normalized
+    guard n.minRow != n.maxRow || n.minCol != n.maxCol else { return }
+    pendingChartKind = preferredKind
+    isInsertChartPresented = true
+  }
+
+  func insertChart(_ chart: SheetChart) {
+    commitEditIfNeeded()
     var sheet = activeSheet
     let before = sheet.charts
-    sheet.charts.append(chart)
+    var next = chart
+    if next.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      next.title = "\(next.kind.title) Chart"
+    }
+    sheet.charts.append(next)
     applyCharts(sheet.charts, undoBefore: before, actionName: "Insert Chart")
+    isInsertChartPresented = false
   }
 
   func removeChart(id: UUID) {
@@ -245,7 +249,7 @@ extension SpreadsheetViewModel {
     undoManager?.registerUndo(withTarget: self) { target in
       var restored = target.activeSheet
       restored.mergedRanges = undoMerges
-      restored.cells = undoCells
+      restored.replaceCells(undoCells)
       target.applyMergeMutation(
         sheet: restored,
         undoMerges: afterMerges,

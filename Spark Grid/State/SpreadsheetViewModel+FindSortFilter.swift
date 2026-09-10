@@ -335,6 +335,7 @@ extension SpreadsheetViewModel {
         sheet.rowHeights[newRow] = height
       }
     }
+    sheet.recomputePopulatedExtents()
 
     var rowMap: [Int: Int] = [:]
     for (offset, pack) in packs.enumerated() {

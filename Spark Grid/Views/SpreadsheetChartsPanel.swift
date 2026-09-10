@@ -6,7 +6,7 @@ struct SpreadsheetChartsPanel: View {
   @Bindable var viewModel: SpreadsheetViewModel
   @Binding var isCollapsed: Bool
 
-  private let expandedWidth: CGFloat = 320
+  private let expandedWidth: CGFloat = 360
   private let collapsedWidth: CGFloat = 28
 
   var body: some View {
@@ -77,7 +77,7 @@ struct SpreadsheetChartsPanel: View {
         .padding(.horizontal, 10)
 
       ScrollView {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
           ForEach(charts) { chart in
             chartCard(chart)
           }
@@ -88,16 +88,17 @@ struct SpreadsheetChartsPanel: View {
   }
 
   private func chartCard(_ chart: SheetChart) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(spacing: 6) {
+    let subtitle = seriesSubtitle(for: chart)
+    return VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .top, spacing: 6) {
         VStack(alignment: .leading, spacing: 2) {
           Text(chart.title)
-            .font(.system(size: 12, weight: .semibold))
-            .lineLimit(1)
-          Text(chart.dataRange.a1Description)
+            .font(.system(size: 13, weight: .semibold))
+            .lineLimit(2)
+          Text(subtitle)
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
-            .lineLimit(1)
+            .lineLimit(2)
         }
         Spacer(minLength: 0)
         Button {
@@ -113,10 +114,25 @@ struct SpreadsheetChartsPanel: View {
         .help("Delete chart")
       }
       SheetChartView(chart: chart, viewModel: viewModel)
-        .frame(height: 200)
+        .frame(height: 240)
     }
-    .padding(8)
-    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    .padding(10)
+    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+  }
+
+  private func seriesSubtitle(for chart: SheetChart) -> String {
+    let n = chart.dataRange.normalized
+    let headerRow = chart.hasHeaderRow ? n.minRow : n.minRow
+    let catCol = chart.categoryColumn ?? n.minCol
+    let valCol = chart.valueColumn ?? min(n.maxCol, n.minCol + 1)
+    let cat = viewModel.displayString(at: CellAddress(row: headerRow, col: catCol))
+    let val = viewModel.displayString(at: CellAddress(row: headerRow, col: valCol))
+    let series = ChartPreviewSeries.seriesDescription(
+      for: chart,
+      categoryHeader: chart.hasHeaderRow ? cat : "",
+      valueHeader: chart.hasHeaderRow ? val : ""
+    )
+    return "\(series) · \(chart.dataRange.a1Description)"
   }
 }
 
@@ -137,15 +153,21 @@ struct SheetChartView: View {
   var body: some View {
     Group {
       if cachedPoints.isEmpty {
-        Text("No numeric data in range")
-          .font(.system(size: 11))
-          .foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 6) {
+          Text("Nothing to plot")
+            .font(.system(size: 12, weight: .medium))
+          Text(emptyDetail)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(8)
       } else {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
           chartBody
           if cachedTotalCount > ChartPreviewSeries.maxPreviewPoints {
-            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(cachedTotalCount) values")
+            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(cachedTotalCount)")
               .font(.system(size: 9))
               .foregroundStyle(.tertiary)
           }
@@ -158,8 +180,18 @@ struct SheetChartView: View {
     }
   }
 
+  private var emptyDetail: String {
+    switch chart.valueMode {
+    case .count:
+      return "No category labels in the selected range."
+    case .values:
+      return "Pick a numeric Value (Y) column, or switch Values to “Count of rows”."
+    }
+  }
+
   @ViewBuilder
   private var chartBody: some View {
+    let labelIndexes = xLabelIndexes(for: cachedPoints.count)
     Chart(cachedPoints) { point in
       switch chart.kind {
       case .bar:
@@ -174,17 +206,19 @@ struct SheetChartView: View {
           y: .value("Value", point.value)
         )
         .foregroundStyle(Color.accentColor)
+        .interpolationMethod(.catmullRom)
         PointMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
         .foregroundStyle(Color.accentColor)
+        .symbolSize(cachedPoints.count > 20 ? 16 : 28)
       case .area:
         AreaMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor.opacity(0.25).gradient)
+        .foregroundStyle(Color.accentColor.opacity(0.22).gradient)
         LineMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
@@ -192,40 +226,67 @@ struct SheetChartView: View {
         .foregroundStyle(Color.accentColor)
       }
     }
+    .chartYScale(domain: yDomain)
+    .chartXScale(domain: -0.5...(Double(max(0, cachedPoints.count - 1)) + 0.5))
     .chartYAxis {
-      AxisMarks(position: .leading) { value in
-        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
-          .foregroundStyle(Color.secondary.opacity(0.35))
+      AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+          .foregroundStyle(Color.secondary.opacity(0.3))
         AxisValueLabel {
           if let number = value.as(Double.self) {
             Text(Self.formatAxisNumber(number))
               .font(.system(size: 9))
+              .foregroundStyle(.secondary)
           }
         }
       }
     }
     .chartXAxis {
-      AxisMarks(values: .automatic) { value in
-        if let index = value.as(Int.self), let point = cachedPoints.first(where: { $0.id == index }) {
-          AxisValueLabel(centered: true) {
-            Text(Self.truncatedLabel(point.label))
-              .font(.system(size: 9))
-              .rotationEffect(cachedPoints.count > 6 ? .degrees(-45) : .zero)
+      AxisMarks(values: labelIndexes.map(Double.init)) { value in
+        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+          .foregroundStyle(Color.secondary.opacity(0.15))
+        if let number = value.as(Double.self) {
+          let index = Int(number.rounded())
+          if let point = cachedPoints.first(where: { $0.id == index }) {
+            AxisValueLabel(centered: true) {
+              Text(Self.displayLabel(point.label))
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
           }
         }
       }
     }
-    .chartPlotStyle { plot in
-      plot.padding(.top, 6)
-        .padding(.bottom, cachedPoints.count > 6 ? 18 : 4)
-        .padding(.leading, 4)
-        .padding(.trailing, 8)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var yDomain: ClosedRange<Double> {
+    let values = cachedPoints.map(\.value)
+    guard let rawMax = values.max(), let rawMin = values.min() else {
+      return 0...1
     }
+    let maxValue = rawMax.isFinite ? rawMax : 1
+    let minValue = min(0, rawMin.isFinite ? rawMin : 0)
+    if !maxValue.isFinite || !minValue.isFinite || maxValue <= minValue {
+      return min(minValue, 0)...(max(maxValue, 0) + 1)
+    }
+    let pad = max((maxValue - minValue) * 0.08, 0.5)
+    return minValue...(maxValue + pad)
   }
 
   private var cacheToken: String {
     let n = chart.dataRange.normalized
-    return "\(chart.id.uuidString)-\(viewModel.contentRevision)-\(chart.kind.rawValue)-\(n.minRow)-\(n.maxRow)-\(n.minCol)-\(n.maxCol)"
+    // Use series config only — never a regenerating identity — so previews stay stable.
+    return [
+      String(viewModel.contentRevision),
+      chart.kind.rawValue,
+      chart.valueMode.rawValue,
+      String(chart.hasHeaderRow),
+      String(chart.categoryColumn ?? -1),
+      String(chart.valueColumn ?? -1),
+      String(n.minRow), String(n.maxRow), String(n.minCol), String(n.maxCol),
+    ].joined(separator: "-")
   }
 
   private func refreshPoints() {
@@ -241,13 +302,27 @@ struct SheetChartView: View {
     chart: SheetChart,
     viewModel: SpreadsheetViewModel
   ) -> (points: [Point], totalCount: Int) {
-    let all = ChartPreviewSeries.series(
-      in: chart.dataRange,
+    let all = ChartPreviewSeries.points(
+      for: chart,
       labelFor: { viewModel.displayString(at: $0) },
       numberFor: { viewModel.displayValue(at: $0).asChartNumber }
     )
     let points = all.points.map { Point(id: $0.id, label: $0.label, value: $0.value) }
     return (points, all.totalCount)
+  }
+
+  private func xLabelIndexes(for count: Int) -> [Int] {
+    guard count > 0 else { return [] }
+    let desired = min(6, count)
+    if count <= desired { return Array(0..<count) }
+    var indexes: [Int] = []
+    for i in 0..<desired {
+      let index = Int(round(Double(i) * Double(count - 1) / Double(desired - 1)))
+      if indexes.last != index {
+        indexes.append(index)
+      }
+    }
+    return indexes
   }
 
   private static func formatAxisNumber(_ value: Double) -> String {
@@ -261,20 +336,11 @@ struct SheetChartView: View {
     if value.rounded() == value, absValue < 1e9 {
       return String(Int(value))
     }
-    return String(format: "%.1g", value)
+    return String(format: "%.1f", value)
   }
 
-  private static func truncatedLabel(_ label: String) -> String {
-    guard label.count > 10 else { return label }
-    return String(label.prefix(9)) + "…"
-  }
-}
-
-private extension CellRange {
-  var a1Description: String {
-    let n = normalized
-    let start = CellAddress(row: n.minRow, col: n.minCol).a1
-    let end = CellAddress(row: n.maxRow, col: n.maxCol).a1
-    return start == end ? start : "\(start):\(end)"
+  private static func displayLabel(_ label: String) -> String {
+    guard label.count > 12 else { return label }
+    return String(label.prefix(11)) + "…"
   }
 }
