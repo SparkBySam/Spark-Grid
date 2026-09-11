@@ -14,7 +14,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
-			<string>Owner</string>
+			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>org.openxmlformats.spreadsheetml.sheet</string>
@@ -30,7 +30,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
-			<string>Owner</string>
+			<string>Default</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>public.comma-separated-values-text</string>
@@ -57,10 +57,13 @@
 				</array>
 				<key>public.mime-type</key>
 				<array>
-					<string>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</string>
+					<string>application/vnd.openxmlformats.spreadsheetml.sheet</string>
 				</array>
 			</dict>
 		</dict>
 	</array>
+	<!-- Standard HTTPS / no custom crypto beyond system frameworks. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

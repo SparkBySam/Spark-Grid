@@ -54,7 +54,7 @@ struct SpreadsheetFileCommands: Commands {
     panel.nameFieldStringValue = "\(baseName).xlsx"
     panel.canCreateDirectories = true
     panel.isExtensionHidden = false
-    if #available(macOS 12.0, *) {
+    if #available(macOS 15.0, *) {
       panel.currentContentType = .spreadsheetML
     }
     guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -78,13 +78,15 @@ struct SpreadsheetFileCommands: Commands {
         .replacingOccurrences(of: ".xlsx.xlsx", with: ".xlsx", options: .caseInsensitive)
       destination = destination.deletingLastPathComponent().appendingPathComponent(trimmed)
     }
-    if #available(macOS 12.0, *),
+    if #available(macOS 15.0, *),
        let type = panel.currentContentType,
        type.conforms(to: .spreadsheetML) || type.identifier == UTType.spreadsheetML.identifier
     {
       if destination.pathExtension.lowercased() != "xlsx" {
         destination = destination.deletingPathExtension().appendingPathExtension("xlsx")
       }
+    } else if destination.pathExtension.lowercased().isEmpty {
+      destination = destination.appendingPathExtension("xlsx")
     }
     return destination
   }

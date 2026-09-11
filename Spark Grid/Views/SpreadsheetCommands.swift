@@ -8,7 +8,7 @@ struct SpreadsheetCommands: Commands {
   var body: some Commands {
     CommandGroup(replacing: .appInfo) {
       Button("About Spark Grid") {
-        Self.showAbout()
+        NotificationCenter.default.post(name: AppUINotifications.showAbout, object: nil)
       }
     }
 
@@ -78,17 +78,6 @@ struct SpreadsheetCommands: Commands {
         .keyboardShortcut("g", modifiers: [.command, .shift])
         .disabled(viewModel == nil)
     }
-  }
-
-  private static func showAbout() {
-    let alert = NSAlert()
-    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-    alert.messageText = "Spark Grid"
-    alert.informativeText = "Version \(version) (\(build))\n\nA native Mac spreadsheet for opening, editing, and saving Excel workbooks and CSV files."
-    alert.alertStyle = .informational
-    alert.addButton(withTitle: "OK")
-    alert.runModal()
   }
 }
 

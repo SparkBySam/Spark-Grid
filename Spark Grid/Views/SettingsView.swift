@@ -5,6 +5,7 @@ struct SettingsView: View {
   @Bindable private var settings = AppSettings.shared
   @State private var recordingAction: HotkeyAction?
   @State private var recorderMonitor: Any?
+  @State private var showAbout = false
 
   var body: some View {
     Form {
@@ -37,11 +38,27 @@ struct SettingsView: View {
           settings.resetShortcutsToDefaults()
         }
       }
+
+      Section("About") {
+        Button("About Spark Grid…") {
+          showAbout = true
+        }
+        Button("Send Feedback…") {
+          LegalLinks.openFeedback()
+        }
+        Button("Terms of Use & Licenses") {
+          LegalLinks.openTermsOfUse()
+        }
+        Button("Spark Suite") {
+          LegalLinks.openSparkSuite()
+        }
+      }
     }
     .formStyle(.grouped)
-    .frame(width: 460, height: 420)
+    .frame(width: 460, height: 520)
     .padding()
     .preferredColorScheme(settings.appearanceMode.colorScheme)
+    .aboutPanel(isPresented: $showAbout)
     .onDisappear { stopRecording() }
   }
 

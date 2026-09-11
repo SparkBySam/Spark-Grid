@@ -3,6 +3,7 @@ import SwiftUI
 struct SpreadsheetRootView: View {
   @Bindable var store: SpreadsheetDocumentStore
   @Bindable private var settings = AppSettings.shared
+  @State private var showAbout = false
 
   var body: some View {
     SpreadsheetWindowView(store: store) {
@@ -10,6 +11,10 @@ struct SpreadsheetRootView: View {
     }
     .id(store.fileURL?.absoluteString ?? "untitled")
     .preferredColorScheme(settings.appearanceMode.colorScheme)
+    .aboutPanel(isPresented: $showAbout)
+    .onReceive(NotificationCenter.default.publisher(for: AppUINotifications.showAbout)) { _ in
+      showAbout = true
+    }
     .onChange(of: store.displayTitle) { _, title in
       WindowTitleUpdater.apply(title: title)
     }

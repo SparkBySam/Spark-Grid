@@ -1,28 +1,16 @@
 # Spark Grid
 
-> **Status: WIP** — active prototype / portfolio work-in-progress. APIs, UX, and Excel fidelity are unfinished and may change without notice. Not production software.
+Native macOS spreadsheet for opening, editing, and saving Excel `.xlsx` and CSV files.
 
-Native macOS spreadsheet app with Excel `.xlsx` round-trip.
+Built with SwiftUI chrome and a custom AppKit grid — formulas, formatting, filters, conditional formatting, charts, and embedded images.
 
-Spark Grid opens, edits, and saves real workbooks — formulas, formatting, filters, conditional formatting, charts, and embedded images — using a SwiftUI shell and a custom AppKit grid for performance.
-
-## Current focus
-
-Rough edges still being worked through:
-
-- Chart UX (sidebar previews vs on-sheet charts)
-- Picture interaction polish
-- Selection / scroll behavior
-- Broader Excel formula and interchange coverage
-- Automated bug-bash against local fixtures
-
-Expect incomplete features, rough edges, and breaking changes.
+**Version 1.0** — first public release candidate. Expect rough edges versus Excel/Numbers; please report issues.
 
 ## Requirements
 
-- macOS 14+ (recommended)
-- Xcode 16+
-- Apple Development signing team (configured in the Xcode project)
+- macOS 14+
+- Xcode 16+ (to build from source)
+- Apple Development / Distribution signing team
 
 ## Build & run
 
@@ -30,64 +18,49 @@ Expect incomplete features, rough edges, and breaking changes.
 open "Spark Grid.xcodeproj"
 ```
 
-Or from the CLI:
+Or:
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcodebuild -scheme "Spark Grid" -destination 'platform=macOS' build
+  xcodebuild -scheme "Spark Grid" -configuration Release -destination 'platform=macOS' build
 ```
 
-Launch the Debug app from Xcode, or open the product under DerivedData.
+## Features
 
-## Features (in progress)
+- Spreadsheet grid: selection, fill handle, freeze panes, merges, zoom
+- Formula bar with lexer/parser/evaluator and autocomplete
+- Formatting toolbar, conditional formatting, AutoFilter, sort, find/replace
+- Charts with an insert chooser (category + values or count-by-category)
+- Embedded pictures (insert, move, resize, z-order)
+- `.xlsx` / `.csv` open & save with autosave
 
-- Spreadsheet grid with selection, fill handle, freeze panes, merges, zoom
-- Formula bar, lexer/parser/evaluator, autocomplete, named ranges
-- Formatting toolbar (fonts, fills, borders, number formats, CF)
-- AutoFilter, sort, find/replace, print setup
-- Charts (bar / line / area) with sidebar previews
-- Embedded pictures (insert, paste, move, resize, z-order)
-- `.xlsx` and `.csv` open/save with autosave
+## App Store / signing notes
+
+- Bundle ID: `com.sparkbysam.SparkGrid`
+- Sandboxed; user-selected file access + printing
+- No network features; encryption questionnaire: standard exemption (`ITSAppUsesNonExemptEncryption = false`)
+- Privacy Nutrition Labels: data not collected (confirm in App Store Connect)
 
 ## Debug bug-bash
 
-Optional import checks against **local** sample workbooks (not checked into the repo):
-
 ```bash
 export SPARK_GRID_BUG_BASH=1
-export SPARK_GRID_FIXTURES="/path/to/your/fixtures"
-# Expected filenames (generic; use copies or symlinks of your samples):
-#   formulas.xlsx
-#   conditional_format.xlsx
-#   enterprise_themed.xlsx
-#   enterprise_images.xlsx
+export SPARK_GRID_FIXTURES="/path/to/fixtures"   # optional
+# formulas.xlsx, conditional_format.xlsx, enterprise_themed.xlsx, enterprise_images.xlsx
 ```
 
-Or override a single file:
-
-```bash
-export SPARK_GRID_FIXTURE_ENTERPRISE="/absolute/path/to/workbook.xlsx"
-```
-
-Missing fixtures are skipped (tests still pass).
+Missing fixtures are skipped.
 
 ## Project layout
 
 | Area | Location |
 |------|----------|
 | App / window | `Spark Grid/App`, `Spark Grid/Views` |
-| Grid rendering | `Spark Grid/Grid` |
+| Grid | `Spark Grid/Grid` |
 | Models & state | `Spark Grid/Models`, `Spark Grid/State` |
 | Formulas | `Spark Grid/Formulas` |
-| XLSX / CSV I/O | `Spark Grid/Document` |
-| Bug-bash (DEBUG) | `Spark Grid/Utilities/BugBashRunner.swift` |
-
-## Privacy & security notes
-
-- App Sandbox is enabled; file access is user-selected (+ Downloads) and print.
-- Do **not** commit real client workbooks. Keep samples under a local `Fixtures/` folder (gitignored) or outside the repo.
-- Bug-bash fixture paths are env-driven so the public tree stays free of personal paths and client filenames.
+| XLSX / CSV | `Spark Grid/Document` |
 
 ## License
 
-All rights reserved unless a license file is added to this repository. Work-in-progress code — use / fork at your own risk.
+Copyright © 2026 Sam Parker. All rights reserved.
