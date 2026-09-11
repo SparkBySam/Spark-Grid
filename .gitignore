@@ -37,3 +37,4 @@ fixtures/
 *.ipa
 *.dSYM.zip
 *.dSYM
+.vercel

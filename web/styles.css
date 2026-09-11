@@ -375,3 +375,12 @@ footer a:hover { color: var(--ink); }
   .stage-headers,
   .stage-row { grid-template-columns: 36px repeat(4, minmax(0, 1fr)); }
 }
+
+.icon-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: linear-gradient(145deg, #2a1c08, #e0a24a);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  display: inline-block;
+}
