@@ -9,7 +9,9 @@
   <meta property="og:description" content="A free native Mac spreadsheet — Excel .xlsx and CSV, without the bloat." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://sparkgridapp.com" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta property="og:image" content="https://sparkgridapp.com/images/hero.png" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/images/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -23,7 +25,7 @@
 
   <header class="top">
     <a class="mark" href="/">
-      <span class="icon-dot" aria-hidden="true"></span>
+      <img src="/images/logo.png" width="32" height="32" alt="" />
       <span>Spark Grid</span>
     </a>
     <nav>
@@ -35,36 +37,30 @@
 
   <main>
     <section class="hero">
-      <p class="brand">Spark Grid</p>
+      <p class="brand">
+        <img class="brand-logo" src="/images/logo.png" width="72" height="72" alt="" />
+        <span>Spark Grid</span>
+      </p>
       <h1>Spreadsheets that feel like Mac software.</h1>
       <p class="lede">
         Open Excel workbooks and CSV files natively — formulas, filters, formatting, and pictures — without dragging a browser into your dock.
       </p>
       <div class="cta-row">
-        <a class="cta primary" href="https://apps.apple.com/app/spark-grid" id="app-store-cta">Coming soon on the Mac App Store</a>
+        <a class="cta primary" href="https://apps.apple.com/app/spark-grid">Coming soon on the Mac App Store</a>
         <a class="cta ghost" href="https://github.com/SparkBySam/Spark-Grid">View on GitHub</a>
       </div>
       <p class="meta">macOS 14+ · Built by Sam Parker · Part of the Spark Suite</p>
     </section>
 
-    <section class="stage" aria-label="Product preview">
-      <div class="stage-frame">
-        <div class="stage-chrome">
-          <span></span><span></span><span></span>
-          <p>Enterprise Report.xlsx — Spark Grid</p>
-        </div>
-        <div class="stage-grid">
-          <div class="stage-headers">
-            <i></i><b>A</b><b>B</b><b>C</b><b>D</b><b>E</b>
-          </div>
-          <div class="stage-row"><i>1</i><em>Employee</em><em>Calls</em><em>Talk time</em><em>Close %</em><em>Region</em></div>
-          <div class="stage-row sel"><i>2</i><span>Alex Rivera</span><span>148</span><span>32:14</span><span>41%</span><span>Midwest</span></div>
-          <div class="stage-row"><i>3</i><span>Jordan Lee</span><span>121</span><span>28:02</span><span>37%</span><span>Southeast</span></div>
-          <div class="stage-row"><i>4</i><span>Sam Park</span><span>166</span><span>35:40</span><span>44%</span><span>West</span></div>
-          <div class="stage-row"><i>5</i><span>Casey Ng</span><span>98</span><span>19:11</span><span>29%</span><span>Northeast</span></div>
-          <div class="formula">=SUM(B2:B5)</div>
-        </div>
-      </div>
+    <section class="stage" aria-label="Spark Grid in use">
+      <figure class="shot">
+        <img
+          src="/images/hero.png"
+          width="2200"
+          height="1346"
+          alt="Spark Grid showing a Q3 enterprise sales pipeline workbook with filters, totals, and a snapshot panel."
+        />
+      </figure>
     </section>
 
     <section class="features" id="features">
@@ -86,6 +82,19 @@
       </ul>
     </section>
 
+    <section class="in-use">
+      <h2>Multi-sheet workbooks</h2>
+      <p class="section-lede">Switch tabs, keep freeze panes, and lean on conditional formatting when the scoreboard matters.</p>
+      <figure class="shot shot-secondary">
+        <img
+          src="/images/feature-calls.png"
+          width="1800"
+          height="1101"
+          alt="Spark Grid Weekly Calls sheet with a call-center scoreboard and color-scaled close rates."
+        />
+      </figure>
+    </section>
+
     <section class="suite">
       <p>Part of the <a href="https://sparksuiteapps.com">Spark Suite</a> — small, sharp tools for the Mac.</p>
     </section>
@@ -100,12 +109,5 @@
     </div>
     <a class="coffee" href="https://buymeacoffee.com/sparkdev">Buy me a coffee</a>
   </footer>
-
-  <script>
-    // Soften App Store CTA until the listing is live.
-    document.getElementById("app-store-cta")?.addEventListener("click", (event) => {
-      // Keep href for when the listing exists; for now scroll is fine if 404 later.
-    });
-  </script>
 </body>
 </html>
