@@ -86,7 +86,14 @@ struct AboutView: View {
         .padding(.top, 2)
 
         Button(action: LegalLinks.openFeedback) {
-          Label("Send feedback or feature requests", systemImage: "envelope")
+          Label("Email support", systemImage: "envelope")
+            .font(.caption)
+            .foregroundStyle(.primary.opacity(0.82))
+        }
+        .buttonStyle(.plain)
+
+        Button(action: LegalLinks.openSupport) {
+          Label("Support page", systemImage: "questionmark.circle")
             .font(.caption)
             .foregroundStyle(.primary.opacity(0.82))
         }

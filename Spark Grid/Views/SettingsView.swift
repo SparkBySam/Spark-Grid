@@ -43,8 +43,11 @@ struct SettingsView: View {
         Button("About Spark Grid…") {
           showAbout = true
         }
-        Button("Send Feedback…") {
+        Button("Email Support…") {
           LegalLinks.openFeedback()
+        }
+        Button("Support Page") {
+          LegalLinks.openSupport()
         }
         Button("Terms of Use & Licenses") {
           LegalLinks.openTermsOfUse()
