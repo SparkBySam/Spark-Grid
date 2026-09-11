@@ -38,3 +38,6 @@ fixtures/
 *.dSYM.zip
 *.dSYM
 .vercel
+.derivedData/
+.venv-img/
+Spark Grid/Assets.xcassets/AppIcon.appiconset/_blue_backup/
