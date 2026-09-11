@@ -50,10 +50,11 @@ Version **1.0** (build **1**) · Bundle ID `com.sparkbysam.SparkGrid` · Team `U
 
 ## 3. Screenshots / icon
 
-- [ ] Mac screenshots (required sizes for current Connect — typically 1280×800 or 1440×900 / 2880×1800)
-- [ ] Use real in-app shots (pipeline + Weekly Calls under `web/images/`)
+- [x] Mac screenshots at **2880 × 1800**, PNG, no alpha (see `AppStoreScreenshots/`)
+- [x] Scenes: pipeline, Weekly Calls, totals/formula, About (optional)
+- [ ] Upload `01`–`03` (and optionally `04`) in App Store Connect → Mac screenshots
 - [ ] Confirm App Icon looks correct at all sizes in Xcode Assets (amber mark)
-- [ ] No placeholder / debug UI in shots
+- [ ] Prefer skipping About (`04`) if you want to avoid tip-jar on the listing
 
 
 

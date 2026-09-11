@@ -41,3 +41,4 @@ fixtures/
 .derivedData/
 .venv-img/
 Spark Grid/Assets.xcassets/AppIcon.appiconset/_blue_backup/
+AppStoreScreenshots/_raw*
