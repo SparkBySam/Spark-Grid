@@ -99,6 +99,13 @@ struct AboutView: View {
         }
         .buttonStyle(.plain)
 
+        Button(action: LegalLinks.openPrivacy) {
+          Label("Privacy Policy", systemImage: "hand.raised")
+            .font(.caption)
+            .foregroundStyle(.primary.opacity(0.82))
+        }
+        .buttonStyle(.plain)
+
         Text("Uses ZIPFoundation and CoreXLSX (open-source licenses).")
           .font(.caption2)
           .foregroundStyle(.secondary)

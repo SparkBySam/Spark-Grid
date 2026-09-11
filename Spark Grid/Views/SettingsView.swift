@@ -49,6 +49,9 @@ struct SettingsView: View {
         Button("Terms of Use & Licenses") {
           LegalLinks.openTermsOfUse()
         }
+        Button("Privacy Policy") {
+          LegalLinks.openPrivacy()
+        }
         Button("Spark Suite") {
           LegalLinks.openSparkSuite()
         }

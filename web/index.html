@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spark Grid — Native Mac spreadsheet</title>
+  <meta name="description" content="Spark Grid is a native macOS spreadsheet for opening, editing, and saving Excel workbooks and CSV files." />
+  <meta property="og:title" content="Spark Grid" />
+  <meta property="og:description" content="A free native Mac spreadsheet — Excel .xlsx and CSV, without the bloat." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://sparkgridapp.com" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true">
+    <div class="grid-plane"></div>
+    <div class="glow"></div>
+  </div>
+
+  <header class="top">
+    <a class="mark" href="/">
+      <img src="/icon.png" width="28" height="28" alt="" />
+      <span>Spark Grid</span>
+    </a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="/privacy/">Privacy</a>
+      <a href="/legal/">Legal</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="brand">Spark Grid</p>
+      <h1>Spreadsheets that feel like Mac software.</h1>
+      <p class="lede">
+        Open Excel workbooks and CSV files natively — formulas, filters, formatting, and pictures — without dragging a browser into your dock.
+      </p>
+      <div class="cta-row">
+        <a class="cta primary" href="https://apps.apple.com/app/spark-grid" id="app-store-cta">Coming soon on the Mac App Store</a>
+        <a class="cta ghost" href="https://github.com/SparkBySam/Spark-Grid">View on GitHub</a>
+      </div>
+      <p class="meta">macOS 14+ · Built by Sam Parker · Part of the Spark Suite</p>
+    </section>
+
+    <section class="stage" aria-label="Product preview">
+      <div class="stage-frame">
+        <div class="stage-chrome">
+          <span></span><span></span><span></span>
+          <p>Enterprise Report.xlsx — Spark Grid</p>
+        </div>
+        <div class="stage-grid">
+          <div class="stage-headers">
+            <i></i><b>A</b><b>B</b><b>C</b><b>D</b><b>E</b>
+          </div>
+          <div class="stage-row"><i>1</i><em>Employee</em><em>Calls</em><em>Talk time</em><em>Close %</em><em>Region</em></div>
+          <div class="stage-row sel"><i>2</i><span>Alex Rivera</span><span>148</span><span>32:14</span><span>41%</span><span>Midwest</span></div>
+          <div class="stage-row"><i>3</i><span>Jordan Lee</span><span>121</span><span>28:02</span><span>37%</span><span>Southeast</span></div>
+          <div class="stage-row"><i>4</i><span>Sam Park</span><span>166</span><span>35:40</span><span>44%</span><span>West</span></div>
+          <div class="stage-row"><i>5</i><span>Casey Ng</span><span>98</span><span>19:11</span><span>29%</span><span>Northeast</span></div>
+          <div class="formula">=SUM(B2:B5)</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="features" id="features">
+      <h2>Built for real files</h2>
+      <p class="section-lede">Designed around Excel interchange and everyday Mac spreadsheet work — not a toy grid.</p>
+      <ul>
+        <li>
+          <strong>Excel &amp; CSV</strong>
+          <span>Open and save `.xlsx` with formulas, merges, filters, conditional formatting, charts, and images.</span>
+        </li>
+        <li>
+          <strong>Native grid</strong>
+          <span>Sticky headers, freeze panes, fill handle, and keyboard navigation on a custom AppKit canvas.</span>
+        </li>
+        <li>
+          <strong>Formulas that explain themselves</strong>
+          <span>Formula bar, autocomplete, and clear error banners when something goes wrong.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="suite">
+      <p>Part of the <a href="https://sparksuiteapps.com">Spark Suite</a> — small, sharp tools for the Mac.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div>
+      <span>© 2026 Sam Parker</span>
+      <a href="/privacy/">Privacy</a>
+      <a href="/legal/">Terms &amp; licenses</a>
+      <a href="mailto:help@sparksuiteapps.com?subject=Spark%20Grid%20Feedback">Feedback</a>
+    </div>
+    <a class="coffee" href="https://buymeacoffee.com/sparkdev">Buy me a coffee</a>
+  </footer>
+
+  <script>
+    // Soften App Store CTA until the listing is live.
+    document.getElementById("app-store-cta")?.addEventListener("click", (event) => {
+      // Keep href for when the listing exists; for now scroll is fine if 404 later.
+    });
+  </script>
+</body>
+</html>
