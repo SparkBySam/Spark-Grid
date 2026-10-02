@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 import UniformTypeIdentifiers
 
 extension UTType {
@@ -9,7 +8,12 @@ extension UTType {
   }
 }
 
-struct SpreadsheetDocument: FileDocument {
+/// In-memory workbook container for Spark Grid's custom window/store architecture.
+///
+/// Not a SwiftUI `Document` / `FileDocument`: the app uses `Window` + `SpreadsheetDocumentStore`
+/// rather than `DocumentGroup`. FileDocument is deprecated in the macOS 27 SDK in favor of the
+/// class-based `Document` protocols, which we do not need until/unless we adopt DocumentGroup.
+struct SpreadsheetDocument {
   static var readableContentTypes: [UTType] { [.spreadsheetML, .commaSeparatedText, .plainText] }
   static var writableContentTypes: [UTType] { [.spreadsheetML, .commaSeparatedText] }
 
@@ -17,32 +21,6 @@ struct SpreadsheetDocument: FileDocument {
 
   init(workbook: Workbook = .empty) {
     self.workbook = workbook
-  }
-
-  init(configuration: ReadConfiguration) throws {
-    guard let data = configuration.file.regularFileContents else {
-      throw CocoaError(.fileReadCorruptFile)
-    }
-    let name = configuration.file.preferredFilename?.deletingPathExtension ?? "Sheet1"
-    let contentType = configuration.contentType
-    workbook = try Self.workbook(
-      from: data,
-      sheetName: name.isEmpty ? "Sheet1" : name,
-      contentType: contentType
-    )
-  }
-
-  func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-    let type = configuration.contentType
-    if type.conforms(to: .spreadsheetML) || type.identifier == UTType.spreadsheetML.identifier {
-      let data = try XLSXCodec.exportWorkbook(workbook)
-      return FileWrapper(regularFileWithContents: data)
-    }
-    let csv = CSVCodec.exportCSV(from: workbook.activeSheet)
-    guard let data = csv.data(using: .utf8) else {
-      throw CocoaError(.fileWriteInapplicableStringEncoding)
-    }
-    return FileWrapper(regularFileWithContents: data)
   }
 
   static func workbook(from data: Data, sheetName: String, contentType: UTType? = nil) throws -> Workbook {

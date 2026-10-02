@@ -28,8 +28,6 @@ struct AboutView: View {
   var onClose: () -> Void
 
   private let cornerRadius: CGFloat = 10
-  private let amberFill = Color(red: 0.82, green: 0.58, blue: 0.18).opacity(0.32)
-  private let amberText = Color(red: 0.98, green: 0.82, blue: 0.48)
 
   var body: some View {
     VStack(spacing: 0) {
@@ -65,25 +63,13 @@ struct AboutView: View {
             .multilineTextAlignment(.center)
         }
 
-        Text("A native Mac spreadsheet for opening, editing, and saving Excel workbooks and CSV files.")
+        Text("A native spreadsheet for opening, editing, and saving Excel workbooks and CSV files.")
           .font(.caption)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
           .lineSpacing(2)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 4)
-
-        Button(action: LegalLinks.openTipJar) {
-          Text("☕ Buy me a coffee")
-            .font(.subheadline)
-            .fontWeight(.medium)
-            .foregroundStyle(amberText)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 9)
-            .background(amberFill, in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .padding(.top, 2)
 
         Button(action: LegalLinks.openFeedback) {
           Label("Email support", systemImage: "envelope")

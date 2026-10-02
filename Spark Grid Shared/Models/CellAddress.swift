@@ -1,7 +1,8 @@
 import Foundation
 
 /// Zero-based row and column index into a sheet.
-struct CellAddress: Hashable, Codable, Sendable {
+/// `nonisolated` so Hashable/Codable work under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+nonisolated struct CellAddress: Hashable, Codable, Sendable {
     var row: Int
     var col: Int
 

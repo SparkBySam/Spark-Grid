@@ -50,7 +50,7 @@ struct Spark_GridApp: App {
   @MainActor
   private func bindOpenHandling() {
     appDelegate.documentStore = store
-    appDelegate.onOpenFile = { [store] url in
+    appDelegate.onOpenFile = { url in
       Task { @MainActor in
         openFile(url)
       }

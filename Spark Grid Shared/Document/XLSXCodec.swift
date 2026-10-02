@@ -172,7 +172,7 @@ enum XLSXCodec {
 
   static func zipEntryData(archiveData: Data, entryPath: String) -> Data? {
     let normalized = entryPath.hasPrefix("/") ? String(entryPath.dropFirst()) : entryPath
-    guard let archive = try? Archive(data: archiveData, accessMode: .read) else { return nil }
+    guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else { return nil }
     let candidates = [normalized, normalized.hasPrefix("xl/") ? normalized : "xl/\(normalized)"]
     for path in candidates {
       guard let entry = archive[path] else { continue }

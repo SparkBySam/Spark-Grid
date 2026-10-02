@@ -8,8 +8,8 @@ Built with SwiftUI chrome and a custom AppKit grid — formulas, formatting, fil
 
 ## Requirements
 
-- macOS 14+
-- Xcode 16+ (to build from source)
+- macOS 14+ (tested on macOS 27 Golden Gate)
+- Xcode 27+ recommended to build against the macOS 27 SDK (older Xcode 16+ may still work for source builds)
 - Apple Development / Distribution signing team
 
 ## Build & run

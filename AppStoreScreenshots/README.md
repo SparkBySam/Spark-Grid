@@ -22,7 +22,7 @@ Accepted sizes also include 1280×800, 1440×900, 2560×1600 — we standardized
 
 ## Note on About screenshot
 
-`04` shows **Buy me a coffee** (external tip link). That’s fine in-app for many free apps, but some reviewers dislike tip jars on listing screenshots. If Connect or review complains, upload only **01–03**.
+`04` previously showed **Buy me a coffee**. That tip jar was removed from the app for Guideline 3.1.1 — do **not** upload screenshot 04. Use **01–03** only.
 
 ## Do not upload
 
