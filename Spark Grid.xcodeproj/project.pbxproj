@@ -9,90 +9,66 @@
 /* Begin PBXBuildFile section */
 		1FB811D616374329B98005D5 /* CoreXLSX in Frameworks */ = {isa = PBXBuildFile; productRef = 63EA0DF84EA14C72B3DAF40A /* CoreXLSX */; };
 		A7C4E91F2B8D4E6A9F012345 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */; };
-		A1000000000000000000000D /* CoreXLSX in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000000B /* CoreXLSX */; };
-		A1000000000000000000000E /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000000000000000000C /* ZIPFoundation */; };
-		A10000000000000000000010 /* Spark Grid Quick Look.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* Spark Grid Quick Look.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B1C2D3E4F5061728394A5B01 /* CoreXLSX in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5061728394A5B11 /* CoreXLSX */; };
+		B1C2D3E4F5061728394A5B02 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5061728394A5B12 /* ZIPFoundation */; };
+		B1C2D3E4F5061728394A5B03 /* Spark Grid Quick Look.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5061728394A5B20 /* Spark Grid Quick Look.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B1C2D3E4F5061728394A5B30 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3480D7B12FF1BB4B00719DD6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B1C2D3E4F5061728394A5B40;
+			remoteInfo = "Spark Grid Quick Look";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B1C2D3E4F5061728394A5B31 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B1C2D3E4F5061728394A5B03 /* Spark Grid Quick Look.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		3480D7B92FF1BB4B00719DD6 /* Spark Grid.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Spark Grid.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000000000000000000001 /* Spark Grid Quick Look.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Spark Grid Quick Look.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1C2D3E4F5061728394A5B20 /* Spark Grid Quick Look.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Spark Grid Quick Look.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		A10000000000000000000007 /* Exceptions for "Spark Grid" folder in "Spark Grid Quick Look" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				App/SparkGridAppDelegate.swift,
-				App/Spark_GridApp.swift,
-				Assets.xcassets,
-				Grid/SpreadsheetGridNSView.swift,
-				Grid/SpreadsheetGridView.swift,
-				PrivacyInfo.xcprivacy,
-				Spark_Grid.entitlements,
-				State/AppSettings.swift,
-				State/SpreadsheetDocumentStore.swift,
-				State/SpreadsheetViewModel+ConditionalFormat.swift,
-				State/SpreadsheetViewModel+FindSortFilter.swift,
-				State/SpreadsheetViewModel+Images.swift,
-				State/SpreadsheetViewModel+MergeCharts.swift,
-				State/SpreadsheetViewModel.swift,
-				Utilities/BugBashRunner.swift,
-				Utilities/ChartPreviewSeries.swift,
-				Utilities/LegalLinks.swift,
-				Utilities/SheetStructureMutation.swift,
-				Utilities/SpreadsheetClipboard.swift,
-				Utilities/SpreadsheetPrintController.swift,
-				Utilities/SpreadsheetPrintOptions.swift,
-				Utilities/SpreadsheetPrintSnapshotRenderer.swift,
-				Views/AboutView.swift,
-				Views/AutosaveStatusView.swift,
-				Views/ConditionalFormattingSheet.swift,
-				Views/FindReplaceBar.swift,
-				Views/FormattingToolbar.swift,
-				Views/FormulaBarTextField.swift,
-				Views/FormulaBarView.swift,
-				Views/InsertChartSheet.swift,
-				Views/SettingsView.swift,
-				Views/SheetTabsView.swift,
-				Views/SortRangeSheet.swift,
-				Views/SpreadsheetChartsPanel.swift,
-				Views/SpreadsheetCommands.swift,
-				Views/SpreadsheetDataCommands.swift,
-				Views/SpreadsheetFileCommands.swift,
-				Views/SpreadsheetFormatCommands.swift,
-				Views/SpreadsheetPrintPagePreview.swift,
-				Views/SpreadsheetPrintSetupView.swift,
-				Views/SpreadsheetRootView.swift,
-				Views/SpreadsheetStructureCommands.swift,
-				Views/SpreadsheetViewCommands.swift,
-				Views/SpreadsheetWindowView.swift
-			);
-			target = A10000000000000000000002 /* Spark Grid Quick Look */;
-		};
-		A10000000000000000000013 /* Exceptions for "Spark Grid Quick Look" folder in "Spark Grid Quick Look" target */ = {
+		B1C2D3E4F5061728394A5B50 /* Exceptions for "Spark Grid Quick Look" folder in "Spark Grid Quick Look" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 				Spark_Grid_Quick_Look.entitlements,
 			);
-			target = A10000000000000000000002 /* Spark Grid Quick Look */;
+			target = B1C2D3E4F5061728394A5B40 /* Spark Grid Quick Look */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		3480D7BB2FF1BB4B00719DD6 /* Spark Grid */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				A10000000000000000000007 /* Exceptions for "Spark Grid" folder in "Spark Grid Quick Look" target */,
-			);
 			path = "Spark Grid";
 			sourceTree = "<group>";
 		};
-		A10000000000000000000006 /* Spark Grid Quick Look */ = {
+		B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Spark Grid Shared";
+			sourceTree = "<group>";
+		};
+		B1C2D3E4F5061728394A5B61 /* Spark Grid Quick Look */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				A10000000000000000000013 /* Exceptions for "Spark Grid Quick Look" folder in "Spark Grid Quick Look" target */,
+				B1C2D3E4F5061728394A5B50 /* Exceptions for "Spark Grid Quick Look" folder in "Spark Grid Quick Look" target */,
 			);
 			path = "Spark Grid Quick Look";
 			sourceTree = "<group>";
@@ -109,12 +85,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A10000000000000000000004 /* Frameworks */ = {
+		B1C2D3E4F5061728394A5B70 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000000000000000000000D /* CoreXLSX in Frameworks */,
-				A1000000000000000000000E /* ZIPFoundation in Frameworks */,
+				B1C2D3E4F5061728394A5B01 /* CoreXLSX in Frameworks */,
+				B1C2D3E4F5061728394A5B02 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,7 +101,8 @@
 			isa = PBXGroup;
 			children = (
 				3480D7BB2FF1BB4B00719DD6 /* Spark Grid */,
-				A10000000000000000000006 /* Spark Grid Quick Look */,
+				B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */,
+				B1C2D3E4F5061728394A5B61 /* Spark Grid Quick Look */,
 				3480D7BA2FF1BB4B00719DD6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -134,7 +111,7 @@
 			isa = PBXGroup;
 			children = (
 				3480D7B92FF1BB4B00719DD6 /* Spark Grid.app */,
-				A10000000000000000000001 /* Spark Grid Quick Look.appex */,
+				B1C2D3E4F5061728394A5B20 /* Spark Grid Quick Look.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -149,15 +126,16 @@
 				3480D7B52FF1BB4B00719DD6 /* Sources */,
 				3480D7B62FF1BB4B00719DD6 /* Frameworks */,
 				3480D7B72FF1BB4B00719DD6 /* Resources */,
-				A1000000000000000000000F /* Embed Foundation Extensions */,
+				B1C2D3E4F5061728394A5B31 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				A10000000000000000000012 /* PBXTargetDependency */,
+				B1C2D3E4F5061728394A5B32 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				3480D7BB2FF1BB4B00719DD6 /* Spark Grid */,
+				B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */,
 			);
 			name = "Spark Grid";
 			packageProductDependencies = (
@@ -168,29 +146,29 @@
 			productReference = 3480D7B92FF1BB4B00719DD6 /* Spark Grid.app */;
 			productType = "com.apple.product-type.application";
 		};
-		A10000000000000000000002 /* Spark Grid Quick Look */ = {
+		B1C2D3E4F5061728394A5B40 /* Spark Grid Quick Look */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A1000000000000000000000A /* Build configuration list for PBXNativeTarget "Spark Grid Quick Look" */;
+			buildConfigurationList = B1C2D3E4F5061728394A5B80 /* Build configuration list for PBXNativeTarget "Spark Grid Quick Look" */;
 			buildPhases = (
-				A10000000000000000000003 /* Sources */,
-				A10000000000000000000004 /* Frameworks */,
-				A10000000000000000000005 /* Resources */,
+				B1C2D3E4F5061728394A5B71 /* Sources */,
+				B1C2D3E4F5061728394A5B70 /* Frameworks */,
+				B1C2D3E4F5061728394A5B72 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				3480D7BB2FF1BB4B00719DD6 /* Spark Grid */,
-				A10000000000000000000006 /* Spark Grid Quick Look */,
+				B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */,
+				B1C2D3E4F5061728394A5B61 /* Spark Grid Quick Look */,
 			);
 			name = "Spark Grid Quick Look";
 			packageProductDependencies = (
-				A1000000000000000000000B /* CoreXLSX */,
-				A1000000000000000000000C /* ZIPFoundation */,
+				B1C2D3E4F5061728394A5B11 /* CoreXLSX */,
+				B1C2D3E4F5061728394A5B12 /* ZIPFoundation */,
 			);
 			productName = "Spark Grid Quick Look";
-			productReference = A10000000000000000000001 /* Spark Grid Quick Look.appex */;
+			productReference = B1C2D3E4F5061728394A5B20 /* Spark Grid Quick Look.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
@@ -206,7 +184,7 @@
 					3480D7B82FF1BB4B00719DD6 = {
 						CreatedOnToolsVersion = 26.6;
 					};
-					A10000000000000000000002 = {
+					B1C2D3E4F5061728394A5B40 = {
 						CreatedOnToolsVersion = 26.6;
 					};
 				};
@@ -230,34 +208,10 @@
 			projectRoot = "";
 			targets = (
 				3480D7B82FF1BB4B00719DD6 /* Spark Grid */,
-				A10000000000000000000002 /* Spark Grid Quick Look */,
+				B1C2D3E4F5061728394A5B40 /* Spark Grid Quick Look */,
 			);
 		};
 /* End PBXProject section */
-
-/* Begin PBXContainerItemProxy section */
-		A10000000000000000000011 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 3480D7B12FF1BB4B00719DD6 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = A10000000000000000000002;
-			remoteInfo = "Spark Grid Quick Look";
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		A1000000000000000000000F /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				A10000000000000000000010 /* Spark Grid Quick Look.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3480D7B72FF1BB4B00719DD6 /* Resources */ = {
@@ -267,7 +221,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A10000000000000000000005 /* Resources */ = {
+		B1C2D3E4F5061728394A5B72 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -284,7 +238,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A10000000000000000000003 /* Sources */ = {
+		B1C2D3E4F5061728394A5B71 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -294,10 +248,10 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		A10000000000000000000012 /* PBXTargetDependency */ = {
+		B1C2D3E4F5061728394A5B32 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = A10000000000000000000002 /* Spark Grid Quick Look */;
-			targetProxy = A10000000000000000000011 /* PBXContainerItemProxy */;
+			target = B1C2D3E4F5061728394A5B40 /* Spark Grid Quick Look */;
+			targetProxy = B1C2D3E4F5061728394A5B30 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -437,7 +391,10 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Spark Grid";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Sam Parker. All rights reserved.";
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sparkbysam.SparkGrid;
@@ -472,7 +429,10 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Spark Grid";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Sam Parker. All rights reserved.";
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sparkbysam.SparkGrid;
@@ -488,7 +448,7 @@
 			};
 			name = Release;
 		};
-		A10000000000000000000008 /* Debug */ = {
+		B1C2D3E4F5061728394A5B81 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = "Spark Grid Quick Look/Spark_Grid_Quick_Look.entitlements";
@@ -520,7 +480,7 @@
 			};
 			name = Debug;
 		};
-		A10000000000000000000009 /* Release */ = {
+		B1C2D3E4F5061728394A5B82 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = "Spark Grid Quick Look/Spark_Grid_Quick_Look.entitlements";
@@ -573,11 +533,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A1000000000000000000000A /* Build configuration list for PBXNativeTarget "Spark Grid Quick Look" */ = {
+		B1C2D3E4F5061728394A5B80 /* Build configuration list for PBXNativeTarget "Spark Grid Quick Look" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A10000000000000000000008 /* Debug */,
-				A10000000000000000000009 /* Release */,
+				B1C2D3E4F5061728394A5B81 /* Debug */,
+				B1C2D3E4F5061728394A5B82 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -614,12 +574,12 @@
 			package = C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
 			productName = ZIPFoundation;
 		};
-		A1000000000000000000000B /* CoreXLSX */ = {
+		B1C2D3E4F5061728394A5B11 /* CoreXLSX */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */;
 			productName = CoreXLSX;
 		};
-		A1000000000000000000000C /* ZIPFoundation */ = {
+		B1C2D3E4F5061728394A5B12 /* ZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
 			productName = ZIPFoundation;
