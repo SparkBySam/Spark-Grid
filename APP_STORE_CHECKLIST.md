@@ -72,6 +72,7 @@ Version **1.0** (build **1**) · Bundle ID `com.sparkbysam.SparkGrid` · Team `U
 
 - [ ] New workbook, edit cells, undo/redo
 - [ ] Open/save `.xlsx` and `.csv` (sandbox file picker)
+- [ ] Finder Quick Look: Space on `.csv` / `.xlsx` → grid preview, edit a cell, Save
 - [ ] Formulas (`SUM`, etc.), formatting, filters
 - [ ] Insert chart; insert/move picture
 - [ ] About → Privacy / Terms open sparkgridapp.com

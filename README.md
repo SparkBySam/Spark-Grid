@@ -33,6 +33,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - Charts with an insert chooser (category + values or count-by-category)
 - Embedded pictures (insert, move, resize, z-order)
 - `.xlsx` / `.csv` open & save with autosave
+- Finder Quick Look: press **Space** on a `.csv` / `.tsv` / `.xlsx` to preview the grid, edit cells, and save (or open in Spark Grid)
 
 ## App Store / signing notes
 
@@ -60,6 +61,7 @@ Missing fixtures are skipped.
 | Models & state | `Spark Grid/Models`, `Spark Grid/State` |
 | Formulas | `Spark Grid/Formulas` |
 | XLSX / CSV | `Spark Grid/Document` |
+| Finder Quick Look | `Spark Grid Quick Look/` |
 
 ## License
 
