@@ -37,10 +37,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 ### Enabling Finder Quick Look after a build
 
-macOS only loads the preview extension from an installed app bundle (not always from a raw Xcode `DerivedData` copy). After building:
-
-1. Run the **Spark Grid** scheme once (Product → Run), or copy `Spark Grid.app` into `/Applications` and open it.
-2. Register / prefer the extension:
+1. Open `Spark Grid.xcodeproj` and **Product → Run** the **Spark Grid** scheme once (this embeds `Spark Grid Quick Look.appex`).
+2. Register / prefer the extension (searches `/Applications`, repo build folders, and DerivedData):
 
 ```bash
 ./scripts/register-quicklook.sh
@@ -49,7 +47,7 @@ macOS only loads the preview extension from an installed app bundle (not always 
 
 3. In Finder, select a `.csv` / `.xlsx` and press **Space**. The preview chrome should show **Save** and **Open in Spark Grid**.
 
-If Space still shows plain text: `pluginkit -mAvvv -p com.apple.quicklook.preview | grep -i Spark` — the appex must appear and be enabled (`+`). Then `qlmanage -r && killall Finder`.
+If the script says the appex is missing, you haven’t built this branch yet — Run from Xcode first. If Space still shows plain text: `pluginkit -mAvvv -p com.apple.quicklook.preview | grep -i Spark` then `qlmanage -r && killall Finder`.
 
 ## App Store / signing notes
 
@@ -74,9 +72,8 @@ Missing fixtures are skipped.
 |------|----------|
 | App / window | `Spark Grid/App`, `Spark Grid/Views` |
 | Grid | `Spark Grid/Grid` |
-| Models & state | `Spark Grid/Models`, `Spark Grid/State` |
-| Formulas | `Spark Grid/Formulas` |
-| XLSX / CSV | `Spark Grid/Document` |
+| State | `Spark Grid/State` |
+| Shared models / formulas / XLSX+CSV | `Spark Grid Shared/` |
 | Finder Quick Look | `Spark Grid Quick Look/` |
 
 ## License
