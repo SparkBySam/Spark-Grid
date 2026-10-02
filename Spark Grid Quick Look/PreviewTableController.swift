@@ -1,7 +1,6 @@
 import AppKit
 
 /// Editable NSTableView backed by a `PreviewSession`.
-@MainActor
 final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
   let tableView = NSTableView()
   var session: PreviewSession?
@@ -87,7 +86,6 @@ final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableView
     field.isEditable = true
     field.drawsBackground = false
     field.delegate = self
-    // Encode coordinates for commit without breaking view reuse identifiers.
     field.tag = encode(row: row, column: col)
     return field
   }

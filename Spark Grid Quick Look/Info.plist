@@ -8,10 +8,16 @@
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
+			<key>QLIsDataBasedPreview</key>
+			<false/>
 			<key>QLSupportedContentTypes</key>
 			<array>
 				<string>public.comma-separated-values-text</string>
+				<string>public.comma-separated-values</string>
+				<string>com.apple.csv</string>
+				<string>public.delimited-values-text</string>
 				<string>public.tab-separated-values-text</string>
+				<string>public.tab-separated-values</string>
 				<string>org.openxmlformats.spreadsheetml.sheet</string>
 				<string>com.microsoft.excel.xlsx</string>
 			</array>
@@ -20,8 +26,9 @@
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.quicklook.preview</string>
+		<!-- Hard-coded module name — $(PRODUCT_MODULE_NAME) is unreliable in some merges. -->
 		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).PreviewViewController</string>
+		<string>SparkGridQuickLook.PreviewViewController</string>
 	</dict>
 </dict>
 </plist>

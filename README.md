@@ -35,6 +35,22 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - `.xlsx` / `.csv` open & save with autosave
 - Finder Quick Look: press **Space** on a `.csv` / `.tsv` / `.xlsx` to preview the grid, edit cells, and save (or open in Spark Grid)
 
+### Enabling Finder Quick Look after a build
+
+macOS only loads the preview extension from an installed app bundle (not always from a raw Xcode `DerivedData` copy). After building:
+
+1. Run the **Spark Grid** scheme once (Product → Run), or copy `Spark Grid.app` into `/Applications` and open it.
+2. Register / prefer the extension:
+
+```bash
+./scripts/register-quicklook.sh
+# or: ./scripts/register-quicklook.sh "/path/to/Spark Grid.app"
+```
+
+3. In Finder, select a `.csv` / `.xlsx` and press **Space**. The preview chrome should show **Save** and **Open in Spark Grid**.
+
+If Space still shows plain text: `pluginkit -mAvvv -p com.apple.quicklook.preview | grep -i Spark` — the appex must appear and be enabled (`+`). Then `qlmanage -r && killall Finder`.
+
 ## App Store / signing notes
 
 - Bundle ID: `com.sparkbysam.SparkGrid`

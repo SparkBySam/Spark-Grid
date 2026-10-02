@@ -2,7 +2,6 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// In-memory spreadsheet session for Quick Look preview + basic cell edits.
-@MainActor
 final class PreviewSession {
   static let maxPreviewRows = 5_000
 
@@ -95,6 +94,9 @@ final class PreviewSession {
         return true
       }
       return type.identifier == "public.tab-separated-values-text"
+        || type.identifier == "public.tab-separated-values"
+        || type.identifier == "com.apple.csv"
+        || type.identifier == "public.comma-separated-values"
     }
     return false
   }

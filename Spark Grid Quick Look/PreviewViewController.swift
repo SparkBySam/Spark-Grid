@@ -3,6 +3,7 @@ import QuickLookUI
 import UniformTypeIdentifiers
 
 /// Finder Quick Look preview: spreadsheet grid with basic cell editing and Save.
+@objc(PreviewViewController)
 final class PreviewViewController: NSViewController, QLPreviewingController {
   private var session: PreviewSession?
   private let tableController = PreviewTableController()
@@ -14,6 +15,18 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
   private let saveButton = NSButton(title: "Save", target: nil, action: nil)
   private let openButton = NSButton(title: "Open in Spark Grid", target: nil, action: nil)
   private let scrollView = NSScrollView()
+
+  /// Code-only controller — do not look for PreviewViewController.nib.
+  override var nibName: NSNib.Name? { nil }
+
+  override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
+    super.init(nibName: nil, bundle: nibBundleOrNil)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
 
   override func loadView() {
     view = NSView(frame: NSRect(x: 0, y: 0, width: 720, height: 480))
@@ -83,13 +96,15 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
   }
 
-  func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping @Sendable (Error?) -> Void) {
-    DispatchQueue.global(qos: .userInitiated).async {
+  func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
+    // Call handler promptly; heavy parse stays off the main thread.
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let accessed = url.startAccessingSecurityScopedResource()
+      defer {
+        if accessed { url.stopAccessingSecurityScopedResource() }
+      }
+
       do {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-          if accessed { url.stopAccessingSecurityScopedResource() }
-        }
         let data = try Data(contentsOf: url)
         let name = url.deletingPathExtension().lastPathComponent
         let type = UTType(filenameExtension: url.pathExtension)
@@ -99,6 +114,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
           contentType: type
         )
         DispatchQueue.main.async {
+          guard let self else {
+            handler(nil)
+            return
+          }
           let session = PreviewSession(fileURL: url, workbook: workbook)
           self.session = session
           self.tableController.session = session
