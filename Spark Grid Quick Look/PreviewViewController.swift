@@ -3,6 +3,7 @@ import QuickLookUI
 import UniformTypeIdentifiers
 
 /// Finder Quick Look preview: spreadsheet grid with basic cell editing and Save.
+/// ObjC name must match NSExtensionPrincipalClass in Info.plist (`PreviewViewController`).
 @objc(PreviewViewController)
 final class PreviewViewController: NSViewController, QLPreviewingController {
   private var session: PreviewSession?
