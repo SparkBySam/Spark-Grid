@@ -24,10 +24,7 @@ struct SpreadsheetFileCommands: Commands {
         _ = store.saveInteractively()
       }
       .keyboardShortcut(settings.keyEquivalent(for: .save), modifiers: settings.eventModifiers(for: .save))
-      .disabled(
-        (store.fileURL == nil && store.document.workbook.isEffectivelyEmpty)
-          || (store.fileURL != nil && !store.isDirty)
-      )
+      .disabled(store.fileURL == nil && store.document.workbook.isEffectivelyEmpty)
 
       Button("Save As…") {
         saveAsPanel()

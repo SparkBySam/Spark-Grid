@@ -136,6 +136,11 @@ final class SpreadsheetDocumentStore {
 
   @discardableResult
   func saveInteractively() -> Bool {
+    SpreadsheetEditorFlush.commitForSave()
+    if fileURL == nil && document.workbook.isEffectivelyEmpty {
+      return true
+    }
+
     if let url = fileURL {
       if !isXLSXFile, hasMultipleSheets, !confirmActiveSheetOnlySave() {
         return false

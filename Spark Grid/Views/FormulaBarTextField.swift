@@ -377,4 +377,39 @@ final class FormulaBarNSTextView: NSTextView {
   override func paste(_ sender: Any?) {
     pasteAsPlainText(sender)
   }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if AppSettings.shared.matches(.save, event: event) {
+      return SparkGridSaveShortcut.perform()
+    }
+    return super.performKeyEquivalent(with: event)
+  }
+
+  override func keyDown(with event: NSEvent) {
+    if AppSettings.shared.matches(.save, event: event) {
+      if SparkGridSaveShortcut.perform() { return }
+    }
+    super.keyDown(with: event)
+  }
+
+  override func insertText(_ insertString: Any, replacementRange: NSRange) {
+    if let event = NSApp.currentEvent,
+       event.type == .keyDown,
+       AppSettings.shared.matches(.save, event: event) {
+      _ = SparkGridSaveShortcut.perform()
+      return
+    }
+    super.insertText(insertString, replacementRange: replacementRange)
+  }
+}
+
+enum SparkGridSaveShortcut {
+  @MainActor
+  @discardableResult
+  static func perform() -> Bool {
+    let delegate = (NSApp.delegate as? SparkGridAppDelegate) ?? SparkGridAppDelegate.current
+    guard let store = delegate?.documentStore else { return false }
+    _ = store.saveInteractively()
+    return true
+  }
 }
