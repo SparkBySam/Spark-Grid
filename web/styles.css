@@ -142,16 +142,44 @@ main {
   color: var(--ink);
 }
 .lede {
-  margin: 0 0 28px;
+  margin: 0 0 16px;
   color: var(--muted);
   font-size: 1.05rem;
   max-width: 38rem;
 }
+.launch {
+  margin: 0 0 18px;
+  max-width: 38rem;
+  color: var(--ink);
+  font-size: 1.02rem;
+}
+.launch strong {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.launch a {
+  color: var(--amber);
+  font-weight: 600;
+  text-decoration: none;
+}
+.launch a:hover { text-decoration: underline; }
 .cta-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
   margin-bottom: 18px;
+}
+.store-badge {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  text-decoration: none;
+}
+.store-badge img {
+  height: 44px;
+  width: auto;
 }
 .cta {
   display: inline-flex;
