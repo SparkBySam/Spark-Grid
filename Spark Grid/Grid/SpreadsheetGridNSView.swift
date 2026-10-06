@@ -30,17 +30,8 @@ final class SpreadsheetGridNSView: NSView {
   private var cachedRowCount = 0
   /// Previous selection dirty region — avoids full-grid redraws on click/drag.
   private var lastSelectionDirtyRect: NSRect = .null
-  private let editor = NSTextField()
+  private let editor = CellEditorTextField()
   private var isEditorActive = false
-
-  private enum EditorEntryMode {
-  /// Started by typing over a selected cell — arrow keys save and move selection.
-    case replaceOnType
-  /// Started by double-click or Enter — arrow keys move the text cursor.
-    case inCellEdit
-  }
-
-  private var editorEntryMode: EditorEntryMode = .inCellEdit
   private var isDraggingSelection = false
   private var isDraggingFill = false
   private enum ImageResizeCorner { case bottomRight }
@@ -2181,11 +2172,28 @@ final class SpreadsheetGridNSView: NSView {
     needsDisplay = true
   }
 
-  private func commitEditorAndMove(rowDelta: Int, colDelta: Int) {
+  fileprivate func commitEditingForSave() {
+    if isEditorActive {
+      hideEditor(commit: true)
+    } else {
+      viewModel?.commitEditIfNeeded()
+    }
+  }
+
+  fileprivate static func first(in root: NSView?) -> SpreadsheetGridNSView? {
+    guard let root else { return nil }
+    if let grid = root as? SpreadsheetGridNSView { return grid }
+    for subview in root.subviews {
+      if let grid = first(in: subview) { return grid }
+    }
+    return nil
+  }
+
+  private func commitEditorAndMove(rowDelta: Int, colDelta: Int, extending: Bool = false) {
     guard let viewModel else { return }
     viewModel.editText = editor.stringValue
     hideEditor(commit: true)
-    viewModel.moveSelection(rowDelta: rowDelta, colDelta: colDelta)
+    viewModel.moveSelection(rowDelta: rowDelta, colDelta: colDelta, extending: extending)
     scrollSelectionIntoView()
   }
 
@@ -2426,7 +2434,6 @@ final class SpreadsheetGridNSView: NSView {
 
     if event.clickCount >= 2 {
       isDraggingSelection = false
-      editorEntryMode = .inCellEdit
       viewModel?.beginEditing()
       showEditor(selectAll: false)
     } else {
@@ -2976,6 +2983,9 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func keyDown(with event: NSEvent) {
+    if AppSettings.shared.matches(.save, event: event) {
+      if SparkGridSaveShortcut.perform() { return }
+    }
     guard let viewModel, !isEditorActive else {
       super.keyDown(with: event)
       return
@@ -3022,20 +3032,24 @@ final class SpreadsheetGridNSView: NSView {
       default: break
       }
     case 36:
-      editorEntryMode = .inCellEdit
       viewModel.beginEditing()
       showEditor(selectAll: false)
       return
     case 48:
       viewModel.moveSelection(rowDelta: 0, colDelta: event.modifierFlags.contains(.shift) ? -1 : 1, extending: event.modifierFlags.contains(.shift))
     default:
+      // Command and control shortcuts must not type into the selected cell.
+      let shortcutMods = event.modifierFlags.intersection([.command, .control])
+      if !shortcutMods.isEmpty {
+        super.keyDown(with: event)
+        break
+      }
       if let chars = event.characters, chars.count == 1, let scalar = chars.unicodeScalars.first {
         let isPrintable = CharacterSet.alphanumerics.contains(scalar)
           || CharacterSet.punctuationCharacters.contains(scalar)
           || CharacterSet.symbols.contains(scalar)
           || scalar == " "
         if isPrintable {
-          editorEntryMode = .replaceOnType
           viewModel.editText = chars
           viewModel.isEditing = true
           showEditor(selectAll: false)
@@ -3048,6 +3062,9 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if AppSettings.shared.matches(.save, event: event) {
+      return SparkGridSaveShortcut.perform()
+    }
     let settings = AppSettings.shared
     let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
     if event.charactersIgnoringModifiers?.lowercased() == "a", mods == .command {
@@ -3122,38 +3139,50 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
   ) -> Bool {
     guard isEditorActive else { return false }
 
-    if editorEntryMode == .replaceOnType {
-      switch commandSelector {
-      case #selector(NSResponder.insertNewline(_:)):
-        commitEditorAndMove(rowDelta: 1, colDelta: 0)
-        return true
-      case #selector(NSResponder.moveUp(_:)):
-        commitEditorAndMove(rowDelta: -1, colDelta: 0)
-        return true
-      case #selector(NSResponder.moveDown(_:)):
-        commitEditorAndMove(rowDelta: 1, colDelta: 0)
-        return true
-      case #selector(NSResponder.moveLeft(_:)):
-        commitEditorAndMove(rowDelta: 0, colDelta: -1)
-        return true
-      case #selector(NSResponder.moveRight(_:)):
-        commitEditorAndMove(rowDelta: 0, colDelta: 1)
-        return true
-      default:
-        return false
-      }
-    }
-
-    if commandSelector == #selector(NSResponder.insertTab(_:)) {
-      return applyFormulaTabCompletion(in: textView)
-    }
-
-    if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+    switch commandSelector {
+    case #selector(NSResponder.insertNewline(_:)):
       commitEditorAndMove(rowDelta: 1, colDelta: 0)
       return true
+    case #selector(NSResponder.cancelOperation(_:)):
+      hideEditor(commit: false)
+      return true
+    case #selector(NSResponder.insertTab(_:)),
+         #selector(NSResponder.insertTabIgnoringFieldEditor(_:)):
+      if applyFormulaTabCompletion(in: textView) {
+        return true
+      }
+      commitEditorAndMove(rowDelta: 0, colDelta: 1)
+      return true
+    case #selector(NSResponder.insertBacktab(_:)):
+      commitEditorAndMove(rowDelta: 0, colDelta: -1)
+      return true
+    case #selector(NSResponder.moveUp(_:)):
+      commitEditorAndMove(rowDelta: -1, colDelta: 0)
+      return true
+    case #selector(NSResponder.moveDown(_:)):
+      commitEditorAndMove(rowDelta: 1, colDelta: 0)
+      return true
+    case #selector(NSResponder.moveLeft(_:)):
+      commitEditorAndMove(rowDelta: 0, colDelta: -1)
+      return true
+    case #selector(NSResponder.moveRight(_:)):
+      commitEditorAndMove(rowDelta: 0, colDelta: 1)
+      return true
+    case #selector(NSResponder.moveUpAndModifySelection(_:)):
+      commitEditorAndMove(rowDelta: -1, colDelta: 0, extending: true)
+      return true
+    case #selector(NSResponder.moveDownAndModifySelection(_:)):
+      commitEditorAndMove(rowDelta: 1, colDelta: 0, extending: true)
+      return true
+    case #selector(NSResponder.moveLeftAndModifySelection(_:)):
+      commitEditorAndMove(rowDelta: 0, colDelta: -1, extending: true)
+      return true
+    case #selector(NSResponder.moveRightAndModifySelection(_:)):
+      commitEditorAndMove(rowDelta: 0, colDelta: 1, extending: true)
+      return true
+    default:
+      return false
     }
-
-    return false
   }
 
   private var namedRangeNames: [String] {
@@ -3179,6 +3208,11 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
 
   func controlTextDidEndEditing(_ obj: Notification) {
     guard isEditorActive else { return }
+    let movement = (obj.userInfo?["NSTextMovement"] as? NSNumber)?.intValue
+    if movement == NSTextMovement.cancel.rawValue {
+      hideEditor(commit: false)
+      return
+    }
     hideEditor(commit: true)
   }
 
@@ -3240,5 +3274,56 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
           let fieldEditor = window.fieldEditor(false, for: editor) as? NSTextView
     else { return }
     fieldEditor.complete(nil)
+  }
+}
+
+/// In-cell editor. Marked so the window can install a field editor that ignores ⌘S.
+final class CellEditorTextField: NSTextField {}
+
+/// Field editor that saves on the Save shortcut instead of inserting the key.
+final class CellFieldEditor: NSTextView {
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    if AppSettings.shared.matches(.save, event: event) {
+      return SparkGridSaveShortcut.perform()
+    }
+    return super.performKeyEquivalent(with: event)
+  }
+
+  override func keyDown(with event: NSEvent) {
+    if AppSettings.shared.matches(.save, event: event) {
+      if SparkGridSaveShortcut.perform() { return }
+    }
+    super.keyDown(with: event)
+  }
+
+  override func insertText(_ insertString: Any, replacementRange: NSRange) {
+    if let event = NSApp.currentEvent,
+       event.type == .keyDown,
+       AppSettings.shared.matches(.save, event: event) {
+      _ = SparkGridSaveShortcut.perform()
+      return
+    }
+    super.insertText(insertString, replacementRange: replacementRange)
+  }
+}
+
+/// Writes the open cell or formula-bar edit into the workbook before Save.
+enum SpreadsheetEditorFlush {
+  @MainActor
+  static func commitForSave() {
+    let window = NSApp.keyWindow ?? NSApp.mainWindow
+    let grid = window.flatMap { SpreadsheetGridNSView.first(in: $0.contentView) }
+    if let window, window.firstResponder is FormulaBarNSTextView {
+      if let grid {
+        window.makeFirstResponder(grid)
+      } else {
+        window.makeFirstResponder(nil)
+      }
+    }
+    if let grid {
+      grid.commitEditingForSave()
+    } else {
+      (NSApp.delegate as? SparkGridAppDelegate)?.documentStore?.activeViewModel?.commitEditIfNeeded()
+    }
   }
 }

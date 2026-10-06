@@ -22,6 +22,7 @@ extension EnvironmentValues {
 }
 
 final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+  static weak var current: SparkGridAppDelegate?
   var onOpenFile: ((URL) -> Void)? {
     didSet { flushPendingOpenURL() }
   }
@@ -33,6 +34,12 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
 
   private var printingResponder: PrintingResponder?
   private var printKeyMonitor: Any?
+  private var saveKeyMonitor: Any?
+  private lazy var cellFieldEditor: CellFieldEditor = {
+    let editor = CellFieldEditor()
+    editor.isFieldEditor = true
+    return editor
+  }()
 
   func application(_ application: NSApplication, open urls: [URL]) {
     guard let url = urls.first else { return }
@@ -80,9 +87,16 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    Self.current = self
     installPrintKeyMonitor()
+    installSaveKeyMonitor()
     configureMainWindow()
     configurePrintMenu()
+  }
+
+  func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+    guard client is CellEditorTextField else { return nil }
+    return cellFieldEditor
   }
 
   func applicationDidBecomeActive(_ notification: Notification) {
@@ -94,6 +108,22 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     if let printKeyMonitor {
       NSEvent.removeMonitor(printKeyMonitor)
       self.printKeyMonitor = nil
+    }
+    if let saveKeyMonitor {
+      NSEvent.removeMonitor(saveKeyMonitor)
+      self.saveKeyMonitor = nil
+    }
+  }
+
+  private func installSaveKeyMonitor() {
+    guard saveKeyMonitor == nil else { return }
+    saveKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      guard AppSettings.shared.matches(.save, event: event) else { return event }
+      // Leave save panels and alerts in control of their own keys.
+      if NSApp.modalWindow != nil { return event }
+      // Only eat the key when Save actually runs. Otherwise the File menu handles it.
+      guard SparkGridSaveShortcut.perform() else { return event }
+      return nil
     }
   }
 
