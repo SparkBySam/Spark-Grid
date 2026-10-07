@@ -197,7 +197,7 @@ enum ChartPreviewSeries {
       var result: [Point] = []
       var index = 0
       for row in startRow...n.maxRow {
-        guard let value = numberFor(CellAddress(row: row, col: valueColumn)) else { continue }
+        guard let value = numberFor(CellAddress(row: row, col: valueColumn)), value.isFinite else { continue }
         let raw = labelFor(CellAddress(row: row, col: categoryColumn))
           .trimmingCharacters(in: .whitespacesAndNewlines)
         let label = raw.isEmpty ? "\(index + 1)" : raw
