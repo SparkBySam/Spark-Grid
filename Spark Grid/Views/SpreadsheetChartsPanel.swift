@@ -441,6 +441,15 @@ struct OnSheetChartCard: View {
 }
 
 /// Flipped so the card lines up with the grid's top-left coordinates.
+/// `NSHostingView.isFlipped` is final and settable, so it cannot be overridden.
 final class OnSheetChartHost: NSHostingView<OnSheetChartCard> {
-  override var isFlipped: Bool { true }
+  required init(rootView: OnSheetChartCard) {
+    super.init(rootView: rootView)
+    isFlipped = true
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    isFlipped = true
+  }
 }

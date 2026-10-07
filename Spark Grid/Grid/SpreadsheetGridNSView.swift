@@ -161,11 +161,6 @@ final class SpreadsheetGridNSView: NSView {
     layoutOnSheetCharts()
   }
 
-  override func viewDidMoveToWindow() {
-    super.viewDidMoveToWindow()
-    layoutOnSheetCharts()
-  }
-
   override func hitTest(_ point: NSPoint) -> NSView? {
     let hit = super.hitTest(point)
     if isEditorActive, hit === editor || hit?.isDescendant(of: editor) == true {
@@ -201,6 +196,7 @@ final class SpreadsheetGridNSView: NSView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    layoutOnSheetCharts()
     guard window != nil else {
       claimedInitialFocus = false
       return
