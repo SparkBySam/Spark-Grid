@@ -151,4 +151,20 @@ struct CodableColor: Codable, Equatable, Hashable, Sendable {
   var green: Double
   var blue: Double
   var alpha: Double
+
+  /// sRGB relative luminance, 0 (black) through 1 (white).
+  var relativeLuminance: Double {
+    let r = min(1, max(0, red))
+    let g = min(1, max(0, green))
+    let b = min(1, max(0, blue))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+
+  /// Black on a light fill, white on a dark fill.
+  static func contrastingText(on fill: CodableColor) -> CodableColor {
+    if fill.relativeLuminance < 0.58 {
+      return CodableColor(red: 1, green: 1, blue: 1, alpha: 1)
+    }
+    return CodableColor(red: 0, green: 0, blue: 0, alpha: 1)
+  }
 }

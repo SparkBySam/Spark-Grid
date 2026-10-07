@@ -62,6 +62,8 @@ enum BugBashRunner {
     results.append(onSheetChartFrame())
     results.append(weeklyCallsLastLabel())
     results.append(chartValueColors())
+    results.append(legacyChartLandsUnderData())
+    results.append(cfFillTextContrast())
     return results
   }
 
@@ -648,10 +650,13 @@ enum BugBashRunner {
         return Result(name: "chart round-trip", passed: false, detail: "missing charts json part")
       }
       let imported = try XLSXCodec.importWorkbook(from: data)
-      guard imported.activeSheet.charts.count == 1,
-            imported.activeSheet.charts[0].title == "Test"
+      let saved = imported.activeSheet.charts
+      guard saved.count == 1,
+            saved[0].title == "Test",
+            saved[0].anchorRow == 4,
+            saved[0].anchorCol == 0
       else {
-        return Result(name: "chart round-trip", passed: false, detail: "charts: \(imported.activeSheet.charts)")
+        return Result(name: "chart round-trip", passed: false, detail: "charts: \(saved)")
       }
       return Result(name: "chart round-trip", passed: true, detail: "ok")
     } catch {
@@ -1374,6 +1379,136 @@ enum BugBashRunner {
     }
 
     return Result(name: name, passed: true, detail: "rows and columns match the selection")
+  }
+
+  private static func legacyChartLandsUnderData() -> Result {
+    let name = "legacy chart lands under data"
+    let range = CellRange(
+      start: CellAddress(row: 2, col: 0),
+      end: CellAddress(row: 8, col: 5)
+    )
+    let covering = SheetChart(
+      kind: .bar,
+      title: "Calls by Rep",
+      dataRange: range,
+      categoryColumn: 0,
+      valueColumn: 1,
+      hasHeaderRow: true,
+      valueMode: .values,
+      anchorRow: 0,
+      anchorCol: 0
+    )
+    let placed = covering.positionedUnderData()
+    guard placed.anchorRow == 10, placed.anchorCol == 0, placed.id == covering.id else {
+      return Result(name: name, passed: false, detail: "moved to \(placed.anchorRow),\(placed.anchorCol)")
+    }
+    let already = SheetChart(
+      id: covering.id,
+      kind: .bar,
+      title: "Calls by Rep",
+      dataRange: range,
+      categoryColumn: 0,
+      valueColumn: 1,
+      anchorRow: 10,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 8
+    )
+    let kept = already.positionedUnderData()
+    guard kept == already else {
+      return Result(name: name, passed: false, detail: "anchored chart moved to \(kept.anchorRow),\(kept.anchorCol)")
+    }
+    var sheet = Sheet(name: "Weekly Calls")
+    sheet.charts = [covering]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let chart = imported.sheets[0].charts.first
+      guard chart?.anchorRow == 10, chart?.anchorCol == 0, chart?.title == "Calls by Rep" else {
+        return Result(name: name, passed: false, detail: "import kept \(String(describing: chart?.anchorRow))")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    return Result(name: name, passed: true, detail: "covering chart opens under A3:F9")
+  }
+
+  private static func cfFillTextContrast() -> Result {
+    let name = "cf fill text contrast"
+    let yellow = CodableColor(red: 1, green: 0.953, blue: 0.804, alpha: 1)
+    let dark = CodableColor(red: 0.12, green: 0.18, blue: 0.42, alpha: 1)
+    guard CodableColor.contrastingText(on: yellow).relativeLuminance < 0.2,
+          CodableColor.contrastingText(on: dark).relativeLuminance > 0.8
+    else {
+      return Result(name: name, passed: false, detail: "luminance threshold missed the palette")
+    }
+
+    let stops = [
+      ColorScaleStop(type: .min, value: nil, color: CodableColor(red: 0.992, green: 0.886, blue: 0.882, alpha: 1)),
+      ColorScaleStop(type: .percentile, value: 50, color: yellow),
+      ColorScaleStop(type: .max, value: nil, color: CodableColor(red: 0.847, green: 0.953, blue: 0.863, alpha: 1)),
+    ]
+    let scale = ConditionalFormatRule(
+      range: CellRange(start: CellAddress(row: 3, col: 4), end: CellAddress(row: 8, col: 4)),
+      predicate: .colorScale(stops),
+      style: ConditionalFormatStyle()
+    )
+    let values = [0.41, 0.37, 0.44, 0.29, 0.38, 0.33]
+    let lightPaint = ConditionalFormatEvaluator.resolvedPaint(
+      at: CellAddress(row: 3, col: 4),
+      base: nil,
+      rules: [scale],
+      value: .number(0.41),
+      displayString: "0.41",
+      numberFormat: nil,
+      numericValuesInRange: { _ in values },
+      evaluateFormula: { _, _, _ in .blank }
+    )
+    guard let lightText = lightPaint.format?.textColor, lightText.relativeLuminance < 0.25 else {
+      return Result(name: name, passed: false, detail: "scale text \(String(describing: lightPaint.format?.textColor))")
+    }
+
+    var whiteBase = CellFormat()
+    whiteBase.textColor = CodableColor(red: 1, green: 1, blue: 1, alpha: 1)
+    let darkRule = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: .origin),
+      predicate: .greaterThan(0),
+      style: ConditionalFormatStyle(fillColor: dark)
+    )
+    let darkPaint = ConditionalFormatEvaluator.resolvedPaint(
+      at: .origin,
+      base: whiteBase,
+      rules: [darkRule],
+      value: .number(5),
+      displayString: "5",
+      numberFormat: nil,
+      numericValuesInRange: { _ in [] },
+      evaluateFormula: { _, _, _ in .blank }
+    )
+    guard let darkText = darkPaint.format?.textColor, darkText.relativeLuminance > 0.8 else {
+      return Result(name: name, passed: false, detail: "dark fill text \(String(describing: darkPaint.format?.textColor))")
+    }
+
+    let chosen = CodableColor(red: 0.45, green: 0.12, blue: 0.12, alpha: 1)
+    let keptRule = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: .origin),
+      predicate: .greaterThan(0),
+      style: ConditionalFormatStyle(textColor: chosen, fillColor: yellow)
+    )
+    let keptPaint = ConditionalFormatEvaluator.resolvedPaint(
+      at: .origin,
+      base: nil,
+      rules: [keptRule],
+      value: .number(5),
+      displayString: "5",
+      numberFormat: nil,
+      numericValuesInRange: { _ in [] },
+      evaluateFormula: { _, _, _ in .blank }
+    )
+    guard let keptText = keptPaint.format?.textColor, abs(keptText.red - chosen.red) < 0.01 else {
+      return Result(name: name, passed: false, detail: "rule text was replaced \(String(describing: keptPaint.format?.textColor))")
+    }
+    return Result(name: name, passed: true, detail: "dark on light scale, light on dark fill")
   }
 }
 #endif
