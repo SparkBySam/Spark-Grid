@@ -55,6 +55,7 @@ enum BugBashRunner {
     results.append(cfParseNumber())
     results.append(MainActor.assumeIsolated { sortRemapsMerge() })
     results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
+    results.append(MainActor.assumeIsolated { selectionSizedInsert() })
     results.append(MainActor.assumeIsolated { insertChartEmptySelection() })
     results.append(formulaExactTokenSkipsAutocomplete())
     results.append(MainActor.assumeIsolated { editExistingChart() })
@@ -1184,6 +1185,195 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "first 8 swatches are not distinct")
     }
     return Result(name: name, passed: true, detail: "8 distinct bar/line swatches")
+  }
+
+  @MainActor
+  private static func selectionSizedInsert() -> Result {
+    let name = "selection sized insert"
+
+    guard SpreadsheetViewModel.structureInsertTitle(count: 1, singular: "Column", plural: "Columns", placement: "Left")
+            == "Insert Column Left",
+          SpreadsheetViewModel.structureInsertTitle(count: 3, singular: "Column", plural: "Columns", placement: "Right")
+            == "Insert 3 Columns Right",
+          SpreadsheetViewModel.structureInsertTitle(count: 3, singular: "Row", plural: "Rows", placement: "Above")
+            == "Insert 3 Rows Above",
+          SpreadsheetViewModel.structureInsertTitle(count: 4, singular: "Row", plural: "Rows", placement: "Below")
+            == "Insert 4 Rows Below"
+    else {
+      return Result(name: name, passed: false, detail: "menu title wording")
+    }
+
+    func raw(_ vm: SpreadsheetViewModel, _ row: Int, _ col: Int) -> String {
+      vm.activeSheet.cell(at: CellAddress(row: row, col: col)).raw
+    }
+
+    do {
+      var sheet = Sheet(name: "Cols")
+      sheet.setCell(Cell(raw: "left"), at: CellAddress(row: 0, col: 1))
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 0, col: 2))
+      sheet.setCell(Cell(raw: "right"), at: CellAddress(row: 0, col: 5))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumns(from: 2, to: 4)
+      guard vm.columnInsertCount == 3, vm.rowInsertCount == 1 else {
+        return Result(name: name, passed: false, detail: "header columns count \(vm.columnInsertCount) rows \(vm.rowInsertCount)")
+      }
+      guard vm.insertColumnLeftTitle == "Insert 3 Columns Left",
+            vm.insertColumnRightTitle == "Insert 3 Columns Right",
+            vm.insertRowAboveTitle == "Insert Row Above"
+      else {
+        return Result(name: name, passed: false, detail: "header column menu titles")
+      }
+      vm.insertColumnsLeft()
+      guard raw(vm, 0, 1) == "left", raw(vm, 0, 2).isEmpty, raw(vm, 0, 5) == "sel", raw(vm, 0, 8) == "right" else {
+        return Result(name: name, passed: false, detail: "insert 3 columns left shifted \(raw(vm, 0, 5))")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "ColsRight")
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 0, col: 4))
+      sheet.setCell(Cell(raw: "after"), at: CellAddress(row: 0, col: 7))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumns(from: 4, to: 6)
+      vm.insertColumnsRight()
+      let selected = vm.selectionRange.normalized
+      guard raw(vm, 0, 4) == "sel", raw(vm, 0, 7).isEmpty, raw(vm, 0, 10) == "after" else {
+        return Result(name: name, passed: false, detail: "insert 3 columns right did not open a gap of 3")
+      }
+      guard selected.minCol == 7, selected.maxCol == 9, vm.selectionAxis == .column else {
+        return Result(name: name, passed: false, detail: "insert right selection \(selected.minCol)-\(selected.maxCol)")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Rows")
+      sheet.setCell(Cell(raw: "above"), at: CellAddress(row: 1, col: 0))
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 2, col: 0))
+      sheet.setCell(Cell(raw: "below"), at: CellAddress(row: 5, col: 0))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRows(from: 2, to: 4)
+      guard vm.rowInsertCount == 3, vm.columnInsertCount == 1,
+            vm.insertRowAboveTitle == "Insert 3 Rows Above",
+            vm.insertRowBelowTitle == "Insert 3 Rows Below",
+            vm.insertColumnLeftTitle == "Insert Column Left"
+      else {
+        return Result(name: name, passed: false, detail: "header row counts/titles")
+      }
+      vm.insertRowsAbove()
+      guard raw(vm, 1, 0) == "above", raw(vm, 2, 0).isEmpty, raw(vm, 5, 0) == "sel", raw(vm, 8, 0) == "below" else {
+        return Result(name: name, passed: false, detail: "insert 3 rows above")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "RowsBelow")
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 2, col: 0))
+      sheet.setCell(Cell(raw: "after"), at: CellAddress(row: 5, col: 0))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRows(from: 2, to: 4)
+      vm.insertRowsBelow()
+      guard raw(vm, 2, 0) == "sel", raw(vm, 5, 0).isEmpty, raw(vm, 8, 0) == "after" else {
+        return Result(name: name, passed: false, detail: "insert 3 rows below")
+      }
+      let selected = vm.selectionRange.normalized
+      guard selected.minRow == 2, selected.maxRow == 4 else {
+        return Result(name: name, passed: false, detail: "row below selection moved")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Rect")
+      sheet.setCell(Cell(raw: "keep"), at: CellAddress(row: 0, col: 1))
+      sheet.setCell(Cell(raw: "body"), at: CellAddress(row: 1, col: 2))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRange(from: CellAddress(row: 1, col: 2), to: CellAddress(row: 4, col: 4))
+      guard vm.selectionAxis == .cells, vm.rowInsertCount == 4, vm.columnInsertCount == 3 else {
+        return Result(name: name, passed: false, detail: "rectangle counts rows \(vm.rowInsertCount) cols \(vm.columnInsertCount)")
+      }
+      guard vm.insertRowAboveTitle == "Insert 4 Rows Above",
+            vm.insertColumnLeftTitle == "Insert 3 Columns Left"
+      else {
+        return Result(name: name, passed: false, detail: "rectangle menu titles")
+      }
+      vm.insertRowsAbove()
+      guard raw(vm, 0, 1) == "keep", raw(vm, 5, 2) == "body", raw(vm, 1, 2).isEmpty else {
+        return Result(name: name, passed: false, detail: "rectangle row insert used \(raw(vm, 5, 2))")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "RectCols")
+      sheet.setCell(Cell(raw: "keep"), at: CellAddress(row: 1, col: 1))
+      sheet.setCell(Cell(raw: "body"), at: CellAddress(row: 1, col: 2))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRange(from: CellAddress(row: 1, col: 2), to: CellAddress(row: 4, col: 4))
+      vm.insertColumnsLeft()
+      guard raw(vm, 1, 1) == "keep", raw(vm, 1, 5) == "body", raw(vm, 1, 2).isEmpty else {
+        return Result(name: name, passed: false, detail: "rectangle column insert")
+      }
+      vm.selectRange(from: CellAddress(row: 1, col: 2), to: CellAddress(row: 4, col: 4))
+      vm.insertColumnsRight()
+      let selected = vm.selectionRange.normalized
+      guard selected.minRow == 1, selected.maxRow == 4, selected.minCol == 5, selected.maxCol == 7 else {
+        return Result(name: name, passed: false, detail: "rectangle insert right selection")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "One")
+      sheet.setCell(Cell(raw: "only"), at: CellAddress(row: 3, col: 3))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.select(CellAddress(row: 3, col: 3))
+      guard vm.rowInsertCount == 1, vm.columnInsertCount == 1,
+            vm.insertRowAboveTitle == "Insert Row Above",
+            vm.insertColumnRightTitle == "Insert Column Right"
+      else {
+        return Result(name: name, passed: false, detail: "single cell labels")
+      }
+      vm.insertColumnsLeft()
+      guard raw(vm, 3, 4) == "only", raw(vm, 3, 3).isEmpty else {
+        return Result(name: name, passed: false, detail: "single cell inserted more than one column")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Gaps")
+      sheet.setCell(Cell(raw: "b"), at: CellAddress(row: 0, col: 1))
+      sheet.setCell(Cell(raw: "gap"), at: CellAddress(row: 0, col: 2))
+      sheet.setCell(Cell(raw: "d"), at: CellAddress(row: 0, col: 3))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumn(1)
+      vm.commandClickColumn(3)
+      vm.commandClickColumn(5)
+      guard vm.columnInsertCount == 3, vm.insertColumnLeftTitle == "Insert 3 Columns Left" else {
+        return Result(name: name, passed: false, detail: "disjoint columns counted \(vm.columnInsertCount)")
+      }
+      vm.insertColumnsLeft()
+      guard raw(vm, 0, 1).isEmpty, raw(vm, 0, 4) == "b", raw(vm, 0, 5) == "gap", raw(vm, 0, 6) == "d" else {
+        return Result(name: name, passed: false, detail: "disjoint insert count was not 3")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Edge")
+      let last = Workbook.defaultColumnCount - 1
+      sheet.setCell(Cell(raw: "end"), at: CellAddress(row: 0, col: last - 1))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumns(from: last - 1, to: last)
+      let before = vm.activeSheet.effectiveColumnCount
+      guard vm.columnInsertCount == 2 else {
+        return Result(name: name, passed: false, detail: "edge selection count \(vm.columnInsertCount)")
+      }
+      vm.insertColumnsRight()
+      guard vm.activeSheet.effectiveColumnCount == before + 2 else {
+        return Result(name: name, passed: false, detail: "edge insert grew by \(vm.activeSheet.effectiveColumnCount - before)")
+      }
+      guard raw(vm, 0, last - 1) == "end" else {
+        return Result(name: name, passed: false, detail: "edge insert moved the selected column")
+      }
+    }
+
+    return Result(name: name, passed: true, detail: "rows and columns match the selection")
   }
 }
 #endif

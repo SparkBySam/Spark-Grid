@@ -2859,9 +2859,16 @@ final class SpreadsheetGridNSView: NSView {
     if let viewModel {
       switch headerHit(at: point) {
       case .row(let row):
+        // Keep a multi-row header selection so Insert can offer that many rows.
+        if viewModel.selectionAxis == .row, viewModel.isRowInSelection(row) {
+          break
+        }
         viewModel.selectRow(row)
         needsDisplay = true
       case .column(let col):
+        if viewModel.selectionAxis == .column, viewModel.isColumnInSelection(col) {
+          break
+        }
         viewModel.selectColumn(col)
         needsDisplay = true
       case .content:
@@ -2963,16 +2970,36 @@ final class SpreadsheetGridNSView: NSView {
 
     if showRows || showCols {
       if showRows {
-        addMenuItem(menu, "Insert Row Above", #selector(handleMenuInsertRowAbove(_:)))
-        addMenuItem(menu, "Insert Row Below", #selector(handleMenuInsertRowBelow(_:)))
+        addMenuItem(
+          menu,
+          viewModel.insertRowAboveTitle,
+          #selector(handleMenuInsertRowAbove(_:)),
+          tag: viewModel.rowInsertCount
+        )
+        addMenuItem(
+          menu,
+          viewModel.insertRowBelowTitle,
+          #selector(handleMenuInsertRowBelow(_:)),
+          tag: viewModel.rowInsertCount
+        )
         addMenuItem(menu, "Delete Row(s)", #selector(handleMenuDeleteRows(_:)))
       }
       if showRows && showCols {
         menu.addItem(.separator())
       }
       if showCols {
-        addMenuItem(menu, "Insert Column Left", #selector(handleMenuInsertColumnLeft(_:)))
-        addMenuItem(menu, "Insert Column Right", #selector(handleMenuInsertColumnRight(_:)))
+        addMenuItem(
+          menu,
+          viewModel.insertColumnLeftTitle,
+          #selector(handleMenuInsertColumnLeft(_:)),
+          tag: viewModel.columnInsertCount
+        )
+        addMenuItem(
+          menu,
+          viewModel.insertColumnRightTitle,
+          #selector(handleMenuInsertColumnRight(_:)),
+          tag: viewModel.columnInsertCount
+        )
         addMenuItem(menu, "Delete Column(s)", #selector(handleMenuDeleteColumns(_:)))
       }
       menu.addItem(.separator())
@@ -2999,10 +3026,16 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @discardableResult
-  private func addMenuItem(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
+  private func addMenuItem(_ menu: NSMenu, _ title: String, _ action: Selector, tag: Int = 0) -> NSMenuItem {
     let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
     item.target = self
+    item.tag = tag
     return item
+  }
+
+  private func menuInsertCount(from sender: Any?) -> Int? {
+    guard let item = sender as? NSMenuItem, item.tag > 0 else { return nil }
+    return item.tag
   }
 
   private func addStructureMenuItems(to menu: NSMenu) {
@@ -3050,12 +3083,12 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @objc private func handleMenuInsertRowAbove(_ sender: Any?) {
-    viewModel?.insertRowsAbove()
+    viewModel?.insertRowsAbove(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
   @objc private func handleMenuInsertRowBelow(_ sender: Any?) {
-    viewModel?.insertRowsBelow()
+    viewModel?.insertRowsBelow(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
@@ -3065,12 +3098,12 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @objc private func handleMenuInsertColumnLeft(_ sender: Any?) {
-    viewModel?.insertColumnsLeft()
+    viewModel?.insertColumnsLeft(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
   @objc private func handleMenuInsertColumnRight(_ sender: Any?) {
-    viewModel?.insertColumnsRight()
+    viewModel?.insertColumnsRight(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
