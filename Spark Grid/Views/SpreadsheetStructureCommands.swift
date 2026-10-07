@@ -13,19 +13,35 @@ struct SpreadsheetStructureCommands: Commands {
     CommandMenu("Sheet") {
       let axis = viewModel?.selectionAxis ?? .cells
 
-      Button("Insert Row Above") { viewModel?.insertRowsAbove() }
-        .disabled(viewModel == nil || axis == .column)
-      Button("Insert Row Below") { viewModel?.insertRowsBelow() }
-        .disabled(viewModel == nil || axis == .column)
+      Button {
+        viewModel?.insertRowsAbove()
+      } label: {
+        Text(viewModel?.insertRowAboveTitle ?? "Insert Row Above")
+      }
+      .disabled(viewModel == nil || axis == .column)
+      Button {
+        viewModel?.insertRowsBelow()
+      } label: {
+        Text(viewModel?.insertRowBelowTitle ?? "Insert Row Below")
+      }
+      .disabled(viewModel == nil || axis == .column)
       Button("Delete Row(s)") { viewModel?.deleteSelectedRows() }
         .disabled(viewModel == nil || axis == .column)
 
       Divider()
 
-      Button("Insert Column Left") { viewModel?.insertColumnsLeft() }
-        .disabled(viewModel == nil || axis == .row)
-      Button("Insert Column Right") { viewModel?.insertColumnsRight() }
-        .disabled(viewModel == nil || axis == .row)
+      Button {
+        viewModel?.insertColumnsLeft()
+      } label: {
+        Text(viewModel?.insertColumnLeftTitle ?? "Insert Column Left")
+      }
+      .disabled(viewModel == nil || axis == .row)
+      Button {
+        viewModel?.insertColumnsRight()
+      } label: {
+        Text(viewModel?.insertColumnRightTitle ?? "Insert Column Right")
+      }
+      .disabled(viewModel == nil || axis == .row)
       Button("Delete Column(s)") { viewModel?.deleteSelectedColumns() }
         .disabled(viewModel == nil || axis == .row)
 

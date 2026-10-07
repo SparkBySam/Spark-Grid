@@ -1254,32 +1254,104 @@ final class SpreadsheetViewModel {
 
   // MARK: - Structure
 
-  func insertRowsAbove(count: Int = 1) {
-    insertRows(at: selectionRange.normalized.minRow, count: count)
+  /// Rows a row insert will add. A whole-column selection does not count every sheet row.
+  var rowInsertCount: Int {
+    guard selectionAxis != .column else { return 1 }
+    return structureSelectionBounds(.row).count
   }
 
-  func insertRowsBelow(count: Int = 1) {
-    insertRows(at: selectionRange.normalized.maxRow + 1, count: count)
+  /// Columns a column insert will add. A whole-row selection does not count every sheet column.
+  var columnInsertCount: Int {
+    guard selectionAxis != .row else { return 1 }
+    return structureSelectionBounds(.column).count
   }
 
-  func insertColumnsLeft(count: Int = 1) {
-    insertColumns(at: selectionRange.normalized.minCol, count: count)
+  var insertRowAboveTitle: String {
+    Self.structureInsertTitle(count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Above")
   }
 
-  func insertColumnsRight(count: Int = 1) {
-    let n = selectionRange.normalized
-    let insertAt = n.maxCol + 1
-    insertColumns(at: insertAt, count: count)
-    let newEndCol = insertAt + count - 1
-    if selectionAxis == .column {
+  var insertRowBelowTitle: String {
+    Self.structureInsertTitle(count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Below")
+  }
+
+  var insertColumnLeftTitle: String {
+    Self.structureInsertTitle(count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Left")
+  }
+
+  var insertColumnRightTitle: String {
+    Self.structureInsertTitle(count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Right")
+  }
+
+  static func structureInsertTitle(count: Int, singular: String, plural: String, placement: String) -> String {
+    if count <= 1 {
+      return "Insert \(singular) \(placement)"
+    }
+    return "Insert \(count) \(plural) \(placement)"
+  }
+
+  func insertRowsAbove(count: Int? = nil) {
+    let bounds = structureSelectionBounds(.row)
+    insertRows(at: bounds.min, count: resolvedInsertCount(count, fallback: rowInsertCount))
+  }
+
+  func insertRowsBelow(count: Int? = nil) {
+    let bounds = structureSelectionBounds(.row)
+    insertRows(at: bounds.max + 1, count: resolvedInsertCount(count, fallback: rowInsertCount))
+  }
+
+  func insertColumnsLeft(count: Int? = nil) {
+    let bounds = structureSelectionBounds(.column)
+    insertColumns(at: bounds.min, count: resolvedInsertCount(count, fallback: columnInsertCount))
+  }
+
+  func insertColumnsRight(count: Int? = nil) {
+    let bounds = structureSelectionBounds(.column)
+    let insertCount = resolvedInsertCount(count, fallback: columnInsertCount)
+    let insertAt = bounds.max + 1
+    let axis = selectionAxis
+    insertColumns(at: insertAt, count: insertCount)
+    let newEndCol = insertAt + insertCount - 1
+    if axis == .column {
       selectColumns(from: insertAt, to: newEndCol)
     } else {
+      let rows = structureSelectionBounds(.row)
       selectRange(
-        from: CellAddress(row: n.minRow, col: insertAt),
-        to: CellAddress(row: n.maxRow, col: newEndCol)
+        from: CellAddress(row: rows.min, col: insertAt),
+        to: CellAddress(row: rows.max, col: newEndCol)
       )
     }
     scrollRequestToken &+= 1
+  }
+
+  private func resolvedInsertCount(_ explicit: Int?, fallback: Int) -> Int {
+    max(1, explicit ?? fallback)
+  }
+
+  private enum StructureInsertAxis {
+    case row
+    case column
+  }
+
+  /// Distinct selected indexes on one axis, plus the outer edges of that selection.
+  /// A contiguous block's count is its span. Gaps in a multi-range selection are not counted.
+  private func structureSelectionBounds(_ axis: StructureInsertAxis) -> (min: Int, max: Int, count: Int) {
+    let ranges = selectionRanges.isEmpty ? [selectionRange] : selectionRanges
+    var seen = Set<Int>()
+    var minIndex = Int.max
+    var maxIndex = Int.min
+    for range in ranges {
+      let n = range.normalized
+      let lower = axis == .row ? n.minRow : n.minCol
+      let upper = axis == .row ? n.maxRow : n.maxCol
+      guard upper >= lower else { continue }
+      minIndex = min(minIndex, lower)
+      maxIndex = max(maxIndex, upper)
+      for index in lower...upper {
+        seen.insert(index)
+      }
+    }
+    guard !seen.isEmpty else { return (0, 0, 1) }
+    return (minIndex, maxIndex, seen.count)
   }
 
   func deleteSelectedRows() {
