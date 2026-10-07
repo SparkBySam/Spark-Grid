@@ -55,6 +55,7 @@ enum BugBashRunner {
     results.append(cfParseNumber())
     results.append(MainActor.assumeIsolated { sortRemapsMerge() })
     results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
+    results.append(MainActor.assumeIsolated { insertChartEmptySelection() })
     return results
   }
 
@@ -904,6 +905,74 @@ enum BugBashRunner {
       )
     }
     return Result(name: "insert column right edge", passed: true, detail: "column \(lastCol + 1)")
+  }
+
+  @MainActor
+  private static func insertChartEmptySelection() -> Result {
+    let name = "insert chart empty selection"
+    var sheet = Sheet(name: "Charts")
+    sheet.setCell(Cell(raw: "Name"), at: .origin)
+    sheet.setCell(Cell(raw: "Ada"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 1, col: 1))
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    guard vm.selectionRange.isSingleCell else {
+      return Result(name: name, passed: false, detail: "expected a single-cell selection")
+    }
+    guard vm.chartSelectionRange == nil else {
+      return Result(name: name, passed: false, detail: "invented a range from nearby cells")
+    }
+    vm.beginInsertChart(preferredKind: .line)
+    guard vm.isInsertChartPresented, vm.pendingChartKind == .line else {
+      return Result(name: name, passed: false, detail: "chart menu did not open")
+    }
+    guard vm.activeSheet.charts.isEmpty else {
+      return Result(name: name, passed: false, detail: "chart created before a range was chosen")
+    }
+    let refused = vm.insertChart(
+      SheetChart(kind: .bar, dataRange: .singleOrigin, anchorRow: 0, anchorCol: 0)
+    )
+    guard !refused, vm.activeSheet.charts.isEmpty, vm.isInsertChartPresented else {
+      return Result(name: name, passed: false, detail: "single-cell insert was accepted")
+    }
+    guard ChartDataRangeParser.parse("") == nil,
+          ChartDataRangeParser.parse("A1") == nil,
+          ChartDataRangeParser.parse("A1:A1") == nil,
+          ChartDataRangeParser.parse("A:A") == nil,
+          ChartDataRangeParser.parse("Sheet1!A1:B2") == nil
+    else {
+      return Result(name: name, passed: false, detail: "parser accepted an empty selection")
+    }
+    guard let parsed = ChartDataRangeParser.parse("A1:B2"), !parsed.isSingleCell else {
+      return Result(name: name, passed: false, detail: "parser rejected A1:B2")
+    }
+    let inserted = vm.insertChart(
+      SheetChart(
+        kind: .line,
+        title: "Picked",
+        dataRange: parsed,
+        categoryColumn: 0,
+        valueColumn: 1,
+        anchorRow: 4,
+        anchorCol: 0
+      )
+    )
+    guard inserted, vm.activeSheet.charts.count == 1, vm.activeSheet.charts[0].dataRange == parsed else {
+      return Result(name: name, passed: false, detail: "explicit range was not inserted")
+    }
+    guard !vm.isInsertChartPresented else {
+      return Result(name: name, passed: false, detail: "menu stayed open after insert")
+    }
+
+    let ranged = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    ranged.selectRange(from: .origin, to: CellAddress(row: 1, col: 1))
+    guard let chosen = ranged.chartSelectionRange, !chosen.isSingleCell else {
+      return Result(name: name, passed: false, detail: "multi-cell selection was dropped")
+    }
+    ranged.beginInsertChart()
+    guard ranged.isInsertChartPresented, ranged.activeSheet.charts.isEmpty else {
+      return Result(name: name, passed: false, detail: "ranged insert opened wrong")
+    }
+    return Result(name: name, passed: true, detail: "menu opens; chart waits for a range")
   }
 }
 #endif

@@ -124,16 +124,26 @@ extension SpreadsheetViewModel {
     beginInsertChart(preferredKind: kind)
   }
 
+  /// The current selection when it covers more than one cell.
+  /// A single cell is not a chart range, and nearby data is left alone.
+  var chartSelectionRange: CellRange? {
+    let range = selectionRange
+    guard !range.isSingleCell else { return nil }
+    return range
+  }
+
   func beginInsertChart(preferredKind: SheetChart.Kind = .bar) {
     commitEditIfNeeded()
-    let n = selectionRange.normalized
-    guard n.minRow != n.maxRow || n.minCol != n.maxCol else { return }
     pendingChartKind = preferredKind
     isInsertChartPresented = true
   }
 
-  func insertChart(_ chart: SheetChart) {
+  /// Inserts `chart` when its data range covers more than one cell.
+  /// A single-cell range is refused so an empty selection cannot become a chart.
+  @discardableResult
+  func insertChart(_ chart: SheetChart) -> Bool {
     commitEditIfNeeded()
+    guard !chart.dataRange.isSingleCell else { return false }
     var sheet = activeSheet
     let before = sheet.charts
     var next = chart
@@ -143,6 +153,7 @@ extension SpreadsheetViewModel {
     sheet.charts.append(next)
     applyCharts(sheet.charts, undoBefore: before, actionName: "Insert Chart")
     isInsertChartPresented = false
+    return true
   }
 
   func removeChart(id: UUID) {
