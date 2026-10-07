@@ -1491,11 +1491,19 @@ final class SpreadsheetGridNSView: NSView {
     }
     for chart in charts {
       let rect = chartRect(for: chart)
+      let top = rect.minY
+      let bottom = rect.minY + rect.height
+      guard rect.width >= 1,
+            let height = OnSheetChartGeometry.placedHeight(top: top, bottom: bottom)
+      else {
+        removeChartHost(id: chart.id)
+        continue
+      }
       let local = NSRect(
         x: rect.minX - chartLayerView.frame.minX,
         y: rect.minY - chartLayerView.frame.minY,
         width: rect.width,
-        height: rect.height
+        height: height
       )
       let snapshot = ChartHostSnapshot(
         chart: chart,
@@ -1511,6 +1519,9 @@ final class SpreadsheetGridNSView: NSView {
         created.safeAreaRegions = []
         created.translatesAutoresizingMaskIntoConstraints = true
         created.focusRingType = .none
+        // Set a positive frame before the host joins the window. A zero
+        // bounds lays the card out immediately and the inset height goes negative.
+        created.frame = local
         chartLayerView.addSubview(created)
         chartHosts[chart.id] = created
         host = created
@@ -1519,7 +1530,7 @@ final class SpreadsheetGridNSView: NSView {
         host.rootView = OnSheetChartCard(chart: chart, viewModel: viewModel)
         chartHostSnapshots[chart.id] = snapshot
       }
-      host.isHidden = local.width < 8 || local.height < 8
+      host.isHidden = false
       if host.frame != local {
         host.frame = local
       }
@@ -1556,6 +1567,12 @@ final class SpreadsheetGridNSView: NSView {
     }
     chartHosts.removeAll()
     chartHostSnapshots.removeAll()
+  }
+
+  private func removeChartHost(id: UUID) {
+    chartHosts[id]?.removeFromSuperview()
+    chartHosts.removeValue(forKey: id)
+    chartHostSnapshots.removeValue(forKey: id)
   }
 
   private func chartRect(for chart: SheetChart) -> NSRect {
