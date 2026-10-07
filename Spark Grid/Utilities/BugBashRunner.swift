@@ -1393,6 +1393,54 @@ enum BugBashRunner {
     guard moved.anchorCol == 1, moved.anchorRow == 5, moved.colSpan == 8, moved.rowSpan == 12 else {
       return Result(name: name, passed: false, detail: "move \(moved)")
     }
+    let corrected = SpreadsheetGridNSView.chartDragTranslation(dx: 100, dy: 30)
+    guard corrected.width == 100, corrected.height == -30 else {
+      return Result(name: name, passed: false, detail: "vertical sign \(corrected)")
+    }
+    let correctedMove = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .body,
+      startRect: rect,
+      translation: corrected,
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard correctedMove.anchorCol == 1, correctedMove.anchorRow == 2,
+          correctedMove.colSpan == 8, correctedMove.rowSpan == 12
+    else {
+      return Result(name: name, passed: false, detail: "negated move \(correctedMove)")
+    }
+    let correctedBottom = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .bottom,
+      startRect: rect,
+      translation: corrected,
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard correctedBottom.anchorRow == 4, correctedBottom.anchorCol == 0, correctedBottom.rowSpan == 11 else {
+      return Result(name: name, passed: false, detail: "negated bottom \(correctedBottom)")
+    }
+    let correctedTop = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .top,
+      startRect: rect,
+      translation: corrected,
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard correctedTop.anchorRow == 2, correctedTop.rowSpan == 14, correctedTop.anchorCol == 0 else {
+      return Result(name: name, passed: false, detail: "negated top \(correctedTop)")
+    }
     let nudged = OnSheetChartGeometry.anchorAfterDrag(
       start: start,
       handle: .body,

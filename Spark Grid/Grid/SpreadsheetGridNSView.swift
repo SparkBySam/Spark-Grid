@@ -1840,11 +1840,20 @@ final class SpreadsheetGridNSView: NSView {
     needsDisplay = true
   }
 
+  /// Pointer delta for a chart drag. `OnSheetChartHost` is flipped, which
+  /// reverses vertical pointer movement when it becomes an anchor row.
+  /// Negating only that part makes a downward drag move the chart down the
+  /// sheet and an upward drag move it up. Horizontal drag is unchanged.
+  /// Top and bottom resize handles use this same translation.
+  static func chartDragTranslation(dx: CGFloat, dy: CGFloat) -> CGSize {
+    CGSize(width: dx, height: -dy)
+  }
+
   private func applyChartDrag(to point: NSPoint) {
     guard let drag = activeChartDrag, let viewModel else { return }
-    let translation = CGSize(
-      width: point.x - drag.startPoint.x,
-      height: point.y - drag.startPoint.y
+    let translation = Self.chartDragTranslation(
+      dx: point.x - drag.startPoint.x,
+      dy: point.y - drag.startPoint.y
     )
     let start = OnSheetChartGeometry.ChartFrameAnchor(
       anchorRow: drag.startChart.anchorRow,
