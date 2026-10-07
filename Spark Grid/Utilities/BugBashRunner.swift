@@ -60,6 +60,7 @@ enum BugBashRunner {
     results.append(formulaExactTokenSkipsAutocomplete())
     results.append(MainActor.assumeIsolated { editExistingChart() })
     results.append(onSheetChartFrame())
+    results.append(chartPlotPaddingBounded())
     results.append(weeklyCallsLastLabel())
     results.append(chartValueColors())
     results.append(legacyChartLandsUnderData())
@@ -1158,6 +1159,45 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "scrolled span \(scrolled.height)")
     }
     return Result(name: name, passed: true, detail: "\(Int(frame.width))×\(Int(frame.height)) at row 7")
+  }
+
+  /// `SheetChartView` hands `.chartPlotStyle { plot.padding(.bottom, _) }` a
+  /// value that must stay under whatever height the chart is actually given;
+  /// otherwise Charts computes a negative plot height in
+  /// `PositionScaleRange.plotFrame` and traps. A normal multi-cell chart
+  /// (plenty of height) must still get the full 20pt inset for category
+  /// labels — this only has to shrink once the proposed height is small
+  /// (side panel mid-resize, first layout, or a squeezed on-sheet card).
+  private static func chartPlotPaddingBounded() -> Result {
+    let name = "chart plot padding bounded"
+    let ideal = SheetChartView.plotBottomInset
+    let minimum = SheetChartView.minimumPlotHeight
+    // A normal 8×12 chart card has well over `minimum` to spare: full padding.
+    let roomy = SheetChartView.clampedBottomPadding(idealPadding: ideal, availableHeight: 236)
+    guard roomy == ideal else {
+      return Result(name: name, passed: false, detail: "roomy chart lost its padding: \(roomy)")
+    }
+    // Exactly `ideal + minimum` is the last height that still affords full padding.
+    let boundary = SheetChartView.clampedBottomPadding(idealPadding: ideal, availableHeight: ideal + minimum)
+    guard boundary == ideal else {
+      return Result(name: name, passed: false, detail: "boundary height lost its padding: \(boundary)")
+    }
+    // Below that, padding must shrink by exactly the shortfall — plot height
+    // stays pinned at `minimum`, never negative.
+    for availableHeight: CGFloat in [minimum, minimum + 8, ideal + minimum - 1, 10, 1] {
+      let padding = SheetChartView.clampedBottomPadding(idealPadding: ideal, availableHeight: availableHeight)
+      guard padding >= 0, padding <= availableHeight, availableHeight - padding >= min(minimum, availableHeight) else {
+        return Result(name: name, passed: false, detail: "height \(availableHeight) padding \(padding) went negative")
+      }
+    }
+    // A degenerate or reversed proposal must never produce negative padding.
+    for availableHeight: CGFloat in [0, -5] {
+      let padding = SheetChartView.clampedBottomPadding(idealPadding: ideal, availableHeight: availableHeight)
+      guard padding == 0 else {
+        return Result(name: name, passed: false, detail: "non-positive height \(availableHeight) kept padding \(padding)")
+      }
+    }
+    return Result(name: name, passed: true, detail: "padding stays within the proposed height at every size")
   }
 
   private static func weeklyCallsLastLabel() -> Result {
