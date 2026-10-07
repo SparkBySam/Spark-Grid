@@ -61,6 +61,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { editExistingChart() })
     results.append(onSheetChartFrame())
     results.append(chartPlotPaddingBounded())
+    results.append(chartScaleDomainHolds())
     results.append(weeklyCallsLastLabel())
     results.append(chartValueColors())
     results.append(legacyChartLandsUnderData())
@@ -1198,6 +1199,72 @@ enum BugBashRunner {
       }
     }
     return Result(name: name, passed: true, detail: "padding stays within the proposed height at every size")
+  }
+
+  /// Insert Chart on Weekly Calls must hand Charts a finite domain with
+  /// `lower < upper`. An empty, NaN, or reversed domain hits the same
+  /// `PositionScaleRange.plotFrame` trap as a negative plot height.
+  private static func chartScaleDomainHolds() -> Result {
+    let name = "chart scale domain"
+    func holds(_ domain: ClosedRange<Double>?) -> Bool {
+      guard let domain else { return false }
+      return domain.lowerBound.isFinite
+        && domain.upperBound.isFinite
+        && domain.lowerBound < domain.upperBound
+    }
+    let weeklyValues = [3.0, 6, 9, 12]
+    guard let weekly = SheetChartView.plotValueDomain(values: weeklyValues),
+          holds(weekly),
+          weekly.lowerBound <= 0,
+          weekly.upperBound > 12
+    else {
+      return Result(name: name, passed: false, detail: "weekly \(String(describing: SheetChartView.plotValueDomain(values: weeklyValues)))")
+    }
+    guard holds(SheetChartView.plotValueDomain(values: [5, 5, 5])),
+          holds(SheetChartView.plotValueDomain(values: [0, 0])),
+          let negatives = SheetChartView.plotValueDomain(values: [-4, -4]),
+          holds(negatives),
+          negatives.lowerBound <= -4
+    else {
+      return Result(name: name, passed: false, detail: "flat series domain collapsed")
+    }
+    guard SheetChartView.plotValueDomain(values: []) == nil,
+          SheetChartView.plotValueDomain(values: [.nan, .infinity]) == nil,
+          let mixed = SheetChartView.plotValueDomain(values: [.nan, 4]),
+          holds(mixed),
+          mixed.upperBound > 4
+    else {
+      return Result(name: name, passed: false, detail: "non-finite values still produced a domain")
+    }
+    guard SheetChartView.plotCategoryDomain(count: 0) == nil,
+          SheetChartView.plotCategoryDomain(count: 1) == -0.5...0.5,
+          SheetChartView.plotCategoryDomain(count: 4) == -0.5...3.5
+    else {
+      return Result(name: name, passed: false, detail: "category domain \(String(describing: SheetChartView.plotCategoryDomain(count: 4)))")
+    }
+
+    let range = CellRange(start: .origin, end: CellAddress(row: 2, col: 1))
+    let chart = SheetChart(
+      kind: .bar,
+      dataRange: range,
+      categoryColumn: 0,
+      valueColumn: 1,
+      hasHeaderRow: false,
+      valueMode: .values,
+      anchorRow: 0,
+      anchorCol: 0
+    )
+    let series = ChartPreviewSeries.points(
+      for: chart,
+      labelFor: { _ in "Week" },
+      numberFor: { address in
+        address.row == 1 ? .nan : Double(address.row + 1)
+      }
+    )
+    guard series.points.count == 2, series.points.allSatisfy({ $0.value.isFinite }) else {
+      return Result(name: name, passed: false, detail: "NaN point was plotted \(series.points)")
+    }
+    return Result(name: name, passed: true, detail: "weekly \(weekly.lowerBound)...\(weekly.upperBound)")
   }
 
   private static func weeklyCallsLastLabel() -> Result {

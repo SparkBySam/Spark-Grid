@@ -199,6 +199,35 @@ struct SheetChartView: View {
     max(0, min(idealPadding, availableHeight - minimumPlotHeight))
   }
 
+  /// Y domain Charts can turn into a position range. An empty, non-finite, or
+  /// reversed domain makes `PositionScaleRange.plotFrame` trap even when the
+  /// view is hundreds of points tall. Nil means "do not build a Chart".
+  static func plotValueDomain(values: [Double]) -> ClosedRange<Double>? {
+    let finite = values.filter(\.isFinite)
+    guard let rawMax = finite.max(), let rawMin = finite.min() else { return nil }
+    let lower = min(0, rawMin)
+    let span = rawMax - lower
+    let upper: Double
+    if span > 0, span.isFinite {
+      let pad = max(span * 0.08, 0.5)
+      upper = rawMax + (pad.isFinite ? pad : 1)
+    } else {
+      upper = max(rawMax, 0) + 1
+    }
+    guard lower.isFinite, upper.isFinite, lower < upper else { return nil }
+    return lower...upper
+  }
+
+  /// Category domain for indexes `0 ..< count`, inset by half a slot so the
+  /// end bars stay inside the plot. No categories is an empty range.
+  static func plotCategoryDomain(count: Int) -> ClosedRange<Double>? {
+    guard count > 0 else { return nil }
+    let lower = -0.5
+    let upper = Double(count - 1) + 0.5
+    guard lower.isFinite, upper.isFinite, lower < upper else { return nil }
+    return lower...upper
+  }
+
   var body: some View {
     GeometryReader { geo in
       chartStack(in: geo.size)
@@ -226,11 +255,18 @@ struct SheetChartView: View {
         .frame(width: innerWidth, height: innerHeight)
         .position(x: size.width / 2, y: size.height / 2)
       }
-    } else if let slot = plotSlot(in: size) {
+    } else if let slot = plotSlot(in: size),
+              let yDomain = Self.plotValueDomain(values: renderPoints.map(\.value)),
+              let xDomain = Self.plotCategoryDomain(count: renderPoints.count) {
       let caption = captionHeight
       let spacing: CGFloat = caption >= 1 ? 6 : 0
       VStack(alignment: .leading, spacing: spacing) {
-        chartBody(bottomPadding: slot.bottomPadding, showAxisLabels: slot.showAxisLabels)
+        chartBody(
+          bottomPadding: slot.bottomPadding,
+          showAxisLabels: slot.showAxisLabels,
+          yDomain: yDomain,
+          xDomain: xDomain
+        )
           .frame(width: size.width, height: slot.height)
         if caption >= 1 {
           Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
@@ -283,8 +319,16 @@ struct SheetChartView: View {
   ///   - showAxisLabels: Hides the leading value-axis labels (and the width
   ///     Charts reserves for them) once the proposed width is too narrow to
   ///     spare that room, e.g. mid-resize of the side panel.
+  ///   - yDomain: Finite value domain with `lower < upper`. Built by
+  ///     `plotValueDomain` so a Chart is never given an empty scale.
+  ///   - xDomain: Category domain, same contract, from `plotCategoryDomain`.
   @ViewBuilder
-  private func chartBody(bottomPadding: CGFloat, showAxisLabels: Bool) -> some View {
+  private func chartBody(
+    bottomPadding: CGFloat,
+    showAxisLabels: Bool,
+    yDomain: ClosedRange<Double>,
+    xDomain: ClosedRange<Double>
+  ) -> some View {
     let points = renderPoints
     let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
     let lineGradient = LinearGradient(
@@ -292,42 +336,46 @@ struct SheetChartView: View {
       startPoint: .leading,
       endPoint: .trailing
     )
-    let marks = Chart(points) { point in
+    // Paint each mark directly. `foregroundStyle(by:)` together with
+    // `chartForegroundStyleScale` (keyed by the same indexes as the X axis)
+    // makes Charts call `PositionScaleRange.plotFrame` with an empty range,
+    // including on the 440×200 Insert Chart preview.
+    Chart(points) { point in
       switch chart.kind {
       case .bar:
         BarMark(
-          x: .value("Category", point.id),
+          x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(by: .value("Swatch", point.id))
+        .foregroundStyle(valueColor(for: point, kind: .bar))
       case .line:
         LineMark(
-          x: .value("Category", point.id),
+          x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
         .foregroundStyle(lineGradient)
         .interpolationMethod(.catmullRom)
         PointMark(
-          x: .value("Category", point.id),
+          x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(by: .value("Swatch", point.id))
+        .foregroundStyle(valueColor(for: point, kind: .line))
         .symbolSize(points.count > 20 ? 28 : 46)
       case .area:
         AreaMark(
-          x: .value("Category", point.id),
+          x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
         .foregroundStyle(Color.accentColor.opacity(0.22).gradient)
         LineMark(
-          x: .value("Category", point.id),
+          x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
         .foregroundStyle(Color.accentColor)
       }
     }
     .chartYScale(domain: yDomain)
-    .chartXScale(domain: -0.5...(Double(max(0, points.count - 1)) + 0.5))
+    .chartXScale(domain: xDomain)
     .chartPlotStyle { plot in
       plot.padding(.bottom, bottomPadding)
     }
@@ -372,18 +420,8 @@ struct SheetChartView: View {
       }
       .allowsHitTesting(false)
     }
+    .chartLegend(.hidden)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    if ChartMarkPalette.usesDistinctValueColors(chart.kind) {
-      marks
-        .chartForegroundStyleScale(
-          domain: points.map(\.id),
-          range: points.map { ChartMarkPalette.swatch(at: $0.id).color }
-        )
-        .chartLegend(.hidden)
-    } else {
-      marks
-        .chartLegend(.hidden)
-    }
   }
 
   private func categoryPlacements(plot: CGRect, chartWidth: CGFloat) -> [ChartCategoryLabelLayout.Placement] {
@@ -414,20 +452,6 @@ struct SheetChartView: View {
   private func valueColor(for point: Point, kind: SheetChart.Kind) -> Color {
     guard ChartMarkPalette.usesDistinctValueColors(kind) else { return Color.accentColor }
     return ChartMarkPalette.swatch(at: point.id).color
-  }
-
-  private var yDomain: ClosedRange<Double> {
-    let values = renderPoints.map(\.value)
-    guard let rawMax = values.max(), let rawMin = values.min() else {
-      return 0...1
-    }
-    let maxValue = rawMax.isFinite ? rawMax : 1
-    let minValue = min(0, rawMin.isFinite ? rawMin : 0)
-    if !maxValue.isFinite || !minValue.isFinite || maxValue <= minValue {
-      return min(minValue, 0)...(max(maxValue, 0) + 1)
-    }
-    let pad = max((maxValue - minValue) * 0.08, 0.5)
-    return minValue...(maxValue + pad)
   }
 
   private var cacheToken: String {
