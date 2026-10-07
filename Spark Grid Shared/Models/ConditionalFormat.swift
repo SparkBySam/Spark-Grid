@@ -234,6 +234,7 @@ enum ConditionalFormatEvaluator {
           numericValuesInRange: numericValuesInRange
         ) else { continue }
         result.fillColor = fill
+        applyContrastingText(to: &result, fill: fill, ruleTextColor: rule.style.textColor)
         paint.format = result.isDefault ? nil : result
         applied = true
         if rule.stopIfTrue { break }
@@ -272,7 +273,11 @@ enum ConditionalFormatEvaluator {
           evaluateFormula: evaluateFormula
         ) else { continue }
 
+        let ruleTextColor = rule.style.textColor
         result = rule.style.applying(to: result)
+        if let fill = rule.style.fillColor {
+          applyContrastingText(to: &result, fill: fill, ruleTextColor: ruleTextColor)
+        }
         paint.format = result.isDefault ? nil : result
         applied = true
         if rule.stopIfTrue { break }
@@ -286,6 +291,18 @@ enum ConditionalFormatEvaluator {
       paint.format = result
     }
     return paint
+  }
+
+  /// A conditional fill replaces the cell background, so unreadably light or dark
+  /// text (including the dark-mode label color) switches to the opposite.
+  /// A text color chosen on the rule itself is left alone.
+  private static func applyContrastingText(
+    to result: inout CellFormat,
+    fill: CodableColor,
+    ruleTextColor: CodableColor?
+  ) {
+    guard ruleTextColor == nil else { return }
+    result.textColor = CodableColor.contrastingText(on: fill)
   }
 
   /// Convenience for callers that only need the format overlay.

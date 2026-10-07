@@ -329,7 +329,7 @@ extension XLSXCodec {
           let data = xml.data(using: .utf8),
           let charts = try? JSONDecoder().decode([SheetChart].self, from: data)
     else { return }
-    sheet.charts = charts
+    sheet.charts = charts.map { $0.positionedUnderData() }
   }
 
   static func sheetViewsXML(frozenRows: Int, frozenColumns: Int) -> String {

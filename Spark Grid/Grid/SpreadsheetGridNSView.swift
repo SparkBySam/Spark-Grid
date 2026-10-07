@@ -17,6 +17,9 @@ final class SpreadsheetGridNSView: NSView {
       chartHostSnapshots.removeAll()
       invalidateLayoutCache()
       needsDisplay = true
+      if window != nil {
+        layoutOnSheetCharts()
+      }
     }
   }
 
@@ -57,10 +60,11 @@ final class SpreadsheetGridNSView: NSView {
     view.wantsLayer = true
     view.layer?.backgroundColor = NSColor.clear.cgColor
     view.layer?.masksToBounds = true
+    view.layer?.zPosition = 5
     view.clipsToBounds = true
     return view
   }()
-  private var chartHosts: [UUID: NSHostingView<OnSheetChartCard>] = [:]
+  private var chartHosts: [UUID: OnSheetChartHost] = [:]
   private var chartHostSnapshots: [UUID: ChartHostSnapshot] = [:]
   private var isLayingOutCharts = false
 
@@ -157,6 +161,11 @@ final class SpreadsheetGridNSView: NSView {
     layoutOnSheetCharts()
   }
 
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    layoutOnSheetCharts()
+  }
+
   override func hitTest(_ point: NSPoint) -> NSView? {
     let hit = super.hitTest(point)
     if isEditorActive, hit === editor || hit?.isDescendant(of: editor) == true {
@@ -221,6 +230,8 @@ final class SpreadsheetGridNSView: NSView {
     editor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
     editor.delegate = self
     editor.isHidden = true
+    editor.wantsLayer = true
+    editor.layer?.zPosition = 8
     addSubview(editor)
 
     editorCaretObserver = NotificationCenter.default.addObserver(
@@ -1495,12 +1506,13 @@ final class SpreadsheetGridNSView: NSView {
         contentRevision: viewModel.contentRevision,
         selected: viewModel.selectedChartID == chart.id
       )
-      let host: NSHostingView<OnSheetChartCard>
+      let host: OnSheetChartHost
       if let existing = chartHosts[chart.id] {
         host = existing
       } else {
-        let created = NSHostingView(rootView: OnSheetChartCard(chart: chart, viewModel: viewModel))
+        let created = OnSheetChartHost(rootView: OnSheetChartCard(chart: chart, viewModel: viewModel))
         created.sizingOptions = []
+        created.safeAreaRegions = []
         created.translatesAutoresizingMaskIntoConstraints = true
         created.focusRingType = .none
         chartLayerView.addSubview(created)
@@ -1515,6 +1527,7 @@ final class SpreadsheetGridNSView: NSView {
       if host.frame != local {
         host.frame = local
       }
+      host.needsLayout = true
     }
   }
 

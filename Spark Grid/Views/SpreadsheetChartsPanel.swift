@@ -160,9 +160,21 @@ struct SheetChartView: View {
   @State private var cachedTotalCount = 0
   @State private var cachedToken = ""
 
+  /// Points for this render. A cold cache still plots immediately so an on-sheet
+  /// host does not stay empty when `onAppear` has not run yet.
+  private var renderPoints: [Point] {
+    if cachedToken == cacheToken { return cachedPoints }
+    return Self.computePoints(chart: chart, viewModel: viewModel).points
+  }
+
+  private var renderTotalCount: Int {
+    if cachedToken == cacheToken { return cachedTotalCount }
+    return Self.computePoints(chart: chart, viewModel: viewModel).totalCount
+  }
+
   var body: some View {
     Group {
-      if cachedPoints.isEmpty {
+      if renderPoints.isEmpty {
         VStack(spacing: 6) {
           Text("Nothing to plot")
             .font(.system(size: 12, weight: .medium))
@@ -176,8 +188,8 @@ struct SheetChartView: View {
       } else {
         VStack(alignment: .leading, spacing: 6) {
           chartBody
-          if cachedTotalCount > ChartPreviewSeries.maxPreviewPoints {
-            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(cachedTotalCount)")
+          if renderTotalCount > ChartPreviewSeries.maxPreviewPoints {
+            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
               .font(.system(size: 9))
               .foregroundStyle(.tertiary)
           }
@@ -201,20 +213,21 @@ struct SheetChartView: View {
 
   @ViewBuilder
   private var chartBody: some View {
-    let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: cachedPoints.count)
+    let points = renderPoints
+    let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
     let lineGradient = LinearGradient(
-      colors: cachedPoints.map { valueColor(for: $0, kind: .line) },
+      colors: points.map { valueColor(for: $0, kind: .line) },
       startPoint: .leading,
       endPoint: .trailing
     )
-    Chart(cachedPoints) { point in
+    let marks = Chart(points) { point in
       switch chart.kind {
       case .bar:
         BarMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(valueColor(for: point, kind: .bar))
+        .foregroundStyle(by: .value("Swatch", point.id))
       case .line:
         LineMark(
           x: .value("Category", point.id),
@@ -226,8 +239,8 @@ struct SheetChartView: View {
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(valueColor(for: point, kind: .line))
-        .symbolSize(cachedPoints.count > 20 ? 28 : 46)
+        .foregroundStyle(by: .value("Swatch", point.id))
+        .symbolSize(points.count > 20 ? 28 : 46)
       case .area:
         AreaMark(
           x: .value("Category", point.id),
@@ -242,7 +255,7 @@ struct SheetChartView: View {
       }
     }
     .chartYScale(domain: yDomain)
-    .chartXScale(domain: -0.5...(Double(max(0, cachedPoints.count - 1)) + 0.5))
+    .chartXScale(domain: -0.5...(Double(max(0, points.count - 1)) + 0.5))
     .chartPlotStyle { plot in
       plot.padding(.bottom, 20)
     }
@@ -283,14 +296,26 @@ struct SheetChartView: View {
       .allowsHitTesting(false)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    if ChartMarkPalette.usesDistinctValueColors(chart.kind) {
+      marks
+        .chartForegroundStyleScale(
+          domain: points.map(\.id),
+          range: points.map { ChartMarkPalette.swatch(at: $0.id).color }
+        )
+        .chartLegend(.hidden)
+    } else {
+      marks
+        .chartLegend(.hidden)
+    }
   }
 
   private func categoryPlacements(plot: CGRect, chartWidth: CGFloat) -> [ChartCategoryLabelLayout.Placement] {
-    let indexes = ChartCategoryLabelLayout.labelIndexes(count: cachedPoints.count)
+    let points = renderPoints
+    let indexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
     let lastIndex = indexes.last
     let items = indexes.compactMap { index -> ChartCategoryLabelLayout.Item? in
-      guard cachedPoints.indices.contains(index) else { return nil }
-      let raw = cachedPoints[index].label
+      guard points.indices.contains(index) else { return nil }
+      let raw = points[index].label
       let text = index == lastIndex ? raw : Self.displayLabel(raw)
       return ChartCategoryLabelLayout.Item(index: index, text: text)
     }
@@ -300,7 +325,7 @@ struct SheetChartView: View {
       barCenterX: { index in
         ChartCategoryLabelLayout.barCenterX(
           index: index,
-          count: cachedPoints.count,
+          count: renderPoints.count,
           plotMinX: plot.minX,
           plotWidth: plot.width
         )
@@ -315,7 +340,7 @@ struct SheetChartView: View {
   }
 
   private var yDomain: ClosedRange<Double> {
-    let values = cachedPoints.map(\.value)
+    let values = renderPoints.map(\.value)
     guard let rawMax = values.max(), let rawMin = values.min() else {
       return 0...1
     }
@@ -413,4 +438,9 @@ struct OnSheetChartCard: View {
     )
     .allowsHitTesting(false)
   }
+}
+
+/// Flipped so the card lines up with the grid's top-left coordinates.
+final class OnSheetChartHost: NSHostingView<OnSheetChartCard> {
+  override var isFlipped: Bool { true }
 }
