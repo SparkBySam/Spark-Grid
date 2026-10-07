@@ -36,6 +36,13 @@ final class SpreadsheetViewModel {
   var scrollRequestToken = 0
   /// Selected embedded picture on the active sheet, if any.
   var selectedImageID: UUID?
+  /// Selected on-sheet chart, if any.
+  var selectedChartID: UUID?
+  /// Chart opened in the Insert Chart sheet for editing. Nil while inserting.
+  var editingChartID: UUID?
+  /// Bumped when the grid should scroll an on-sheet chart into view.
+  var chartScrollToken = 0
+  var chartScrollID: UUID?
 
   /// Insert Chart sheet presentation.
   var isInsertChartPresented = false

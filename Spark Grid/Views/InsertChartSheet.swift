@@ -20,11 +20,37 @@ struct InsertChartSheet: View {
   @State private var rangeText = ""
   /// Explicit chart range. Stays nil until the selection or the range field covers more than one cell.
   @State private var dataRange: CellRange?
+  /// On-sheet frame kept while editing so a type or range change does not move the chart.
+  @State private var keptAnchor: KeptAnchor?
   @FocusState private var rangeFieldFocused: Bool
+
+  private struct KeptAnchor {
+    var row: Int
+    var col: Int
+    var rowSpan: Int
+    var colSpan: Int
+  }
+
+  private var isEditing: Bool { viewModel.editingChartID != nil }
 
   private var draftChart: SheetChart? {
     guard let dataRange, !dataRange.isSingleCell else { return nil }
     let n = dataRange.normalized
+    let anchorRow: Int
+    let anchorCol: Int
+    let rowSpan: Int
+    let colSpan: Int
+    if let keptAnchor {
+      anchorRow = keptAnchor.row
+      anchorCol = keptAnchor.col
+      rowSpan = keptAnchor.rowSpan
+      colSpan = keptAnchor.colSpan
+    } else {
+      anchorRow = min(viewModel.activeSheet.effectiveRowCount - 1, n.maxRow + 2)
+      anchorCol = n.minCol
+      rowSpan = 12
+      colSpan = 8
+    }
     return SheetChart(
       id: draftID,
       kind: kind,
@@ -34,8 +60,10 @@ struct InsertChartSheet: View {
       valueColumn: valueColumn,
       hasHeaderRow: hasHeaderRow,
       valueMode: valueMode,
-      anchorRow: min(viewModel.activeSheet.effectiveRowCount - 1, n.maxRow + 2),
-      anchorCol: n.minCol
+      anchorRow: anchorRow,
+      anchorCol: anchorCol,
+      rowSpan: rowSpan,
+      colSpan: colSpan
     )
   }
 
@@ -62,6 +90,15 @@ struct InsertChartSheet: View {
 
   var body: some View {
     VStack(spacing: 0) {
+      HStack {
+        Text(isEditing ? "Edit Chart" : "Insert Chart")
+          .font(.headline)
+        Spacer()
+      }
+      .padding(.horizontal, 20)
+      .padding(.top, 16)
+      .padding(.bottom, 4)
+
       Form {
         Section {
           Picker("Type", selection: $kind) {
@@ -128,8 +165,10 @@ struct InsertChartSheet: View {
         Button("Cancel") { dismiss() }
           .keyboardShortcut(.cancelAction)
         Spacer()
-        Button("Insert Chart") {
-          guard let chart = draftChart, viewModel.insertChart(chart) else { return }
+        Button(isEditing ? "Update Chart" : "Insert Chart") {
+          guard let chart = draftChart else { return }
+          let saved = isEditing ? viewModel.updateChart(chart) : viewModel.insertChart(chart)
+          guard saved else { return }
           dismiss()
         }
         .keyboardShortcut(.defaultAction)
@@ -137,7 +176,7 @@ struct InsertChartSheet: View {
       }
       .padding(16)
     }
-    .frame(width: 480, height: 560)
+    .frame(width: 480, height: 600)
     .onAppear(perform: configureDefaultsIfNeeded)
     .onChange(of: rangeText) { _, _ in
       commitRangeText()
@@ -194,7 +233,12 @@ struct InsertChartSheet: View {
   private func configureDefaultsIfNeeded() {
     guard !didConfigure else { return }
     didConfigure = true
+    if let existing = editingChart() {
+      load(existing)
+      return
+    }
     kind = viewModel.pendingChartKind
+    keptAnchor = nil
     if let selection = viewModel.chartSelectionRange {
       mustChooseRange = false
       adopt(selection)
@@ -207,24 +251,76 @@ struct InsertChartSheet: View {
     }
   }
 
+  private func editingChart() -> SheetChart? {
+    guard let id = viewModel.editingChartID else { return nil }
+    return viewModel.activeSheet.charts.first { $0.id == id }
+  }
+
+  /// Fills the sheet from a chart already on the grid. The range field stays editable.
+  private func load(_ chart: SheetChart) {
+    draftID = chart.id
+    kind = chart.kind
+    keptAnchor = KeptAnchor(
+      row: chart.anchorRow,
+      col: chart.anchorCol,
+      rowSpan: chart.rowSpan,
+      colSpan: chart.colSpan
+    )
+    mustChooseRange = true
+    let text = chart.dataRange.a1Description
+    let parsed = ChartDataRangeParser.parse(text)
+    dataRange = parsed
+    rangeText = text
+    guard let parsed else {
+      columnOptions = []
+      return
+    }
+    columnOptions = ChartPreviewSeries.columnOptions(
+      in: parsed,
+      labelFor: { viewModel.displayString(at: $0) },
+      numberFor: { viewModel.displayValue(at: $0).asChartNumber }
+    )
+    hasHeaderRow = chart.hasHeaderRow
+    valueMode = chart.valueMode
+    let suggestion = ChartPreviewSeries.suggest(
+      in: parsed,
+      labelFor: { viewModel.displayString(at: $0) },
+      numberFor: { viewModel.displayValue(at: $0).asChartNumber }
+    )
+    let category = chart.categoryColumn ?? suggestion.categoryColumn
+    let value = chart.valueColumn ?? suggestion.valueColumn
+    if columnOptions.contains(where: { $0.column == category }) {
+      categoryColumn = category
+    } else {
+      categoryColumn = suggestion.categoryColumn
+    }
+    if columnOptions.contains(where: { $0.column == value }) {
+      valueColumn = value
+    } else {
+      valueColumn = suggestion.valueColumn
+    }
+  }
+
   private func commitRangeText() {
     guard mustChooseRange else { return }
     let parsed = ChartDataRangeParser.parse(rangeText)
     guard parsed != dataRange else { return }
     if let parsed {
-      adopt(parsed)
+      adopt(parsed, keepSeries: dataRange != nil && !columnOptions.isEmpty)
     } else {
       dataRange = nil
       columnOptions = []
     }
   }
 
-  private func adopt(_ range: CellRange) {
+  private func adopt(_ range: CellRange, keepSeries: Bool = false) {
     guard !range.isSingleCell else {
       dataRange = nil
       columnOptions = []
       return
     }
+    let previousCategory = categoryColumn
+    let previousValue = valueColumn
     dataRange = range
     columnOptions = ChartPreviewSeries.columnOptions(
       in: range,
@@ -236,10 +332,20 @@ struct InsertChartSheet: View {
       labelFor: { viewModel.displayString(at: $0) },
       numberFor: { viewModel.displayValue(at: $0).asChartNumber }
     )
-    categoryColumn = suggestion.categoryColumn
-    valueColumn = suggestion.valueColumn
-    hasHeaderRow = suggestion.hasHeaderRow
-    valueMode = suggestion.valueMode
+    if keepSeries, columnOptions.contains(where: { $0.column == previousCategory }) {
+      categoryColumn = previousCategory
+    } else {
+      categoryColumn = suggestion.categoryColumn
+    }
+    if keepSeries, columnOptions.contains(where: { $0.column == previousValue }) {
+      valueColumn = previousValue
+    } else {
+      valueColumn = suggestion.valueColumn
+    }
+    if !keepSeries {
+      hasHeaderRow = suggestion.hasHeaderRow
+      valueMode = suggestion.valueMode
+    }
   }
 }
 

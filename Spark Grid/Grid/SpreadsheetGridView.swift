@@ -17,6 +17,7 @@ struct SpreadsheetGridView: NSViewRepresentable {
     context.coordinator.lastSelectionRevision = viewModel.selectionRevision
     context.coordinator.lastFormulaHighlightRevision = viewModel.formulaHighlightRevision
     context.coordinator.lastScrollRequestToken = viewModel.scrollRequestToken
+    context.coordinator.lastChartScrollToken = viewModel.chartScrollToken
     context.coordinator.lastZoomScale = viewModel.zoomScale
     context.coordinator.scheduleInitialFocus(for: view)
     return view
@@ -59,6 +60,14 @@ struct SpreadsheetGridView: NSViewRepresentable {
       context.coordinator.lastScrollRequestToken = viewModel.scrollRequestToken
       nsView.scrollSelectionIntoView()
     }
+
+    if viewModel.chartScrollToken != context.coordinator.lastChartScrollToken {
+      context.coordinator.lastChartScrollToken = viewModel.chartScrollToken
+      if let id = viewModel.chartScrollID {
+        nsView.scrollChartIntoView(id: id)
+      }
+    }
+    nsView.layoutOnSheetCharts()
   }
 
   final class Coordinator {
@@ -70,6 +79,7 @@ struct SpreadsheetGridView: NSViewRepresentable {
     var lastSelectionEnd = CellAddress.origin
     var lastFormulaHighlightRevision = 0
     var lastScrollRequestToken = 0
+    var lastChartScrollToken = 0
     var lastZoomScale: CGFloat = 1
     private var didScheduleInitialFocus = false
 

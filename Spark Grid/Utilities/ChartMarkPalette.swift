@@ -1,0 +1,38 @@
+import Foundation
+
+/// Distinct swatches for bar and line values. Area charts stay a single fill.
+enum ChartMarkPalette {
+  struct RGB: Equatable, Hashable {
+    var red: Double
+    var green: Double
+    var blue: Double
+  }
+
+  static let swatches: [RGB] = [
+    RGB(red: 0.18, green: 0.45, blue: 0.86),
+    RGB(red: 0.90, green: 0.42, blue: 0.18),
+    RGB(red: 0.16, green: 0.62, blue: 0.38),
+    RGB(red: 0.72, green: 0.28, blue: 0.58),
+    RGB(red: 0.52, green: 0.36, blue: 0.82),
+    RGB(red: 0.86, green: 0.68, blue: 0.16),
+    RGB(red: 0.14, green: 0.62, blue: 0.70),
+    RGB(red: 0.82, green: 0.28, blue: 0.28),
+    RGB(red: 0.36, green: 0.52, blue: 0.28),
+    RGB(red: 0.48, green: 0.32, blue: 0.22),
+  ]
+
+  static func swatch(at index: Int) -> RGB {
+    let count = swatches.count
+    let wrapped = ((index % count) + count) % count
+    return swatches[wrapped]
+  }
+
+  static func usesDistinctValueColors(_ kind: SheetChart.Kind) -> Bool {
+    switch kind {
+    case .bar, .line:
+      return true
+    case .area:
+      return false
+    }
+  }
+}
