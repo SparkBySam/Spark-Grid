@@ -401,6 +401,32 @@ final class FormulaBarNSTextView: NSTextView {
     }
     super.insertText(insertString, replacementRange: replacementRange)
   }
+
+  override func insertCompletion(
+    _ word: String,
+    forPartialWordRange charRange: NSRange,
+    movement: Int,
+    isFinal flag: Bool
+  ) {
+    let ns = string as NSString
+    let partial: String
+    if charRange.location != NSNotFound, charRange.length >= 0, NSMaxRange(charRange) <= ns.length {
+      partial = ns.substring(with: charRange)
+    } else {
+      partial = ""
+    }
+    let before = string
+    super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+    let commitOnReturn = flag
+      && movement == NSTextMovement.`return`.rawValue
+      && (before == string || FormulaAutocomplete.isExactCompletion(partial: partial, completion: word))
+    guard commitOnReturn else { return }
+    let editor = self
+    DispatchQueue.main.async {
+      guard editor.window?.firstResponder === editor else { return }
+      editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    }
+  }
 }
 
 enum SparkGridSaveShortcut {
