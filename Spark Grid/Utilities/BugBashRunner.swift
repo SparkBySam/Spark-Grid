@@ -1115,6 +1115,48 @@ enum BugBashRunner {
     guard frame.minY >= dataBottom else {
       return Result(name: name, passed: false, detail: "chart covers the data rows")
     }
+    guard OnSheetChartGeometry.placedHeight(top: frame.minY, bottom: frame.maxY) == frame.height else {
+      return Result(name: name, passed: false, detail: "placed height \(String(describing: OnSheetChartGeometry.placedHeight(top: frame.minY, bottom: frame.maxY)))")
+    }
+    // bottom - top is negative when the lower edge sits above the upper edge.
+    guard OnSheetChartGeometry.placedHeight(top: 400, bottom: 120) == nil else {
+      return Result(name: name, passed: false, detail: "reversed edges were treated as a view height")
+    }
+    guard OnSheetChartGeometry.placedHeight(top: 10, bottom: 10.5) == nil else {
+      return Result(name: name, passed: false, detail: "sub-point height was placed")
+    }
+    let collapsed = OnSheetChartGeometry.frame(
+      anchorRow: 0,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 4,
+      rowCount: 100,
+      columnCount: 8,
+      xForColumn: { CGFloat($0) * 80 },
+      yForRow: { 400 - CGFloat($0) * 30 },
+      columnWidth: { _ in 80 },
+      rowHeight: { _ in -10 }
+    )
+    guard collapsed == .zero else {
+      return Result(name: name, passed: false, detail: "negative row span produced \(collapsed)")
+    }
+    let scrolled = OnSheetChartGeometry.frame(
+      anchorRow: 0,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 4,
+      rowCount: 100,
+      columnCount: 8,
+      xForColumn: { CGFloat($0) * 80 },
+      yForRow: { row in
+        row < 2 ? CGFloat(row) * 22 : CGFloat(row) * 22 - 800
+      },
+      columnWidth: { _ in 80 },
+      rowHeight: { _ in 22 }
+    )
+    guard scrolled.height >= 1, scrolled.height == 12 * 22 else {
+      return Result(name: name, passed: false, detail: "scrolled span \(scrolled.height)")
+    }
     return Result(name: name, passed: true, detail: "\(Int(frame.width))×\(Int(frame.height)) at row 7")
   }
 

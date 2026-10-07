@@ -172,9 +172,26 @@ struct SheetChartView: View {
     return Self.computePoints(chart: chart, viewModel: viewModel).totalCount
   }
 
+  /// Room under the plot for category names. Charts subtracts this from the
+  /// view height; the plot is not placed when that remainder is under 1pt.
+  static let plotBottomInset: CGFloat = 20
+
   var body: some View {
-    Group {
-      if renderPoints.isEmpty {
+    GeometryReader { geo in
+      chartStack(in: geo.size)
+    }
+    .onAppear { refreshPoints() }
+    .onChange(of: cacheToken) { _, _ in
+      refreshPoints()
+    }
+  }
+
+  @ViewBuilder
+  private func chartStack(in size: CGSize) -> some View {
+    if renderPoints.isEmpty {
+      let inset: CGFloat = 8
+      if let innerWidth = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.width - inset),
+         let innerHeight = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.height - inset) {
         VStack(spacing: 6) {
           Text("Nothing to plot")
             .font(.system(size: 12, weight: .medium))
@@ -183,23 +200,39 @@ struct SheetChartView: View {
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(8)
-      } else {
-        VStack(alignment: .leading, spacing: 6) {
-          chartBody
-          if renderTotalCount > ChartPreviewSeries.maxPreviewPoints {
-            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
-              .font(.system(size: 9))
-              .foregroundStyle(.tertiary)
-          }
+        .frame(width: innerWidth, height: innerHeight)
+        .position(x: size.width / 2, y: size.height / 2)
+      }
+    } else if let slot = plotSlotHeight(in: size) {
+      let caption = captionHeight
+      let spacing: CGFloat = caption >= 1 ? 6 : 0
+      VStack(alignment: .leading, spacing: spacing) {
+        chartBody
+          .frame(width: size.width, height: slot)
+        if caption >= 1 {
+          Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .frame(height: caption, alignment: .leading)
         }
       }
+      .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
-    .onAppear { refreshPoints() }
-    .onChange(of: cacheToken) { _, _ in
-      refreshPoints()
+  }
+
+  private var captionHeight: CGFloat {
+    renderTotalCount > ChartPreviewSeries.maxPreviewPoints ? 14 : 0
+  }
+
+  /// Chart view height, or nil when the plot inset would reverse the edges.
+  private func plotSlotHeight(in size: CGSize) -> CGFloat? {
+    guard size.width >= 1 else { return nil }
+    let spacing: CGFloat = captionHeight >= 1 ? 6 : 0
+    let slotBottom = size.height - captionHeight - spacing
+    guard OnSheetChartGeometry.placedHeight(top: Self.plotBottomInset, bottom: slotBottom) != nil else {
+      return nil
     }
+    return slotBottom
   }
 
   private var emptyDetail: String {
@@ -257,7 +290,7 @@ struct SheetChartView: View {
     .chartYScale(domain: yDomain)
     .chartXScale(domain: -0.5...(Double(max(0, points.count - 1)) + 0.5))
     .chartPlotStyle { plot in
-      plot.padding(.bottom, 20)
+      plot.padding(.bottom, Self.plotBottomInset)
     }
     .chartYAxis {
       AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
@@ -281,15 +314,17 @@ struct SheetChartView: View {
     .chartOverlay { proxy in
       GeometryReader { geo in
         if let plotAnchor = proxy.plotFrame {
-          let plot = geo[plotAnchor]
-          let placements = categoryPlacements(plot: plot, chartWidth: geo.size.width)
-          ForEach(placements, id: \.index) { placement in
-            Text(placement.text)
-              .font(.system(size: 8))
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-              .frame(width: placement.width, alignment: .center)
-              .position(x: placement.minX + placement.width / 2, y: plot.maxY + 9)
+          let plot = geo[plotAnchor].standardized
+          if OnSheetChartGeometry.placedHeight(top: plot.minY, bottom: plot.maxY) != nil {
+            let placements = categoryPlacements(plot: plot, chartWidth: geo.size.width)
+            ForEach(placements, id: \.index) { placement in
+              Text(placement.text)
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: max(1, placement.width), alignment: .center)
+                .position(x: placement.minX + placement.width / 2, y: plot.maxY + 9)
+            }
           }
         }
       }
@@ -422,21 +457,51 @@ struct OnSheetChartCard: View {
 
   var body: some View {
     let selected = viewModel.selectedChartID == chart.id
-    VStack(alignment: .leading, spacing: 2) {
-      Text(chart.title)
-        .font(.system(size: 11, weight: .semibold))
-        .lineLimit(1)
-        .padding(.horizontal, 2)
-      SheetChartView(chart: chart, viewModel: viewModel)
+    GeometryReader { geo in
+      cardContent(in: geo.size)
     }
-    .padding(6)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
     .overlay(
       RoundedRectangle(cornerRadius: 6)
         .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
     )
     .allowsHitTesting(false)
+  }
+
+  /// Title plus chart, only when each band is at least 1pt. A zero host
+  /// frame used to inset this stack until the chart height was negative.
+  @ViewBuilder
+  private func cardContent(in size: CGSize) -> some View {
+    let pad: CGFloat = 6
+    let titleHeight: CGFloat = 14
+    let spacing: CGFloat = 2
+    if let innerWidth = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.width - pad),
+       let innerHeight = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.height - pad) {
+      if let chartHeight = OnSheetChartGeometry.placedHeight(
+        top: titleHeight + spacing,
+        bottom: innerHeight
+      ) {
+        VStack(alignment: .leading, spacing: spacing) {
+          Text(chart.title)
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: titleHeight)
+          SheetChartView(chart: chart, viewModel: viewModel)
+            .frame(width: innerWidth, height: chartHeight)
+        }
+        .frame(width: innerWidth, height: innerHeight, alignment: .topLeading)
+        .position(x: size.width / 2, y: size.height / 2)
+      } else {
+        Text(chart.title)
+          .font(.system(size: 11, weight: .semibold))
+          .lineLimit(1)
+          .padding(.horizontal, 2)
+          .frame(width: innerWidth, height: innerHeight, alignment: .topLeading)
+          .position(x: size.width / 2, y: size.height / 2)
+      }
+    }
   }
 }
 
