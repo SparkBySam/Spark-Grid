@@ -158,7 +158,9 @@ struct SpreadsheetWindowView: View {
         isChartsPanelCollapsed = false
       }
     }
-    .sheet(isPresented: $viewModel.isInsertChartPresented) {
+    .sheet(isPresented: $viewModel.isInsertChartPresented, onDismiss: {
+      viewModel.editingChartID = nil
+    }) {
       InsertChartSheet(viewModel: viewModel)
     }
     .focusedValue(\.spreadsheetViewModel, viewModel)

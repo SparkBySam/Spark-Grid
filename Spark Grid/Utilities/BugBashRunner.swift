@@ -57,6 +57,10 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
     results.append(MainActor.assumeIsolated { insertChartEmptySelection() })
     results.append(formulaExactTokenSkipsAutocomplete())
+    results.append(MainActor.assumeIsolated { editExistingChart() })
+    results.append(onSheetChartFrame())
+    results.append(weeklyCallsLastLabel())
+    results.append(chartValueColors())
     return results
   }
 
@@ -1000,6 +1004,186 @@ enum BugBashRunner {
       return Result(name: "formula exact token", passed: false, detail: "SUM matches \(matches)")
     }
     return Result(name: "formula exact token", passed: true, detail: "=SU offers popup; =SUM does not")
+  }
+
+  @MainActor
+  private static func editExistingChart() -> Result {
+    let name = "edit existing chart"
+    var sheet = Sheet(name: "Weekly Calls")
+    sheet.setCell(Cell(raw: "Week"), at: .origin)
+    sheet.setCell(Cell(raw: "Calls"), at: CellAddress(row: 0, col: 1))
+    for index in 1...4 {
+      sheet.setCell(Cell(raw: "Week \(index)"), at: CellAddress(row: index, col: 0))
+      sheet.setCell(Cell(raw: "\(index * 3)"), at: CellAddress(row: index, col: 1))
+    }
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    let range = CellRange(start: .origin, end: CellAddress(row: 4, col: 1))
+    let inserted = vm.insertChart(
+      SheetChart(
+        kind: .bar,
+        title: "Calls by Week",
+        dataRange: range,
+        categoryColumn: 0,
+        valueColumn: 1,
+        hasHeaderRow: true,
+        valueMode: .values,
+        anchorRow: 7,
+        anchorCol: 0,
+        rowSpan: 12,
+        colSpan: 8
+      )
+    )
+    guard inserted, vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "chart was not inserted")
+    }
+    let original = vm.activeSheet.charts[0]
+    guard vm.selectedChartID == original.id else {
+      return Result(name: name, passed: false, detail: "inserted chart was not selected on the sheet")
+    }
+    vm.beginEditChart(id: original.id)
+    guard vm.isInsertChartPresented, vm.editingChartID == original.id, vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "edit did not reopen the existing chart")
+    }
+    var edited = original
+    edited.kind = .line
+    edited.categoryColumn = 1
+    edited.valueColumn = 0
+    edited.valueMode = .count
+    edited.title = "Calls by Week"
+    guard vm.updateChart(edited) else {
+      return Result(name: name, passed: false, detail: "update was refused")
+    }
+    guard vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "update inserted a second chart")
+    }
+    let saved = vm.activeSheet.charts[0]
+    guard saved.id == original.id,
+          saved.kind == .line,
+          saved.categoryColumn == 1,
+          saved.valueColumn == 0,
+          saved.valueMode == .count,
+          saved.dataRange == range,
+          saved.anchorRow == 7,
+          saved.anchorCol == 0,
+          saved.rowSpan == 12,
+          saved.colSpan == 8,
+          !vm.isInsertChartPresented,
+          vm.editingChartID == nil
+    else {
+      return Result(name: name, passed: false, detail: "saved \(saved.kind) anchor \(saved.anchorRow),\(saved.anchorCol)")
+    }
+    var rejected = saved
+    rejected.dataRange = .singleOrigin
+    guard !vm.updateChart(rejected), vm.activeSheet.charts[0].dataRange == range else {
+      return Result(name: name, passed: false, detail: "single-cell edit was accepted")
+    }
+    vm.selection = .origin
+    vm.beginInsertChart(preferredKind: .bar)
+    guard vm.editingChartID == nil, vm.isInsertChartPresented, vm.chartSelectionRange == nil else {
+      return Result(name: name, passed: false, detail: "empty selection started an edit")
+    }
+    guard vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "empty selection created a chart")
+    }
+    return Result(name: name, passed: true, detail: "type, range, and series update; anchor stays")
+  }
+
+  private static func onSheetChartFrame() -> Result {
+    let name = "on-sheet chart frame"
+    let frame = OnSheetChartGeometry.frame(
+      anchorRow: 7,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 8,
+      rowCount: 1_000,
+      columnCount: 26,
+      xForColumn: { 28 + CGFloat($0) * 80 },
+      yForRow: { 28 + CGFloat($0) * 22 },
+      columnWidth: { _ in 80 },
+      rowHeight: { _ in 22 }
+    )
+    guard frame.width == 640, frame.height == 264, frame.minX == 28, frame.minY == 28 + 7 * 22 else {
+      return Result(name: name, passed: false, detail: "\(frame)")
+    }
+    let dataBottom = 28 + 5 * 22
+    guard frame.minY >= dataBottom else {
+      return Result(name: name, passed: false, detail: "chart covers the data rows")
+    }
+    return Result(name: name, passed: true, detail: "\(Int(frame.width))×\(Int(frame.height)) at row 7")
+  }
+
+  private static func weeklyCallsLastLabel() -> Result {
+    let name = "weekly calls last label"
+    let names = [
+      "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
+      "Mon 2", "Tue 2", "Wed 2", "Thu 2", "Fri 2", "Sat 2", "Closing Call",
+    ]
+    let count = names.count
+    let indexes = ChartCategoryLabelLayout.labelIndexes(count: count)
+    guard indexes.last == count - 1 else {
+      return Result(name: name, passed: false, detail: "last category was dropped from the axis")
+    }
+    let chartWidth: CGFloat = 280
+    let plotMinX: CGFloat = 36
+    let plotWidth = chartWidth - plotMinX
+    let items = indexes.map { ChartCategoryLabelLayout.Item(index: $0, text: names[$0]) }
+    let placements = ChartCategoryLabelLayout.placements(
+      items: items,
+      chartWidth: chartWidth,
+      barCenterX: { index in
+        ChartCategoryLabelLayout.barCenterX(
+          index: index,
+          count: count,
+          plotMinX: plotMinX,
+          plotWidth: plotWidth
+        )
+      },
+      labelWidth: { ChartCategoryLabelLayout.measure($0, fontSize: 8) }
+    )
+    guard let last = placements.first(where: { $0.index == count - 1 }) else {
+      return Result(name: name, passed: false, detail: "last label was not placed")
+    }
+    let center = ChartCategoryLabelLayout.barCenterX(
+      index: count - 1,
+      count: count,
+      plotMinX: plotMinX,
+      plotWidth: plotWidth
+    )
+    let labelWidth = ChartCategoryLabelLayout.measure(names[count - 1], fontSize: 8)
+    let centeredMaxX = center + labelWidth / 2
+    guard center > plotMinX, center < chartWidth else {
+      return Result(name: name, passed: false, detail: "last bar center \(center) is off the chart")
+    }
+    guard centeredMaxX > chartWidth + 1 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "fixture does not clip a centered label (center \(center), width \(labelWidth), chart \(chartWidth))"
+      )
+    }
+    guard last.text == "Closing Call", last.minX >= -0.01, last.maxX <= chartWidth + 0.01 else {
+      return Result(name: name, passed: false, detail: "last label \(last.text) \(last.minX)...\(last.maxX)")
+    }
+    let outside = placements.filter { $0.minX < -0.01 || $0.maxX > chartWidth + 0.01 }
+    guard outside.isEmpty else {
+      return Result(name: name, passed: false, detail: "label outside the chart")
+    }
+    return Result(name: name, passed: true, detail: "Closing Call fits; centered max \(Int(centeredMaxX.rounded()))")
+  }
+
+  private static func chartValueColors() -> Result {
+    let name = "chart value colors"
+    guard ChartMarkPalette.usesDistinctValueColors(.bar),
+          ChartMarkPalette.usesDistinctValueColors(.line),
+          !ChartMarkPalette.usesDistinctValueColors(.area)
+    else {
+      return Result(name: name, passed: false, detail: "bar/line should vary; area stays flat")
+    }
+    let colors = (0..<8).map { ChartMarkPalette.swatch(at: $0) }
+    guard Set(colors).count == colors.count else {
+      return Result(name: name, passed: false, detail: "first 8 swatches are not distinct")
+    }
+    return Result(name: name, passed: true, detail: "8 distinct bar/line swatches")
   }
 }
 #endif

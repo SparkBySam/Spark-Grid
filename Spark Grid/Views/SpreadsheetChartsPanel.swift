@@ -101,6 +101,12 @@ struct SpreadsheetChartsPanel: View {
             .lineLimit(2)
         }
         Spacer(minLength: 0)
+        Button("Edit") {
+          viewModel.beginEditChart(id: chart.id)
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 11, weight: .medium))
+        .help("Edit chart type, range, and series")
         Button {
           viewModel.removeChart(id: chart.id)
         } label: {
@@ -118,6 +124,10 @@ struct SpreadsheetChartsPanel: View {
     }
     .padding(10)
     .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8)
+        .strokeBorder(viewModel.selectedChartID == chart.id ? Color.accentColor : Color.clear, lineWidth: 2)
+    )
   }
 
   private func seriesSubtitle(for chart: SheetChart) -> String {
@@ -191,7 +201,12 @@ struct SheetChartView: View {
 
   @ViewBuilder
   private var chartBody: some View {
-    let labelIndexes = xLabelIndexes(for: cachedPoints.count)
+    let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: cachedPoints.count)
+    let lineGradient = LinearGradient(
+      colors: cachedPoints.map { valueColor(for: $0, kind: .line) },
+      startPoint: .leading,
+      endPoint: .trailing
+    )
     Chart(cachedPoints) { point in
       switch chart.kind {
       case .bar:
@@ -199,20 +214,20 @@ struct SheetChartView: View {
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor.gradient)
+        .foregroundStyle(valueColor(for: point, kind: .bar))
       case .line:
         LineMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(lineGradient)
         .interpolationMethod(.catmullRom)
         PointMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor)
-        .symbolSize(cachedPoints.count > 20 ? 16 : 28)
+        .foregroundStyle(valueColor(for: point, kind: .line))
+        .symbolSize(cachedPoints.count > 20 ? 28 : 46)
       case .area:
         AreaMark(
           x: .value("Category", point.id),
@@ -228,6 +243,9 @@ struct SheetChartView: View {
     }
     .chartYScale(domain: yDomain)
     .chartXScale(domain: -0.5...(Double(max(0, cachedPoints.count - 1)) + 0.5))
+    .chartPlotStyle { plot in
+      plot.padding(.bottom, 20)
+    }
     .chartYAxis {
       AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
@@ -242,23 +260,58 @@ struct SheetChartView: View {
       }
     }
     .chartXAxis {
-      AxisMarks(values: labelIndexes.map(Double.init)) { value in
+      AxisMarks(values: labelIndexes.map(Double.init)) { _ in
         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
           .foregroundStyle(Color.secondary.opacity(0.15))
-        if let number = value.as(Double.self) {
-          let index = Int(number.rounded())
-          if let point = cachedPoints.first(where: { $0.id == index }) {
-            AxisValueLabel(centered: true) {
-              Text(Self.displayLabel(point.label))
-                .font(.system(size: 8))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
+      }
+    }
+    .chartOverlay { proxy in
+      GeometryReader { geo in
+        if let plotAnchor = proxy.plotFrame {
+          let plot = geo[plotAnchor]
+          let placements = categoryPlacements(plot: plot, chartWidth: geo.size.width)
+          ForEach(placements, id: \.index) { placement in
+            Text(placement.text)
+              .font(.system(size: 8))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+              .frame(width: placement.width, alignment: .center)
+              .position(x: placement.minX + placement.width / 2, y: plot.maxY + 9)
           }
         }
       }
+      .allowsHitTesting(false)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private func categoryPlacements(plot: CGRect, chartWidth: CGFloat) -> [ChartCategoryLabelLayout.Placement] {
+    let indexes = ChartCategoryLabelLayout.labelIndexes(count: cachedPoints.count)
+    let lastIndex = indexes.last
+    let items = indexes.compactMap { index -> ChartCategoryLabelLayout.Item? in
+      guard cachedPoints.indices.contains(index) else { return nil }
+      let raw = cachedPoints[index].label
+      let text = index == lastIndex ? raw : Self.displayLabel(raw)
+      return ChartCategoryLabelLayout.Item(index: index, text: text)
+    }
+    return ChartCategoryLabelLayout.placements(
+      items: items,
+      chartWidth: chartWidth,
+      barCenterX: { index in
+        ChartCategoryLabelLayout.barCenterX(
+          index: index,
+          count: cachedPoints.count,
+          plotMinX: plot.minX,
+          plotWidth: plot.width
+        )
+      },
+      labelWidth: { ChartCategoryLabelLayout.measure($0, fontSize: 8) }
+    )
+  }
+
+  private func valueColor(for point: Point, kind: SheetChart.Kind) -> Color {
+    guard ChartMarkPalette.usesDistinctValueColors(kind) else { return Color.accentColor }
+    return ChartMarkPalette.swatch(at: point.id).color
   }
 
   private var yDomain: ClosedRange<Double> {
@@ -311,20 +364,6 @@ struct SheetChartView: View {
     return (points, all.totalCount)
   }
 
-  private func xLabelIndexes(for count: Int) -> [Int] {
-    guard count > 0 else { return [] }
-    let desired = min(6, count)
-    if count <= desired { return Array(0..<count) }
-    var indexes: [Int] = []
-    for i in 0..<desired {
-      let index = Int(round(Double(i) * Double(count - 1) / Double(desired - 1)))
-      if indexes.last != index {
-        indexes.append(index)
-      }
-    }
-    return indexes
-  }
-
   private static func formatAxisNumber(_ value: Double) -> String {
     let absValue = abs(value)
     if absValue >= 1_000_000 {
@@ -342,5 +381,36 @@ struct SheetChartView: View {
   private static func displayLabel(_ label: String) -> String {
     guard label.count > 12 else { return label }
     return String(label.prefix(11)) + "…"
+  }
+}
+
+extension ChartMarkPalette.RGB {
+  var color: Color {
+    Color(red: red, green: green, blue: blue)
+  }
+}
+
+/// Chart drawn on the sheet at its cell anchor. Clicks are handled by the grid.
+struct OnSheetChartCard: View {
+  let chart: SheetChart
+  var viewModel: SpreadsheetViewModel
+
+  var body: some View {
+    let selected = viewModel.selectedChartID == chart.id
+    VStack(alignment: .leading, spacing: 2) {
+      Text(chart.title)
+        .font(.system(size: 11, weight: .semibold))
+        .lineLimit(1)
+        .padding(.horizontal, 2)
+      SheetChartView(chart: chart, viewModel: viewModel)
+    }
+    .padding(6)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    .overlay(
+      RoundedRectangle(cornerRadius: 6)
+        .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
+    )
+    .allowsHitTesting(false)
   }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// AppKit spreadsheet grid with sticky row/column headers, selection, editing, and keyboard navigation.
 final class SpreadsheetGridNSView: NSView {
@@ -13,6 +14,7 @@ final class SpreadsheetGridNSView: NSView {
   var viewModel: SpreadsheetViewModel? {
     didSet {
       guard viewModel !== oldValue else { return }
+      chartHostSnapshots.removeAll()
       invalidateLayoutCache()
       needsDisplay = true
     }
@@ -50,6 +52,23 @@ final class SpreadsheetGridNSView: NSView {
     let startImage: SheetImage
   }
   private var activeImageDrag: ImageDragState?
+  private let chartLayerView: NSView = {
+    let view = NSView()
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.masksToBounds = true
+    view.clipsToBounds = true
+    return view
+  }()
+  private var chartHosts: [UUID: NSHostingView<OnSheetChartCard>] = [:]
+  private var chartHostSnapshots: [UUID: ChartHostSnapshot] = [:]
+  private var isLayingOutCharts = false
+
+  private struct ChartHostSnapshot: Equatable {
+    var chart: SheetChart
+    var contentRevision: Int
+    var selected: Bool
+  }
   private var fillSourceRange: CellRange?
   private var headerDrag: HeaderDrag?
   private let resizeHandleThickness: CGFloat = 6
@@ -130,6 +149,23 @@ final class SpreadsheetGridNSView: NSView {
     wantsLayer = true
     layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     configureEditor()
+    addSubview(chartLayerView, positioned: .below, relativeTo: editor)
+  }
+
+  override func layout() {
+    super.layout()
+    layoutOnSheetCharts()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    if isEditorActive, hit === editor || hit?.isDescendant(of: editor) == true {
+      return hit
+    }
+    if let hit, hit === chartLayerView || hit.isDescendant(of: chartLayerView) {
+      return self
+    }
+    return hit
   }
 
   override func updateTrackingAreas() {
@@ -595,6 +631,7 @@ final class SpreadsheetGridNSView: NSView {
     clampScrollOrigin()
     applyAutoscrollDrag(kind: kind, at: autoscrollLastPoint)
     updateEditorFrame()
+    layoutOnSheetCharts()
     needsDisplay = true
   }
 
@@ -736,6 +773,10 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
     guard activeResize == nil else { return }
+    if chartHitTest(at: point) != nil {
+      NSCursor.arrow.set()
+      return
+    }
     if let imageCursor = imageCursor(at: point) {
       imageCursor.set()
       return
@@ -1423,6 +1464,114 @@ final class SpreadsheetGridNSView: NSView {
     let width = SheetImage.points(fromEMU: image.widthEMU)
     let height = SheetImage.points(fromEMU: image.heightEMU)
     return NSRect(x: x, y: y, width: width, height: height)
+  }
+
+  func layoutOnSheetCharts() {
+    guard !isLayingOutCharts else { return }
+    isLayingOutCharts = true
+    defer { isLayingOutCharts = false }
+    chartLayerView.frame = contentRect
+    guard let viewModel else {
+      removeChartHosts()
+      return
+    }
+    let charts = viewModel.activeSheet.charts
+    let live = Set(charts.map(\.id))
+    for id in Array(chartHosts.keys) where !live.contains(id) {
+      chartHosts[id]?.removeFromSuperview()
+      chartHosts.removeValue(forKey: id)
+      chartHostSnapshots.removeValue(forKey: id)
+    }
+    for chart in charts {
+      let rect = chartRect(for: chart)
+      let local = NSRect(
+        x: rect.minX - chartLayerView.frame.minX,
+        y: rect.minY - chartLayerView.frame.minY,
+        width: rect.width,
+        height: rect.height
+      )
+      let snapshot = ChartHostSnapshot(
+        chart: chart,
+        contentRevision: viewModel.contentRevision,
+        selected: viewModel.selectedChartID == chart.id
+      )
+      let host: NSHostingView<OnSheetChartCard>
+      if let existing = chartHosts[chart.id] {
+        host = existing
+      } else {
+        let created = NSHostingView(rootView: OnSheetChartCard(chart: chart, viewModel: viewModel))
+        created.sizingOptions = []
+        created.translatesAutoresizingMaskIntoConstraints = true
+        created.focusRingType = .none
+        chartLayerView.addSubview(created)
+        chartHosts[chart.id] = created
+        host = created
+      }
+      if chartHostSnapshots[chart.id] != snapshot {
+        host.rootView = OnSheetChartCard(chart: chart, viewModel: viewModel)
+        chartHostSnapshots[chart.id] = snapshot
+      }
+      host.isHidden = local.width < 8 || local.height < 8
+      if host.frame != local {
+        host.frame = local
+      }
+    }
+  }
+
+  func scrollChartIntoView(id: UUID) {
+    guard let chart = viewModel?.activeSheet.charts.first(where: { $0.id == id }) else { return }
+    let rect = chartRect(for: chart)
+    let visible = contentRect
+    if rect.width > visible.width {
+      scrollOrigin.x -= visible.minX - rect.minX
+    } else if rect.minX < visible.minX {
+      scrollOrigin.x -= visible.minX - rect.minX
+    } else if rect.maxX > visible.maxX {
+      scrollOrigin.x += rect.maxX - visible.maxX
+    }
+    if rect.height > visible.height {
+      scrollOrigin.y -= visible.minY - rect.minY
+    } else if rect.minY < visible.minY {
+      scrollOrigin.y -= visible.minY - rect.minY
+    } else if rect.maxY > visible.maxY {
+      scrollOrigin.y += rect.maxY - visible.maxY
+    }
+    clampScrollOrigin()
+    layoutOnSheetCharts()
+    needsDisplay = true
+  }
+
+  private func removeChartHosts() {
+    for host in chartHosts.values {
+      host.removeFromSuperview()
+    }
+    chartHosts.removeAll()
+    chartHostSnapshots.removeAll()
+  }
+
+  private func chartRect(for chart: SheetChart) -> NSRect {
+    OnSheetChartGeometry.frame(
+      anchorRow: chart.anchorRow,
+      anchorCol: chart.anchorCol,
+      rowSpan: chart.rowSpan,
+      colSpan: chart.colSpan,
+      rowCount: rowCount(),
+      columnCount: columnCount(),
+      xForColumn: { self.xForColumn($0) },
+      yForRow: { self.yForRow($0) },
+      columnWidth: { self.columnWidth(at: $0) },
+      rowHeight: { self.rowHeight(at: $0) }
+    )
+  }
+
+  private func chartHitTest(at point: NSPoint) -> SheetChart? {
+    guard contentRect.contains(point), let charts = viewModel?.activeSheet.charts else { return nil }
+    for chart in charts.reversed() {
+      let rect = chartRect(for: chart)
+      if rect.width < 8 || rect.height < 8 { continue }
+      if rect.contains(point) { return chart }
+    }
+    return nil
   }
 
   private func drawImageSelectionChrome(in rect: NSRect) {
@@ -2240,6 +2389,7 @@ final class SpreadsheetGridNSView: NSView {
     }
     clampScrollOrigin()
     updateEditorFrame()
+    layoutOnSheetCharts()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
@@ -2314,6 +2464,7 @@ final class SpreadsheetGridNSView: NSView {
     if shouldReset { scrollOrigin = .zero }
     invalidateLayoutCache()
     updateEditorFrame()
+    layoutOnSheetCharts()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
@@ -2426,6 +2577,16 @@ final class SpreadsheetGridNSView: NSView {
     if point.y > contentBottomY() + 1 {
       return
     }
+
+    if let chart = chartHitTest(at: point) {
+      viewModel?.selectChart(id: chart.id)
+      if event.clickCount >= 2 {
+        viewModel?.beginEditChart(id: chart.id)
+      }
+      needsDisplay = true
+      return
+    }
+    viewModel?.selectChart(id: nil)
 
     if handleImageMouseDown(at: point, event: event) {
       needsDisplay = true
@@ -2587,6 +2748,7 @@ final class SpreadsheetGridNSView: NSView {
       invalidateLayoutCache()
       window?.invalidateCursorRects(for: self)
       updateEditorFrame()
+      layoutOnSheetCharts()
       needsDisplay = true
       return
     }
@@ -2675,11 +2837,18 @@ final class SpreadsheetGridNSView: NSView {
     scrollOrigin.y += event.scrollingDeltaY * (invert ? -1 : 1)
     clampScrollOrigin()
     updateEditorFrame()
+    layoutOnSheetCharts()
     needsDisplay = true
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
     let point = convert(event.locationInWindow, from: nil)
+
+    if let viewModel, contentRect.contains(point), let chart = chartHitTest(at: point) {
+      viewModel.selectChart(id: chart.id)
+      needsDisplay = true
+      return chartContextMenu()
+    }
 
     if let viewModel, contentRect.contains(point), let hit = imageHitTest(at: point) {
       viewModel.selectImage(id: hit.id, bringToFront: true)
@@ -2696,6 +2865,7 @@ final class SpreadsheetGridNSView: NSView {
         viewModel.selectColumn(col)
         needsDisplay = true
       case .content:
+        viewModel.selectChart(id: nil)
         viewModel.selectImage(id: nil)
         let address = addressAtContent(point: point)
         if !viewModel.isAddressSelected(address) {
@@ -2719,6 +2889,24 @@ final class SpreadsheetGridNSView: NSView {
     menu.addItem(.separator())
     addStructureSubmenus(to: menu)
     return menu
+  }
+
+  private func chartContextMenu() -> NSMenu {
+    let menu = NSMenu()
+    addMenuItem(menu, "Edit Chart…", #selector(handleMenuEditChart(_:)))
+    addMenuItem(menu, "Delete Chart", #selector(handleMenuDeleteChart(_:)))
+    return menu
+  }
+
+  @objc private func handleMenuEditChart(_ sender: Any?) {
+    guard let id = viewModel?.selectedChartID else { return }
+    viewModel?.beginEditChart(id: id)
+  }
+
+  @objc private func handleMenuDeleteChart(_ sender: Any?) {
+    guard let id = viewModel?.selectedChartID else { return }
+    viewModel?.removeChart(id: id)
+    needsDisplay = true
   }
 
   private func imageContextMenu() -> NSMenu {
@@ -3016,6 +3204,11 @@ final class SpreadsheetGridNSView: NSView {
 
     switch event.keyCode {
     case 51, 117:
+      if let chartID = viewModel.selectedChartID {
+        viewModel.removeChart(id: chartID)
+        needsDisplay = true
+        return
+      }
       if viewModel.selectedImageID != nil {
         viewModel.deleteSelectedImage()
         needsDisplay = true
@@ -3023,6 +3216,11 @@ final class SpreadsheetGridNSView: NSView {
       }
       viewModel.clearSelection()
     case 53:
+      if viewModel.selectedChartID != nil {
+        viewModel.selectChart(id: nil)
+        needsDisplay = true
+        return
+      }
       if viewModel.selectedImageID != nil {
         viewModel.selectImage(id: nil)
         needsDisplay = true

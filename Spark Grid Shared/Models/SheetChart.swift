@@ -46,7 +46,7 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
   var valueColumn: Int?
   var hasHeaderRow: Bool
   var valueMode: ValueMode
-  /// Top-left of chart frame in sheet cell coordinates (future on-sheet placement).
+  /// Top-left of the on-sheet chart frame, in cell coordinates.
   var anchorRow: Int
   var anchorCol: Int
   var rowSpan: Int
