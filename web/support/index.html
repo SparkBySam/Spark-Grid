@@ -3,10 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Support — Spark Grid</title>
-  <meta name="description" content="Get help with Spark Grid — support email and resources." />
+  <title>Spark Grid support — help with .xlsx and CSV</title>
+  <meta name="description" content="Help for Spark Grid, a free native Mac spreadsheet. What to send with a bug report, which formulas 1.0 evaluates, and how to reach Sam." />
+  <link rel="canonical" href="https://sparkgridapp.com/support" />
+  <meta property="og:title" content="Spark Grid support — help with .xlsx and CSV" />
+  <meta property="og:description" content="Help for Spark Grid. What to send with a bug report, which formulas 1.0 evaluates, and how to reach Sam." />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Spark Grid" />
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:url" content="https://sparkgridapp.com/support" />
+  <meta property="og:image" content="https://sparkgridapp.com/images/og.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Spark Grid on the Mac, with a pipeline workbook and a bar chart in a side panel." />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Spark Grid support — help with .xlsx and CSV" />
+  <meta name="twitter:description" content="Help for Spark Grid. What to send with a bug report, which formulas 1.0 evaluates, and how to reach Sam." />
+  <meta name="twitter:image" content="https://sparkgridapp.com/images/og.jpg" />
+  <meta name="twitter:image:alt" content="Spark Grid on the Mac, with a pipeline workbook and a bar chart in a side panel." />
   <link rel="icon" type="image/png" href="/favicon.png" />
-  <link rel="apple-touch-icon" href="/images/logo.png" />
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -18,37 +35,52 @@
     <a class="mark" href="/"><img src="/images/logo.png" width="28" height="28" alt="" /><span>Spark Grid</span></a>
     <nav>
       <a href="/">Home</a>
-      <a href="/privacy/">Privacy</a>
-      <a href="/legal/">Legal</a>
+      <a href="/launch">What’s in 1.0</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/legal">Legal</a>
     </nav>
   </header>
   <article class="page">
-    <h1>Support</h1>
-    <p>Last updated: September 11, 2026</p>
+    <h1>Spark Grid support</h1>
+    <p>Last updated: October 7, 2026</p>
     <p>
-      Need help with Spark Grid? Email us — we read every message.
+      Need help with Spark Grid? Email Sam — every message gets read.
     </p>
     <p class="support-email">
       <a href="mailto:help@sparkgridapp.com">help@sparkgridapp.com</a>
     </p>
-    <h2>What to include</h2>
+    <p>Spark Grid 1.0 is free on the Mac App Store.</p>
+    <div class="cta-row">
+      <a class="store-badge" href="https://apps.apple.com/us/app/spark-grid/id6811196983?mt=12">
+        <img src="/images/download-on-the-mac-app-store.svg" width="156" height="40" alt="Download on the Mac App Store" />
+      </a>
+    </div>
+    <h2>What to include in a bug report</h2>
     <ul>
       <li>Your macOS version (Apple menu → About This Mac)</li>
       <li>Spark Grid version (Spark Grid → About Spark Grid)</li>
       <li>What you were doing, and what went wrong</li>
       <li>A sample workbook if the issue is file-specific (remove anything private first)</li>
     </ul>
-    <h2>Common topics</h2>
-    <ul>
-      <li><strong>Opening Excel files</strong> — Spark Grid opens `.xlsx` and CSV. Some Excel-only features may not round-trip perfectly yet — if something breaks for you, <a href="mailto:help@sparkgridapp.com?subject=Excel%20round-trip">let us know</a>.</li>
-      <li><strong>Quick Look</strong> — In Finder, select a `.csv` or `.xlsx` and press Space to preview the grid. Double-click a cell to edit, ⌘S to save, or open the file in Spark Grid for the full editor. After installing a new build, launch Spark Grid once; if Space still shows plain text, run <code>scripts/register-quicklook.sh</code> from the repo.</li>
-      <li><strong>Formulas</strong> — Supported functions include common aggregates and logic; unsupported names show as errors in-cell.</li>
-      <li><strong>Privacy</strong> — The app does not collect analytics. See the <a href="/privacy/">Privacy Policy</a>.</li>
-    </ul>
+    <h2>Opening .xlsx and CSV</h2>
+    <p>
+      Spark Grid opens and saves <code>.xlsx</code> and CSV from Open, or when you drop a file on the icon.
+      Pressing Space in Finder does not open Spark Grid for those files.
+      Pivot tables, SUMIF, and charts stored in an Excel file are not imported.
+      If a file breaks, <a href="mailto:help@sparkgridapp.com?subject=Workbook%20did%20not%20open">email a sample</a> with private data removed.
+      <a href="/launch">What 1.0 includes</a>.
+    </p>
+    <h2>Formulas in version 1.0</h2>
+    <p>
+      These names evaluate: SUM, AVERAGE, COUNT, COUNTA, MIN, MAX, IF, IFERROR, AND, OR, ABS, ROUND, LEN, LEFT, RIGHT, TRIM, CONCAT, CONCATENATE, TEXT, XLOOKUP, VLOOKUP, INDEX, MATCH, TODAY, DATE, YEAR, MONTH, and DAY.
+      Anything else shows <code>#NAME?</code>.
+    </p>
+    <h2>Privacy</h2>
+    <p>The app does not collect analytics and does not use the network. See the <a href="/privacy">privacy policy</a>.</p>
     <h2>More</h2>
     <p>
       <a href="https://github.com/SparkBySam/Spark-Grid">GitHub</a>
-      · <a href="/legal/">Terms &amp; licenses</a>
+      · <a href="/legal">Terms &amp; licenses</a>
       · <a href="https://sparksuiteapps.com">Spark Suite</a>
     </p>
   </article>

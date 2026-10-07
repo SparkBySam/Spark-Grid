@@ -1,10 +1,12 @@
 # Spark Grid
 
-Native macOS spreadsheet for opening, editing, and saving Excel `.xlsx` and CSV files.
+Free native Mac spreadsheet for opening, editing, and saving `.xlsx` and CSV files. [Spark Grid 1.0 is on the Mac App Store](https://apps.apple.com/us/app/spark-grid/id6811196983?mt=12). No account, no analytics, and the app does not use the network.
 
-Built with SwiftUI chrome and a custom AppKit grid — formulas, formatting, filters, conditional formatting, charts, and embedded images.
+Site: https://sparkgridapp.com
 
-**Version 1.0** — first public release candidate. Expect rough edges versus Excel/Numbers; please report issues.
+Built with SwiftUI chrome and a custom AppKit grid.
+
+**Version 1.0** is the Mac App Store release. It evaluates an everyday formula list, and it has filters, formatting, pictures, and a bar, line, or area chart in a side panel. Pivot tables and SUMIF are not in this version. Rough edges are real; please report files that break.
 
 ## Requirements
 
@@ -30,24 +32,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - Spreadsheet grid: selection, fill handle, freeze panes, merges, zoom
 - Formula bar with lexer/parser/evaluator and autocomplete
 - Formatting toolbar, conditional formatting, AutoFilter, sort, find/replace
-- Charts with an insert chooser (category + values or count-by-category)
+- Bar, line, or area chart in a side panel, one series from the selection. Charts already in an Excel file are not imported.
 - Embedded pictures (insert, move, resize, z-order)
-- `.xlsx` / `.csv` open & save with autosave
-- Finder Quick Look: press **Space** on a `.csv` / `.tsv` / `.xlsx` to preview the grid, edit cells, and save (or open in Spark Grid)
+- `.xlsx` / `.csv` open and save, with autosave for a file you have already saved
 
-### Enabling Finder Quick Look after a build
-
-1. Open `Spark Grid.xcodeproj` and **Product → Run** the **Spark Grid** scheme once (this embeds `Spark Grid Quick Look.appex`).
-2. Register / prefer the extension (searches `/Applications`, repo build folders, and DerivedData):
-
-```bash
-./scripts/register-quicklook.sh
-# or: ./scripts/register-quicklook.sh "/path/to/Spark Grid.app"
-```
-
-3. In Finder, select a `.csv` / `.xlsx` and press **Space**. The preview chrome should show **Save** and **Open in Spark Grid**.
-
-If the script says the appex is missing, you haven’t built this branch yet — Run from Xcode first. If Space still shows plain text: `pluginkit -mAvvv -p com.apple.quicklook.preview | grep -i Spark` then `qlmanage -r && killall Finder`.
+Finder’s Space preview does not open Spark Grid for `.csv` or `.xlsx`. macOS uses another app’s Quick Look generator for those types.
 
 ## App Store / signing notes
 
