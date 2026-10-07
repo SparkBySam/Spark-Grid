@@ -89,16 +89,26 @@ struct SpreadsheetChartsPanel: View {
 
   private func chartCard(_ chart: SheetChart) -> some View {
     let subtitle = seriesSubtitle(for: chart)
+    let title = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let previewHeight = OnSheetChartGeometry.previewHeight(
+      colSpan: chart.colSpan,
+      rowSpan: chart.rowSpan,
+      width: 320
+    )
     return VStack(alignment: .leading, spacing: 8) {
       HStack(alignment: .top, spacing: 6) {
         VStack(alignment: .leading, spacing: 2) {
-          Text(chart.title)
+          Text(title.isEmpty ? "Untitled chart" : title)
             .font(.system(size: 13, weight: .semibold))
             .lineLimit(2)
           Text(subtitle)
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
             .lineLimit(2)
+          Text(chart.placementDescription)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
         Spacer(minLength: 0)
         Button("Edit") {
@@ -120,13 +130,106 @@ struct SpreadsheetChartsPanel: View {
         .help("Delete chart")
       }
       SheetChartView(chart: chart, viewModel: viewModel)
-        .frame(height: 240)
+        .frame(height: previewHeight)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          viewModel.selectChart(id: chart.id)
+        }
+      DisclosureGroup(isExpanded: formatExpanded(for: chart.id)) {
+        ChartFormatFields(
+          title: titleBinding(for: chart),
+          showsLegend: flagBinding(for: chart, keyPath: \.showsLegend, actionName: "Chart Legend"),
+          showsGridlines: flagBinding(for: chart, keyPath: \.showsGridlines, actionName: "Chart Gridlines"),
+          categoryAxisTitle: textBinding(for: chart, keyPath: \.categoryAxisTitle, actionName: "Axis Title"),
+          valueAxisTitle: textBinding(for: chart, keyPath: \.valueAxisTitle, actionName: "Axis Title"),
+          seriesColor: ChartColorPaint.color(chart.resolvedSeriesColor),
+          onSeriesColor: { color in
+            viewModel.updateChartContent(id: chart.id, actionName: "Chart Color") {
+              $0.seriesColor = ChartColorPaint.codable(color)
+            }
+          },
+          points: plottedPoints(for: chart),
+          pointColor: { ChartColorPaint.color(chart.resolvedColor(forPoint: $0)) },
+          isPointOverride: { chart.pointColors[$0] != nil },
+          onPointColor: { index, color in
+            viewModel.updateChartContent(id: chart.id, actionName: "Chart Color") {
+              $0.setPointColor(ChartColorPaint.codable(color), at: index)
+            }
+          },
+          onClearPointColor: { index in
+            viewModel.updateChartContent(id: chart.id, actionName: "Chart Color") {
+              $0.setPointColor(nil, at: index)
+            }
+          }
+        )
+      } label: {
+        Text("Format")
+          .font(.system(size: 11, weight: .semibold))
+      }
     }
     .padding(10)
     .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     .overlay(
       RoundedRectangle(cornerRadius: 8)
         .strokeBorder(viewModel.selectedChartID == chart.id ? Color.accentColor : Color.clear, lineWidth: 2)
+    )
+  }
+
+  private func plottedPoints(for chart: SheetChart) -> [ChartPreviewSeries.Point] {
+    ChartPreviewSeries.points(
+      for: chart,
+      labelFor: { viewModel.displayString(at: $0) },
+      numberFor: { viewModel.displayValue(at: $0).asChartNumber }
+    ).points
+  }
+
+  private func formatExpanded(for id: UUID) -> Binding<Bool> {
+    Binding(
+      get: { viewModel.selectedChartID == id },
+      set: { expanded in
+        viewModel.selectChart(id: expanded ? id : nil)
+      }
+    )
+  }
+
+  private func titleBinding(for chart: SheetChart) -> Binding<String> {
+    Binding(
+      get: { chart.title },
+      set: { newValue in
+        viewModel.updateChartContent(id: chart.id, actionName: "Chart Title") {
+          $0.title = newValue
+        }
+      }
+    )
+  }
+
+  private func textBinding(
+    for chart: SheetChart,
+    keyPath: WritableKeyPath<SheetChart, String>,
+    actionName: String
+  ) -> Binding<String> {
+    Binding(
+      get: { chart[keyPath: keyPath] },
+      set: { newValue in
+        viewModel.updateChartContent(id: chart.id, actionName: actionName) {
+          $0[keyPath: keyPath] = newValue
+        }
+      }
+    )
+  }
+
+  private func flagBinding(
+    for chart: SheetChart,
+    keyPath: WritableKeyPath<SheetChart, Bool>,
+    actionName: String
+  ) -> Binding<Bool> {
+    Binding(
+      get: { chart[keyPath: keyPath] },
+      set: { newValue in
+        viewModel.updateChartContent(id: chart.id, actionName: actionName) {
+          $0[keyPath: keyPath] = newValue
+        }
+      }
     )
   }
 
@@ -188,6 +291,10 @@ struct SheetChartView: View {
   /// Below this, the reserved strip under the plot is too thin to draw the
   /// category-label overlay without clipping it; the plot itself still draws.
   private static let minimumCategoryLabelPadding: CGFloat = 14
+  private static let valueAxisTitleWidth: CGFloat = 16
+  private static let categoryAxisTitleHeight: CGFloat = 14
+  private static let legendHeight: CGFloat = 16
+  private static let chromeSpacing: CGFloat = 2
 
   /// Bottom plot padding clamped so it can never reach `availableHeight`,
   /// no matter how small the proposed size is. `idealPadding` (20) used to
@@ -255,53 +362,148 @@ struct SheetChartView: View {
         .frame(width: innerWidth, height: innerHeight)
         .position(x: size.width / 2, y: size.height / 2)
       }
-    } else if let slot = plotSlot(in: size),
+    } else if let chrome = chartChrome(in: size),
               let yDomain = Self.plotValueDomain(values: renderPoints.map(\.value)),
               let xDomain = Self.plotCategoryDomain(count: renderPoints.count) {
-      let caption = captionHeight
-      let spacing: CGFloat = caption >= 1 ? 6 : 0
-      VStack(alignment: .leading, spacing: spacing) {
-        chartBody(
-          bottomPadding: slot.bottomPadding,
-          showAxisLabels: slot.showAxisLabels,
-          yDomain: yDomain,
-          xDomain: xDomain
-        )
-          .frame(width: size.width, height: slot.height)
-        if caption >= 1 {
+      VStack(alignment: .leading, spacing: Self.chromeSpacing) {
+        HStack(alignment: .center, spacing: Self.chromeSpacing) {
+          if chrome.showValueTitle {
+            Text(chart.valueAxisTitle)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+              .fixedSize()
+              .rotationEffect(.degrees(-90))
+              .frame(width: Self.valueAxisTitleWidth, height: chrome.plotHeight)
+          }
+          chartBody(
+            bottomPadding: chrome.bottomPadding,
+            showAxisLabels: chrome.showAxisLabels,
+            yDomain: yDomain,
+            xDomain: xDomain
+          )
+          .frame(width: chrome.plotWidth, height: chrome.plotHeight)
+        }
+        .frame(width: size.width, height: chrome.plotHeight, alignment: .leading)
+        if chrome.showCategoryTitle {
+          Text(chart.categoryAxisTitle)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.categoryAxisTitleHeight)
+        }
+        if chrome.showLegend {
+          chartLegend
+            .frame(height: Self.legendHeight)
+        }
+        if captionHeight >= 1 {
           Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
             .font(.system(size: 9))
             .foregroundStyle(.tertiary)
-            .frame(height: caption, alignment: .leading)
+            .frame(height: captionHeight, alignment: .leading)
         }
       }
       .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
   }
 
+  private var chartLegend: some View {
+    HStack(spacing: 6) {
+      RoundedRectangle(cornerRadius: 2)
+        .fill(seriesPaint())
+        .frame(width: 10, height: 10)
+      Text(legendTitle)
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+      Spacer(minLength: 0)
+    }
+  }
+
+  private var legendTitle: String {
+    let n = chart.dataRange.normalized
+    let valueColumn = chart.valueColumn ?? min(n.maxCol, n.minCol + 1)
+    if chart.hasHeaderRow {
+      let header = viewModel.displayString(at: CellAddress(row: n.minRow, col: valueColumn))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !header.isEmpty { return header }
+    }
+    let title = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    return title.isEmpty ? chart.kind.title : title
+  }
+
   private var captionHeight: CGFloat {
     renderTotalCount > ChartPreviewSeries.maxPreviewPoints ? 14 : 0
   }
 
-  /// Chart slot sized from the proposed size, with the bottom padding and
-  /// axis labels scaled to what is actually available so neither can ever
-  /// exceed it. `nil` below `minimumPlotHeight`: at 1–31pt, clamping our own
-  /// padding to 0 still hands Charts a sliver it can trap on with its own
-  /// automatic axis insets (seen on Insert Chart's first layout pass), so we
-  /// don't construct the `Chart` at all until there's real room for one.
-  private func plotSlot(in size: CGSize) -> (height: CGFloat, bottomPadding: CGFloat, showAxisLabels: Bool)? {
-    let spacing: CGFloat = captionHeight >= 1 ? 6 : 0
-    guard let height = OnSheetChartGeometry.placedHeight(top: 0, bottom: size.height - captionHeight - spacing),
+  private struct ChartChrome {
+    var plotWidth: CGFloat
+    var plotHeight: CGFloat
+    var bottomPadding: CGFloat
+    var showAxisLabels: Bool
+    var showValueTitle: Bool
+    var showCategoryTitle: Bool
+    var showLegend: Bool
+  }
+
+  /// Chart slot sized from the proposed size. Legend, axis titles, and the
+  /// truncated-series caption sit *outside* the `Chart`, and are dropped
+  /// (legend, then axis titles) before the plot is allowed under
+  /// `minimumPlotHeight`. Below that we don't construct a `Chart` at all:
+  /// clamping our own padding to 0 still hands Charts a sliver it can trap
+  /// on with its own automatic axis insets.
+  private func chartChrome(in size: CGSize) -> ChartChrome? {
+    var showLegend = chart.showsLegend
+    var showCategoryTitle = !chart.categoryAxisTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var showValueTitle = !chart.valueAxisTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+    func reservedHeight(legend: Bool, category: Bool) -> CGFloat {
+      var bands: [CGFloat] = []
+      if category { bands.append(Self.categoryAxisTitleHeight) }
+      if legend { bands.append(Self.legendHeight) }
+      if captionHeight >= 1 { bands.append(captionHeight) }
+      guard !bands.isEmpty else { return 0 }
+      return bands.reduce(0, +) + CGFloat(bands.count) * Self.chromeSpacing
+    }
+
+    var reserved = reservedHeight(legend: showLegend, category: showCategoryTitle)
+    var plotHeight = size.height - reserved
+    if plotHeight < Self.minimumPlotHeight, showLegend {
+      showLegend = false
+      reserved = reservedHeight(legend: false, category: showCategoryTitle)
+      plotHeight = size.height - reserved
+    }
+    if plotHeight < Self.minimumPlotHeight, showCategoryTitle {
+      showCategoryTitle = false
+      reserved = reservedHeight(legend: false, category: false)
+      plotHeight = size.height - reserved
+    }
+    guard let height = OnSheetChartGeometry.placedHeight(top: 0, bottom: plotHeight),
           height >= Self.minimumPlotHeight
     else {
       return nil
     }
-    // Scaled down (never past zero) once the slot is too short to spare the
-    // full inset — this is what actually keeps the padding inside the
-    // proposed size, rather than just skipping the chart near the boundary.
+
+    var plotWidth = size.width
+    if showValueTitle {
+      let candidate = size.width - Self.valueAxisTitleWidth - Self.chromeSpacing
+      if candidate >= Self.minimumPlotWidth {
+        plotWidth = candidate
+      } else {
+        showValueTitle = false
+      }
+    }
     let bottomPadding = Self.clampedBottomPadding(idealPadding: Self.plotBottomInset, availableHeight: height)
-    let showAxisLabels = size.width >= Self.minimumPlotWidth
-    return (height, bottomPadding, showAxisLabels)
+    return ChartChrome(
+      plotWidth: plotWidth,
+      plotHeight: height,
+      bottomPadding: bottomPadding,
+      showAxisLabels: plotWidth >= Self.minimumPlotWidth,
+      showValueTitle: showValueTitle,
+      showCategoryTitle: showCategoryTitle,
+      showLegend: showLegend
+    )
   }
 
   private var emptyDetail: String {
@@ -331,11 +533,7 @@ struct SheetChartView: View {
   ) -> some View {
     let points = renderPoints
     let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
-    let lineGradient = LinearGradient(
-      colors: points.map { valueColor(for: $0, kind: .line) },
-      startPoint: .leading,
-      endPoint: .trailing
-    )
+    let series = seriesPaint()
     // Paint each mark directly. `foregroundStyle(by:)` together with
     // `chartForegroundStyleScale` (keyed by the same indexes as the X axis)
     // makes Charts call `PositionScaleRange.plotFrame` with an empty range,
@@ -347,31 +545,39 @@ struct SheetChartView: View {
           x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(valueColor(for: point, kind: .bar))
+        .foregroundStyle(pointPaint(point))
       case .line:
         LineMark(
           x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(lineGradient)
+        .foregroundStyle(series)
         .interpolationMethod(.catmullRom)
         PointMark(
           x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(valueColor(for: point, kind: .line))
+        .foregroundStyle(pointPaint(point))
         .symbolSize(points.count > 20 ? 28 : 46)
       case .area:
         AreaMark(
           x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor.opacity(0.22).gradient)
+        .foregroundStyle(series.opacity(0.28))
         LineMark(
           x: .value("Category", Double(point.id)),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(series)
+        if chart.pointColors[point.id] != nil {
+          PointMark(
+            x: .value("Category", Double(point.id)),
+            y: .value("Value", point.value)
+          )
+          .foregroundStyle(pointPaint(point))
+          .symbolSize(36)
+        }
       }
     }
     .chartYScale(domain: yDomain)
@@ -382,8 +588,10 @@ struct SheetChartView: View {
     .chartYAxis {
       if showAxisLabels {
         AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-          AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
-            .foregroundStyle(Color.secondary.opacity(0.3))
+          if chart.showsGridlines {
+            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+              .foregroundStyle(Color.secondary.opacity(0.3))
+          }
           AxisValueLabel {
             if let number = value.as(Double.self) {
               Text(Self.formatAxisNumber(number))
@@ -395,9 +603,11 @@ struct SheetChartView: View {
       }
     }
     .chartXAxis {
-      AxisMarks(values: labelIndexes.map(Double.init)) { _ in
-        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-          .foregroundStyle(Color.secondary.opacity(0.15))
+      if chart.showsGridlines {
+        AxisMarks(values: labelIndexes.map(Double.init)) { _ in
+          AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+            .foregroundStyle(Color.secondary.opacity(0.15))
+        }
       }
     }
     .chartOverlay { proxy in
@@ -449,9 +659,12 @@ struct SheetChartView: View {
     )
   }
 
-  private func valueColor(for point: Point, kind: SheetChart.Kind) -> Color {
-    guard ChartMarkPalette.usesDistinctValueColors(kind) else { return Color.accentColor }
-    return ChartMarkPalette.swatch(at: point.id).color
+  private func seriesPaint() -> Color {
+    ChartColorPaint.color(chart.resolvedSeriesColor)
+  }
+
+  private func pointPaint(_ point: Point) -> Color {
+    ChartColorPaint.color(chart.resolvedColor(forPoint: point.id))
   }
 
   private var cacheToken: String {
@@ -531,16 +744,23 @@ struct OnSheetChartCard: View {
       RoundedRectangle(cornerRadius: 6)
         .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
     )
+    .overlay {
+      if selected {
+        ChartFrameHandleMarks()
+      }
+    }
     .allowsHitTesting(false)
   }
 
   /// Title plus chart, only when each band is at least 1pt. A zero host
   /// frame used to inset this stack until the chart height was negative.
+  /// An empty title is hidden so the plot can use the whole card.
   @ViewBuilder
   private func cardContent(in size: CGSize) -> some View {
     let pad: CGFloat = 6
-    let titleHeight: CGFloat = 14
-    let spacing: CGFloat = 2
+    let title = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let titleHeight: CGFloat = title.isEmpty ? 0 : 14
+    let spacing: CGFloat = title.isEmpty ? 0 : 2
     if let innerWidth = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.width - pad),
        let innerHeight = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.height - pad) {
       if let chartHeight = OnSheetChartGeometry.placedHeight(
@@ -548,19 +768,21 @@ struct OnSheetChartCard: View {
         bottom: innerHeight
       ) {
         VStack(alignment: .leading, spacing: spacing) {
-          Text(chart.title)
-            .font(.system(size: 11, weight: .semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: titleHeight)
+          if titleHeight >= 1 {
+            Text(title)
+              .font(.system(size: 11, weight: .semibold))
+              .lineLimit(1)
+              .padding(.horizontal, 2)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .frame(height: titleHeight)
+          }
           SheetChartView(chart: chart, viewModel: viewModel)
             .frame(width: innerWidth, height: chartHeight)
         }
         .frame(width: innerWidth, height: innerHeight, alignment: .topLeading)
         .position(x: size.width / 2, y: size.height / 2)
-      } else {
-        Text(chart.title)
+      } else if titleHeight >= 1 {
+        Text(title)
           .font(.system(size: 11, weight: .semibold))
           .lineLimit(1)
           .padding(.horizontal, 2)
@@ -568,6 +790,36 @@ struct OnSheetChartCard: View {
           .position(x: size.width / 2, y: size.height / 2)
       }
     }
+  }
+}
+
+/// Corner and edge handles drawn on a selected on-sheet chart.
+private struct ChartFrameHandleMarks: View {
+  var body: some View {
+    GeometryReader { geo in
+      let size = geo.size
+      let points = [
+        CGPoint(x: 0, y: 0),
+        CGPoint(x: size.width / 2, y: 0),
+        CGPoint(x: size.width, y: 0),
+        CGPoint(x: 0, y: size.height / 2),
+        CGPoint(x: size.width, y: size.height / 2),
+        CGPoint(x: 0, y: size.height),
+        CGPoint(x: size.width / 2, y: size.height),
+        CGPoint(x: size.width, y: size.height),
+      ]
+      ForEach(Array(points.enumerated()), id: \.offset) { _, point in
+        RoundedRectangle(cornerRadius: 1)
+          .fill(Color.white)
+          .overlay(
+            RoundedRectangle(cornerRadius: 1)
+              .strokeBorder(Color.accentColor, lineWidth: 1)
+          )
+          .frame(width: 8, height: 8)
+          .position(point)
+      }
+    }
+    .allowsHitTesting(false)
   }
 }
 
@@ -582,5 +834,107 @@ final class OnSheetChartHost: NSHostingView<OnSheetChartCard> {
   required init?(coder: NSCoder) {
     super.init(coder: coder)
     isFlipped = true
+  }
+}
+
+enum ChartColorPaint {
+  static func color(_ value: CodableColor) -> Color {
+    Color(red: value.red, green: value.green, blue: value.blue, opacity: value.alpha)
+  }
+
+  static func codable(_ color: Color) -> CodableColor {
+    CellFormatRenderer.codableColor(from: NSColor(color))
+  }
+}
+
+/// Title, legend, axis titles, gridlines, series color, and per-point colors.
+/// Shared by the side panel and Edit Chart.
+struct ChartFormatFields: View {
+  @Binding var title: String
+  @Binding var showsLegend: Bool
+  @Binding var showsGridlines: Bool
+  @Binding var categoryAxisTitle: String
+  @Binding var valueAxisTitle: String
+  var seriesColor: Color
+  var onSeriesColor: (Color) -> Void
+  var points: [ChartPreviewSeries.Point]
+  var pointColor: (Int) -> Color
+  var isPointOverride: (Int) -> Bool
+  var onPointColor: (Int, Color) -> Void
+  var onClearPointColor: (Int) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      TextField("Chart title", text: $title)
+      Toggle("Legend", isOn: $showsLegend)
+      Toggle("Gridlines", isOn: $showsGridlines)
+      TextField("Category axis title", text: $categoryAxisTitle, prompt: Text("Category"))
+      TextField("Value axis title", text: $valueAxisTitle, prompt: Text("Value"))
+
+      Text("Series color")
+        .font(.system(size: 11, weight: .medium))
+      HStack(spacing: 4) {
+        ForEach(Array(ChartMarkPalette.swatches.enumerated()), id: \.offset) { _, swatch in
+          Button {
+            onSeriesColor(swatch.color)
+          } label: {
+            RoundedRectangle(cornerRadius: 3)
+              .fill(swatch.color)
+              .frame(width: 16, height: 16)
+              .overlay(
+                RoundedRectangle(cornerRadius: 3)
+                  .strokeBorder(Color.primary.opacity(0.28), lineWidth: 1)
+              )
+          }
+          .buttonStyle(.plain)
+          .help("Series color")
+        }
+      }
+      ColorPicker(
+        "Custom series color",
+        selection: Binding(get: { seriesColor }, set: onSeriesColor),
+        supportsOpacity: false
+      )
+      .font(.system(size: 11))
+
+      if !points.isEmpty {
+        Text("Point colors")
+          .font(.system(size: 11, weight: .medium))
+        Text("Each bar or point uses the series color until you give it one of its own.")
+          .font(.system(size: 10))
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        ScrollView {
+          VStack(alignment: .leading, spacing: 4) {
+            ForEach(points) { point in
+              HStack(spacing: 6) {
+                Text(point.label)
+                  .font(.system(size: 11))
+                  .lineLimit(1)
+                Spacer(minLength: 4)
+                if isPointOverride(point.id) {
+                  Button("Use series color") {
+                    onClearPointColor(point.id)
+                  }
+                  .buttonStyle(.borderless)
+                  .font(.system(size: 10))
+                }
+                ColorPicker(
+                  point.label,
+                  selection: Binding(
+                    get: { pointColor(point.id) },
+                    set: { onPointColor(point.id, $0) }
+                  ),
+                  supportsOpacity: false
+                )
+                .labelsHidden()
+              }
+            }
+          }
+        }
+        .frame(maxHeight: 160)
+      }
+    }
+    .padding(.top, 4)
   }
 }

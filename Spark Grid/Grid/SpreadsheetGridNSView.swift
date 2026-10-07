@@ -55,6 +55,15 @@ final class SpreadsheetGridNSView: NSView {
     let startImage: SheetImage
   }
   private var activeImageDrag: ImageDragState?
+  private struct ChartDragState {
+    let chartID: UUID
+    let handle: OnSheetChartGeometry.ChartFrameHandle
+    let startPoint: NSPoint
+    let startChart: SheetChart
+    let startRect: NSRect
+  }
+  private var activeChartDrag: ChartDragState?
+  private let chartHandleThickness: CGFloat = 8
   private let chartLayerView: NSView = {
     let view = NSView()
     view.wantsLayer = true
@@ -770,6 +779,14 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func updateCursor(for point: NSPoint) {
+    if let drag = activeChartDrag {
+      if drag.handle == .body {
+        NSCursor.closedHand.set()
+      } else {
+        cursor(for: drag.handle).set()
+      }
+      return
+    }
     if activeImageDrag != nil {
       switch activeImageDrag?.mode {
       case .resize:
@@ -780,8 +797,16 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
     guard activeResize == nil else { return }
-    if chartHitTest(at: point) != nil {
-      NSCursor.arrow.set()
+    if let chart = chartHitTest(at: point) {
+      let rect = chartRect(for: chart)
+      if viewModel?.selectedChartID == chart.id,
+         let handle = OnSheetChartGeometry.frameHandle(at: point, in: rect, thickness: chartHandleThickness),
+         handle != .body
+      {
+        cursor(for: handle).set()
+      } else {
+        NSCursor.openHand.set()
+      }
       return
     }
     if let imageCursor = imageCursor(at: point) {
@@ -857,6 +882,42 @@ final class SpreadsheetGridNSView: NSView {
     }
 
     if let sheet = viewModel?.activeSheet {
+      let selectedChartID = viewModel?.selectedChartID
+      for chart in sheet.charts {
+        let rect = chartRect(for: chart)
+        guard rect.width >= 8, rect.height >= 8, rect.intersects(bounds) else { continue }
+        addCursorRect(rect, cursor: .openHand)
+        guard chart.id == selectedChartID else { continue }
+        let thickness = chartHandleThickness
+        addCursorRect(
+          NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: thickness),
+          cursor: .resizeUpDown
+        )
+        addCursorRect(
+          NSRect(x: rect.minX, y: rect.maxY - thickness, width: rect.width, height: thickness),
+          cursor: .resizeUpDown
+        )
+        addCursorRect(
+          NSRect(x: rect.minX, y: rect.minY, width: thickness, height: rect.height),
+          cursor: .resizeLeftRight
+        )
+        addCursorRect(
+          NSRect(x: rect.maxX - thickness, y: rect.minY, width: thickness, height: rect.height),
+          cursor: .resizeLeftRight
+        )
+        let corner = thickness + 4
+        for origin in [
+          NSPoint(x: rect.minX, y: rect.minY),
+          NSPoint(x: rect.maxX, y: rect.minY),
+          NSPoint(x: rect.minX, y: rect.maxY),
+          NSPoint(x: rect.maxX, y: rect.maxY),
+        ] {
+          addCursorRect(
+            NSRect(x: origin.x - corner / 2, y: origin.y - corner / 2, width: corner, height: corner),
+            cursor: .crosshair
+          )
+        }
+      }
       let selectedID = viewModel?.selectedImageID
       for image in sheet.images {
         let rect = imageRect(for: image)
@@ -1590,6 +1651,19 @@ final class SpreadsheetGridNSView: NSView {
     )
   }
 
+  private func cursor(for handle: OnSheetChartGeometry.ChartFrameHandle) -> NSCursor {
+    switch handle {
+    case .body:
+      return .openHand
+    case .left, .right:
+      return .resizeLeftRight
+    case .top, .bottom:
+      return .resizeUpDown
+    case .topLeft, .topRight, .bottomLeft, .bottomRight:
+      return .crosshair
+    }
+  }
+
   private func chartHitTest(at point: NSPoint) -> SheetChart? {
     guard contentRect.contains(point), let charts = viewModel?.activeSheet.charts else { return nil }
     for chart in charts.reversed() {
@@ -1764,6 +1838,52 @@ final class SpreadsheetGridNSView: NSView {
       )
     }
     needsDisplay = true
+  }
+
+  private func applyChartDrag(to point: NSPoint) {
+    guard let drag = activeChartDrag, let viewModel else { return }
+    let translation = CGSize(
+      width: point.x - drag.startPoint.x,
+      height: point.y - drag.startPoint.y
+    )
+    let start = OnSheetChartGeometry.ChartFrameAnchor(
+      anchorRow: drag.startChart.anchorRow,
+      anchorCol: drag.startChart.anchorCol,
+      rowSpan: drag.startChart.rowSpan,
+      colSpan: drag.startChart.colSpan
+    )
+    let next = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: drag.handle,
+      startRect: drag.startRect,
+      translation: translation,
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: rowCount(),
+      columnLimit: columnCount(),
+      columnAt: { self.columnAtContent(x: $0) },
+      rowAt: { self.rowAtContent(y: $0) }
+    )
+    viewModel.setChartFrame(
+      id: drag.chartID,
+      anchorRow: next.anchorRow,
+      anchorCol: next.anchorCol,
+      rowSpan: next.rowSpan,
+      colSpan: next.colSpan,
+      preservingCustomFrom: drag.startChart
+    )
+    layoutOnSheetCharts()
+    needsDisplay = true
+  }
+
+  private func finishChartDragIfNeeded() {
+    guard let drag = activeChartDrag, let viewModel else {
+      activeChartDrag = nil
+      return
+    }
+    let actionName = drag.handle == .body ? "Move Chart" : "Resize Chart"
+    viewModel.commitChartFrame(id: drag.chartID, before: drag.startChart, actionName: actionName)
+    activeChartDrag = nil
+    window?.invalidateCursorRects(for: self)
   }
 
   private func finishImageDragIfNeeded() {
@@ -2605,10 +2725,29 @@ final class SpreadsheetGridNSView: NSView {
     }
 
     if let chart = chartHitTest(at: point) {
-      viewModel?.selectChart(id: chart.id)
-      if event.clickCount >= 2 {
-        viewModel?.beginEditChart(id: chart.id)
+      let rect = chartRect(for: chart)
+      let selected = viewModel?.selectedChartID == chart.id
+      let hit = OnSheetChartGeometry.frameHandle(at: point, in: rect, thickness: chartHandleThickness)
+      let handle: OnSheetChartGeometry.ChartFrameHandle
+      if selected, let hit, hit != .body {
+        handle = hit
+      } else {
+        handle = .body
       }
+      viewModel?.selectChart(id: chart.id, scroll: false)
+      if event.clickCount >= 2, handle == .body {
+        viewModel?.beginEditChart(id: chart.id)
+        needsDisplay = true
+        return
+      }
+      activeChartDrag = ChartDragState(
+        chartID: chart.id,
+        handle: handle,
+        startPoint: point,
+        startChart: chart,
+        startRect: rect
+      )
+      isDraggingSelection = false
       needsDisplay = true
       return
     }
@@ -2779,6 +2918,12 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
+    if activeChartDrag != nil {
+      applyChartDrag(to: point)
+      updateCursor(for: point)
+      return
+    }
+
     if activeImageDrag != nil {
       applyImageDrag(to: point)
       updateCursor(for: point)
@@ -2821,6 +2966,11 @@ final class SpreadsheetGridNSView: NSView {
 
   override func mouseUp(with event: NSEvent) {
     stopAutoscrollTimer()
+
+    if activeChartDrag != nil {
+      finishChartDragIfNeeded()
+      needsDisplay = true
+    }
 
     if activeImageDrag != nil {
       finishImageDragIfNeeded()
