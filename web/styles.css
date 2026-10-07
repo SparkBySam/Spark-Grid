@@ -209,6 +209,8 @@ main {
   color: var(--muted);
   font-size: 13px;
 }
+.meta a { color: var(--amber); text-decoration: none; }
+.meta a:hover { text-decoration: underline; }
 
 .stage {
   margin: 12px 0 64px;
@@ -335,6 +337,22 @@ footer a:hover { color: var(--ink); }
 }
 .page p, .page li { color: var(--muted); }
 .page a { color: var(--amber); }
+.page .pitch { color: var(--ink); font-size: 1.05rem; }
+.page pre {
+  margin: 12px 0 20px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+.features span a { color: var(--amber); text-decoration: none; }
+.features span a:hover { text-decoration: underline; }
 
 .support-email {
   margin: 28px 0 !important;
