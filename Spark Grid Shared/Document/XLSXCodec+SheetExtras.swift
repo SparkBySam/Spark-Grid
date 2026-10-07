@@ -658,7 +658,7 @@ extension XLSXCodec {
     return try? JSONEncoder().encode(charts)
   }
 
-  private static func rgbHex(_ color: CodableColor) -> String {
+  internal static func rgbHex(_ color: CodableColor) -> String {
     let r = Int((color.red * 255).rounded())
     let g = Int((color.green * 255).rounded())
     let b = Int((color.blue * 255).rounded())
