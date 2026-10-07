@@ -249,10 +249,15 @@ struct SheetChartView: View {
 
   /// Chart slot sized from the proposed size, with the bottom padding and
   /// axis labels scaled to what is actually available so neither can ever
-  /// exceed it. `nil` only when there is no positive height to place at all.
+  /// exceed it. `nil` below `minimumPlotHeight`: at 1–31pt, clamping our own
+  /// padding to 0 still hands Charts a sliver it can trap on with its own
+  /// automatic axis insets (seen on Insert Chart's first layout pass), so we
+  /// don't construct the `Chart` at all until there's real room for one.
   private func plotSlot(in size: CGSize) -> (height: CGFloat, bottomPadding: CGFloat, showAxisLabels: Bool)? {
     let spacing: CGFloat = captionHeight >= 1 ? 6 : 0
-    guard let height = OnSheetChartGeometry.placedHeight(top: 0, bottom: size.height - captionHeight - spacing) else {
+    guard let height = OnSheetChartGeometry.placedHeight(top: 0, bottom: size.height - captionHeight - spacing),
+          height >= Self.minimumPlotHeight
+    else {
       return nil
     }
     // Scaled down (never past zero) once the slot is too short to spare the
