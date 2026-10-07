@@ -1111,7 +1111,7 @@ enum BugBashRunner {
     guard frame.width == 640, frame.height == 264, frame.minX == 28, frame.minY == 28 + 7 * 22 else {
       return Result(name: name, passed: false, detail: "\(frame)")
     }
-    let dataBottom = 28 + 5 * 22
+    let dataBottom: CGFloat = 28 + 5 * 22
     guard frame.minY >= dataBottom else {
       return Result(name: name, passed: false, detail: "chart covers the data rows")
     }
