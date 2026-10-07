@@ -84,10 +84,7 @@ enum CellFormatRenderer {
   static func attributes(for format: CellFormat?, onLightBackground: Bool = false) -> [NSAttributedString.Key: Any] {
     let resolved = format ?? CellFormat()
     let defaultTextColor = onLightBackground ? NSColor.black : NSColor.labelColor
-    let textColor: NSColor = {
-      if onLightBackground { return NSColor.black }
-      return nsColor(resolved.textColor) ?? defaultTextColor
-    }()
+    let textColor = nsColor(resolved.textColor) ?? defaultTextColor
     var attrs: [NSAttributedString.Key: Any] = [
       .font: font(for: resolved),
       .foregroundColor: textColor,

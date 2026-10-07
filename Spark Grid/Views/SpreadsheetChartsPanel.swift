@@ -101,6 +101,12 @@ struct SpreadsheetChartsPanel: View {
             .lineLimit(2)
         }
         Spacer(minLength: 0)
+        Button("Edit") {
+          viewModel.beginEditChart(id: chart.id)
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 11, weight: .medium))
+        .help("Edit chart type, range, and series")
         Button {
           viewModel.removeChart(id: chart.id)
         } label: {
@@ -118,6 +124,10 @@ struct SpreadsheetChartsPanel: View {
     }
     .padding(10)
     .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8)
+        .strokeBorder(viewModel.selectedChartID == chart.id ? Color.accentColor : Color.clear, lineWidth: 2)
+    )
   }
 
   private func seriesSubtitle(for chart: SheetChart) -> String {
@@ -150,9 +160,38 @@ struct SheetChartView: View {
   @State private var cachedTotalCount = 0
   @State private var cachedToken = ""
 
+  /// Points for this render. A cold cache still plots immediately so an on-sheet
+  /// host does not stay empty when `onAppear` has not run yet.
+  private var renderPoints: [Point] {
+    if cachedToken == cacheToken { return cachedPoints }
+    return Self.computePoints(chart: chart, viewModel: viewModel).points
+  }
+
+  private var renderTotalCount: Int {
+    if cachedToken == cacheToken { return cachedTotalCount }
+    return Self.computePoints(chart: chart, viewModel: viewModel).totalCount
+  }
+
+  /// Room under the plot for category names. Charts subtracts this from the
+  /// view height; the plot is not placed when that remainder is under 1pt.
+  static let plotBottomInset: CGFloat = 20
+
   var body: some View {
-    Group {
-      if cachedPoints.isEmpty {
+    GeometryReader { geo in
+      chartStack(in: geo.size)
+    }
+    .onAppear { refreshPoints() }
+    .onChange(of: cacheToken) { _, _ in
+      refreshPoints()
+    }
+  }
+
+  @ViewBuilder
+  private func chartStack(in size: CGSize) -> some View {
+    if renderPoints.isEmpty {
+      let inset: CGFloat = 8
+      if let innerWidth = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.width - inset),
+         let innerHeight = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.height - inset) {
         VStack(spacing: 6) {
           Text("Nothing to plot")
             .font(.system(size: 12, weight: .medium))
@@ -161,23 +200,39 @@ struct SheetChartView: View {
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(8)
-      } else {
-        VStack(alignment: .leading, spacing: 6) {
-          chartBody
-          if cachedTotalCount > ChartPreviewSeries.maxPreviewPoints {
-            Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(cachedTotalCount)")
-              .font(.system(size: 9))
-              .foregroundStyle(.tertiary)
-          }
+        .frame(width: innerWidth, height: innerHeight)
+        .position(x: size.width / 2, y: size.height / 2)
+      }
+    } else if let slot = plotSlotHeight(in: size) {
+      let caption = captionHeight
+      let spacing: CGFloat = caption >= 1 ? 6 : 0
+      VStack(alignment: .leading, spacing: spacing) {
+        chartBody
+          .frame(width: size.width, height: slot)
+        if caption >= 1 {
+          Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .frame(height: caption, alignment: .leading)
         }
       }
+      .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
-    .onAppear { refreshPoints() }
-    .onChange(of: cacheToken) { _, _ in
-      refreshPoints()
+  }
+
+  private var captionHeight: CGFloat {
+    renderTotalCount > ChartPreviewSeries.maxPreviewPoints ? 14 : 0
+  }
+
+  /// Chart view height, or nil when the plot inset would reverse the edges.
+  private func plotSlotHeight(in size: CGSize) -> CGFloat? {
+    guard size.width >= 1 else { return nil }
+    let spacing: CGFloat = captionHeight >= 1 ? 6 : 0
+    let slotBottom = size.height - captionHeight - spacing
+    guard OnSheetChartGeometry.placedHeight(top: Self.plotBottomInset, bottom: slotBottom) != nil else {
+      return nil
     }
+    return slotBottom
   }
 
   private var emptyDetail: String {
@@ -191,28 +246,34 @@ struct SheetChartView: View {
 
   @ViewBuilder
   private var chartBody: some View {
-    let labelIndexes = xLabelIndexes(for: cachedPoints.count)
-    Chart(cachedPoints) { point in
+    let points = renderPoints
+    let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
+    let lineGradient = LinearGradient(
+      colors: points.map { valueColor(for: $0, kind: .line) },
+      startPoint: .leading,
+      endPoint: .trailing
+    )
+    let marks = Chart(points) { point in
       switch chart.kind {
       case .bar:
         BarMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor.gradient)
+        .foregroundStyle(by: .value("Swatch", point.id))
       case .line:
         LineMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(lineGradient)
         .interpolationMethod(.catmullRom)
         PointMark(
           x: .value("Category", point.id),
           y: .value("Value", point.value)
         )
-        .foregroundStyle(Color.accentColor)
-        .symbolSize(cachedPoints.count > 20 ? 16 : 28)
+        .foregroundStyle(by: .value("Swatch", point.id))
+        .symbolSize(points.count > 20 ? 28 : 46)
       case .area:
         AreaMark(
           x: .value("Category", point.id),
@@ -227,7 +288,10 @@ struct SheetChartView: View {
       }
     }
     .chartYScale(domain: yDomain)
-    .chartXScale(domain: -0.5...(Double(max(0, cachedPoints.count - 1)) + 0.5))
+    .chartXScale(domain: -0.5...(Double(max(0, points.count - 1)) + 0.5))
+    .chartPlotStyle { plot in
+      plot.padding(.bottom, Self.plotBottomInset)
+    }
     .chartYAxis {
       AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
@@ -242,27 +306,76 @@ struct SheetChartView: View {
       }
     }
     .chartXAxis {
-      AxisMarks(values: labelIndexes.map(Double.init)) { value in
+      AxisMarks(values: labelIndexes.map(Double.init)) { _ in
         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
           .foregroundStyle(Color.secondary.opacity(0.15))
-        if let number = value.as(Double.self) {
-          let index = Int(number.rounded())
-          if let point = cachedPoints.first(where: { $0.id == index }) {
-            AxisValueLabel(centered: true) {
-              Text(Self.displayLabel(point.label))
+      }
+    }
+    .chartOverlay { proxy in
+      GeometryReader { geo in
+        if let plotAnchor = proxy.plotFrame {
+          let plot = geo[plotAnchor].standardized
+          if OnSheetChartGeometry.placedHeight(top: plot.minY, bottom: plot.maxY) != nil {
+            let placements = categoryPlacements(plot: plot, chartWidth: geo.size.width)
+            ForEach(placements, id: \.index) { placement in
+              Text(placement.text)
                 .font(.system(size: 8))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .frame(width: max(1, placement.width), alignment: .center)
+                .position(x: placement.minX + placement.width / 2, y: plot.maxY + 9)
             }
           }
         }
       }
+      .allowsHitTesting(false)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    if ChartMarkPalette.usesDistinctValueColors(chart.kind) {
+      marks
+        .chartForegroundStyleScale(
+          domain: points.map(\.id),
+          range: points.map { ChartMarkPalette.swatch(at: $0.id).color }
+        )
+        .chartLegend(.hidden)
+    } else {
+      marks
+        .chartLegend(.hidden)
+    }
+  }
+
+  private func categoryPlacements(plot: CGRect, chartWidth: CGFloat) -> [ChartCategoryLabelLayout.Placement] {
+    let points = renderPoints
+    let indexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
+    let lastIndex = indexes.last
+    let items = indexes.compactMap { index -> ChartCategoryLabelLayout.Item? in
+      guard points.indices.contains(index) else { return nil }
+      let raw = points[index].label
+      let text = index == lastIndex ? raw : Self.displayLabel(raw)
+      return ChartCategoryLabelLayout.Item(index: index, text: text)
+    }
+    return ChartCategoryLabelLayout.placements(
+      items: items,
+      chartWidth: chartWidth,
+      barCenterX: { index in
+        ChartCategoryLabelLayout.barCenterX(
+          index: index,
+          count: renderPoints.count,
+          plotMinX: plot.minX,
+          plotWidth: plot.width
+        )
+      },
+      labelWidth: { ChartCategoryLabelLayout.measure($0, fontSize: 8) }
+    )
+  }
+
+  private func valueColor(for point: Point, kind: SheetChart.Kind) -> Color {
+    guard ChartMarkPalette.usesDistinctValueColors(kind) else { return Color.accentColor }
+    return ChartMarkPalette.swatch(at: point.id).color
   }
 
   private var yDomain: ClosedRange<Double> {
-    let values = cachedPoints.map(\.value)
+    let values = renderPoints.map(\.value)
     guard let rawMax = values.max(), let rawMin = values.min() else {
       return 0...1
     }
@@ -311,20 +424,6 @@ struct SheetChartView: View {
     return (points, all.totalCount)
   }
 
-  private func xLabelIndexes(for count: Int) -> [Int] {
-    guard count > 0 else { return [] }
-    let desired = min(6, count)
-    if count <= desired { return Array(0..<count) }
-    var indexes: [Int] = []
-    for i in 0..<desired {
-      let index = Int(round(Double(i) * Double(count - 1) / Double(desired - 1)))
-      if indexes.last != index {
-        indexes.append(index)
-      }
-    }
-    return indexes
-  }
-
   private static func formatAxisNumber(_ value: Double) -> String {
     let absValue = abs(value)
     if absValue >= 1_000_000 {
@@ -342,5 +441,80 @@ struct SheetChartView: View {
   private static func displayLabel(_ label: String) -> String {
     guard label.count > 12 else { return label }
     return String(label.prefix(11)) + "…"
+  }
+}
+
+extension ChartMarkPalette.RGB {
+  var color: Color {
+    Color(red: red, green: green, blue: blue)
+  }
+}
+
+/// Chart drawn on the sheet at its cell anchor. Clicks are handled by the grid.
+struct OnSheetChartCard: View {
+  let chart: SheetChart
+  var viewModel: SpreadsheetViewModel
+
+  var body: some View {
+    let selected = viewModel.selectedChartID == chart.id
+    GeometryReader { geo in
+      cardContent(in: geo.size)
+    }
+    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    .overlay(
+      RoundedRectangle(cornerRadius: 6)
+        .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
+    )
+    .allowsHitTesting(false)
+  }
+
+  /// Title plus chart, only when each band is at least 1pt. A zero host
+  /// frame used to inset this stack until the chart height was negative.
+  @ViewBuilder
+  private func cardContent(in size: CGSize) -> some View {
+    let pad: CGFloat = 6
+    let titleHeight: CGFloat = 14
+    let spacing: CGFloat = 2
+    if let innerWidth = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.width - pad),
+       let innerHeight = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.height - pad) {
+      if let chartHeight = OnSheetChartGeometry.placedHeight(
+        top: titleHeight + spacing,
+        bottom: innerHeight
+      ) {
+        VStack(alignment: .leading, spacing: spacing) {
+          Text(chart.title)
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: titleHeight)
+          SheetChartView(chart: chart, viewModel: viewModel)
+            .frame(width: innerWidth, height: chartHeight)
+        }
+        .frame(width: innerWidth, height: innerHeight, alignment: .topLeading)
+        .position(x: size.width / 2, y: size.height / 2)
+      } else {
+        Text(chart.title)
+          .font(.system(size: 11, weight: .semibold))
+          .lineLimit(1)
+          .padding(.horizontal, 2)
+          .frame(width: innerWidth, height: innerHeight, alignment: .topLeading)
+          .position(x: size.width / 2, y: size.height / 2)
+      }
+    }
+  }
+}
+
+/// Flipped so the card lines up with the grid's top-left coordinates.
+/// `NSHostingView.isFlipped` is final and settable, so it cannot be overridden.
+final class OnSheetChartHost: NSHostingView<OnSheetChartCard> {
+  required init(rootView: OnSheetChartCard) {
+    super.init(rootView: rootView)
+    isFlipped = true
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    isFlipped = true
   }
 }

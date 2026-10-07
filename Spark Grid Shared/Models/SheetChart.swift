@@ -46,7 +46,7 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
   var valueColumn: Int?
   var hasHeaderRow: Bool
   var valueMode: ValueMode
-  /// Top-left of chart frame in sheet cell coordinates (future on-sheet placement).
+  /// Top-left of the on-sheet chart frame, in cell coordinates.
   var anchorRow: Int
   var anchorCol: Int
   var rowSpan: Int
@@ -100,5 +100,23 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     anchorCol = try c.decodeIfPresent(Int.self, forKey: .anchorCol) ?? 0
     rowSpan = try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 12
     colSpan = try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 8
+  }
+
+  /// Charts saved before they were drawn on the sheet sit on top of their data
+  /// (anchor 0,0, or any frame that covers the plotted cells). Those move just
+  /// under the data range. A frame that is already clear of the data stays put.
+  func positionedUnderData() -> SheetChart {
+    let n = dataRange.normalized
+    let frameRows = max(1, rowSpan)
+    let frameCols = max(1, colSpan)
+    let overlapsRows = anchorRow <= n.maxRow && anchorRow + frameRows - 1 >= n.minRow
+    let overlapsCols = anchorCol <= n.maxCol && anchorCol + frameCols - 1 >= n.minCol
+    guard overlapsRows && overlapsCols else { return self }
+    var next = self
+    next.anchorRow = n.maxRow + 2
+    next.anchorCol = n.minCol
+    next.rowSpan = max(12, rowSpan)
+    next.colSpan = max(8, colSpan)
+    return next
   }
 }

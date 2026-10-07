@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// AppKit spreadsheet grid with sticky row/column headers, selection, editing, and keyboard navigation.
 final class SpreadsheetGridNSView: NSView {
@@ -13,8 +14,12 @@ final class SpreadsheetGridNSView: NSView {
   var viewModel: SpreadsheetViewModel? {
     didSet {
       guard viewModel !== oldValue else { return }
+      chartHostSnapshots.removeAll()
       invalidateLayoutCache()
       needsDisplay = true
+      if window != nil {
+        layoutOnSheetCharts()
+      }
     }
   }
 
@@ -32,6 +37,10 @@ final class SpreadsheetGridNSView: NSView {
   private var lastSelectionDirtyRect: NSRect = .null
   private let editor = CellEditorTextField()
   private var isEditorActive = false
+  /// Tab / Shift-Tab already moved the cell for this key event. The grid must
+  /// not handle that same key again and grow the selection.
+  private var suppressFollowingTabMove = false
+  private var lastTabMoveTimestamp: TimeInterval = -1
   private var isDraggingSelection = false
   private var isDraggingFill = false
   private enum ImageResizeCorner { case bottomRight }
@@ -46,6 +55,24 @@ final class SpreadsheetGridNSView: NSView {
     let startImage: SheetImage
   }
   private var activeImageDrag: ImageDragState?
+  private let chartLayerView: NSView = {
+    let view = NSView()
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.masksToBounds = true
+    view.layer?.zPosition = 5
+    view.clipsToBounds = true
+    return view
+  }()
+  private var chartHosts: [UUID: OnSheetChartHost] = [:]
+  private var chartHostSnapshots: [UUID: ChartHostSnapshot] = [:]
+  private var isLayingOutCharts = false
+
+  private struct ChartHostSnapshot: Equatable {
+    var chart: SheetChart
+    var contentRevision: Int
+    var selected: Bool
+  }
   private var fillSourceRange: CellRange?
   private var headerDrag: HeaderDrag?
   private let resizeHandleThickness: CGFloat = 6
@@ -126,6 +153,23 @@ final class SpreadsheetGridNSView: NSView {
     wantsLayer = true
     layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     configureEditor()
+    addSubview(chartLayerView, positioned: .below, relativeTo: editor)
+  }
+
+  override func layout() {
+    super.layout()
+    layoutOnSheetCharts()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    if isEditorActive, hit === editor || hit?.isDescendant(of: editor) == true {
+      return hit
+    }
+    if let hit, hit === chartLayerView || hit.isDescendant(of: chartLayerView) {
+      return self
+    }
+    return hit
   }
 
   override func updateTrackingAreas() {
@@ -152,6 +196,7 @@ final class SpreadsheetGridNSView: NSView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    layoutOnSheetCharts()
     guard window != nil else {
       claimedInitialFocus = false
       return
@@ -181,6 +226,8 @@ final class SpreadsheetGridNSView: NSView {
     editor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
     editor.delegate = self
     editor.isHidden = true
+    editor.wantsLayer = true
+    editor.layer?.zPosition = 8
     addSubview(editor)
 
     editorCaretObserver = NotificationCenter.default.addObserver(
@@ -591,6 +638,7 @@ final class SpreadsheetGridNSView: NSView {
     clampScrollOrigin()
     applyAutoscrollDrag(kind: kind, at: autoscrollLastPoint)
     updateEditorFrame()
+    layoutOnSheetCharts()
     needsDisplay = true
   }
 
@@ -732,6 +780,10 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
     guard activeResize == nil else { return }
+    if chartHitTest(at: point) != nil {
+      NSCursor.arrow.set()
+      return
+    }
     if let imageCursor = imageCursor(at: point) {
       imageCursor.set()
       return
@@ -1419,6 +1471,133 @@ final class SpreadsheetGridNSView: NSView {
     let width = SheetImage.points(fromEMU: image.widthEMU)
     let height = SheetImage.points(fromEMU: image.heightEMU)
     return NSRect(x: x, y: y, width: width, height: height)
+  }
+
+  func layoutOnSheetCharts() {
+    guard !isLayingOutCharts else { return }
+    isLayingOutCharts = true
+    defer { isLayingOutCharts = false }
+    chartLayerView.frame = contentRect
+    guard let viewModel else {
+      removeChartHosts()
+      return
+    }
+    let charts = viewModel.activeSheet.charts
+    let live = Set(charts.map(\.id))
+    for id in Array(chartHosts.keys) where !live.contains(id) {
+      chartHosts[id]?.removeFromSuperview()
+      chartHosts.removeValue(forKey: id)
+      chartHostSnapshots.removeValue(forKey: id)
+    }
+    for chart in charts {
+      let rect = chartRect(for: chart)
+      let top = rect.minY
+      let bottom = rect.minY + rect.height
+      guard rect.width >= 1,
+            let height = OnSheetChartGeometry.placedHeight(top: top, bottom: bottom)
+      else {
+        removeChartHost(id: chart.id)
+        continue
+      }
+      let local = NSRect(
+        x: rect.minX - chartLayerView.frame.minX,
+        y: rect.minY - chartLayerView.frame.minY,
+        width: rect.width,
+        height: height
+      )
+      let snapshot = ChartHostSnapshot(
+        chart: chart,
+        contentRevision: viewModel.contentRevision,
+        selected: viewModel.selectedChartID == chart.id
+      )
+      let host: OnSheetChartHost
+      if let existing = chartHosts[chart.id] {
+        host = existing
+      } else {
+        let created = OnSheetChartHost(rootView: OnSheetChartCard(chart: chart, viewModel: viewModel))
+        created.sizingOptions = []
+        created.safeAreaRegions = []
+        created.translatesAutoresizingMaskIntoConstraints = true
+        created.focusRingType = .none
+        // Set a positive frame before the host joins the window. A zero
+        // bounds lays the card out immediately and the inset height goes negative.
+        created.frame = local
+        chartLayerView.addSubview(created)
+        chartHosts[chart.id] = created
+        host = created
+      }
+      if chartHostSnapshots[chart.id] != snapshot {
+        host.rootView = OnSheetChartCard(chart: chart, viewModel: viewModel)
+        chartHostSnapshots[chart.id] = snapshot
+      }
+      host.isHidden = false
+      if host.frame != local {
+        host.frame = local
+      }
+      host.needsLayout = true
+    }
+  }
+
+  func scrollChartIntoView(id: UUID) {
+    guard let chart = viewModel?.activeSheet.charts.first(where: { $0.id == id }) else { return }
+    let rect = chartRect(for: chart)
+    let visible = contentRect
+    if rect.width > visible.width {
+      scrollOrigin.x -= visible.minX - rect.minX
+    } else if rect.minX < visible.minX {
+      scrollOrigin.x -= visible.minX - rect.minX
+    } else if rect.maxX > visible.maxX {
+      scrollOrigin.x += rect.maxX - visible.maxX
+    }
+    if rect.height > visible.height {
+      scrollOrigin.y -= visible.minY - rect.minY
+    } else if rect.minY < visible.minY {
+      scrollOrigin.y -= visible.minY - rect.minY
+    } else if rect.maxY > visible.maxY {
+      scrollOrigin.y += rect.maxY - visible.maxY
+    }
+    clampScrollOrigin()
+    layoutOnSheetCharts()
+    needsDisplay = true
+  }
+
+  private func removeChartHosts() {
+    for host in chartHosts.values {
+      host.removeFromSuperview()
+    }
+    chartHosts.removeAll()
+    chartHostSnapshots.removeAll()
+  }
+
+  private func removeChartHost(id: UUID) {
+    chartHosts[id]?.removeFromSuperview()
+    chartHosts.removeValue(forKey: id)
+    chartHostSnapshots.removeValue(forKey: id)
+  }
+
+  private func chartRect(for chart: SheetChart) -> NSRect {
+    OnSheetChartGeometry.frame(
+      anchorRow: chart.anchorRow,
+      anchorCol: chart.anchorCol,
+      rowSpan: chart.rowSpan,
+      colSpan: chart.colSpan,
+      rowCount: rowCount(),
+      columnCount: columnCount(),
+      xForColumn: { self.xForColumn($0) },
+      yForRow: { self.yForRow($0) },
+      columnWidth: { self.columnWidth(at: $0) },
+      rowHeight: { self.rowHeight(at: $0) }
+    )
+  }
+
+  private func chartHitTest(at point: NSPoint) -> SheetChart? {
+    guard contentRect.contains(point), let charts = viewModel?.activeSheet.charts else { return nil }
+    for chart in charts.reversed() {
+      let rect = chartRect(for: chart)
+      if rect.width < 8 || rect.height < 8 { continue }
+      if rect.contains(point) { return chart }
+    }
+    return nil
   }
 
   private func drawImageSelectionChrome(in rect: NSRect) {
@@ -2197,6 +2376,25 @@ final class SpreadsheetGridNSView: NSView {
     scrollSelectionIntoView()
   }
 
+  /// Commit the edit and move one cell for Tab or Shift-Tab, as a single cell.
+  /// Ignores a second delivery of the same key so the range cannot grow afterward.
+  private func commitTabMove(colDelta: Int) {
+    if let event = NSApp.currentEvent, isTabKeyDown(event) {
+      if event.timestamp == lastTabMoveTimestamp { return }
+      lastTabMoveTimestamp = event.timestamp
+    }
+    suppressFollowingTabMove = true
+    commitEditorAndMove(rowDelta: 0, colDelta: colDelta, extending: false)
+    DispatchQueue.main.async { [weak self] in
+      self?.suppressFollowingTabMove = false
+    }
+  }
+
+  private func isTabKeyDown(_ event: NSEvent?) -> Bool {
+    guard let event, event.type == .keyDown else { return false }
+    return event.keyCode == 48
+  }
+
   private func updateEditorFrame() {
     guard let viewModel else { return }
     let sheet = viewModel.activeSheet
@@ -2217,6 +2415,7 @@ final class SpreadsheetGridNSView: NSView {
     }
     clampScrollOrigin()
     updateEditorFrame()
+    layoutOnSheetCharts()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
@@ -2291,6 +2490,7 @@ final class SpreadsheetGridNSView: NSView {
     if shouldReset { scrollOrigin = .zero }
     invalidateLayoutCache()
     updateEditorFrame()
+    layoutOnSheetCharts()
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
   }
@@ -2403,6 +2603,16 @@ final class SpreadsheetGridNSView: NSView {
     if point.y > contentBottomY() + 1 {
       return
     }
+
+    if let chart = chartHitTest(at: point) {
+      viewModel?.selectChart(id: chart.id)
+      if event.clickCount >= 2 {
+        viewModel?.beginEditChart(id: chart.id)
+      }
+      needsDisplay = true
+      return
+    }
+    viewModel?.selectChart(id: nil)
 
     if handleImageMouseDown(at: point, event: event) {
       needsDisplay = true
@@ -2564,6 +2774,7 @@ final class SpreadsheetGridNSView: NSView {
       invalidateLayoutCache()
       window?.invalidateCursorRects(for: self)
       updateEditorFrame()
+      layoutOnSheetCharts()
       needsDisplay = true
       return
     }
@@ -2652,11 +2863,18 @@ final class SpreadsheetGridNSView: NSView {
     scrollOrigin.y += event.scrollingDeltaY * (invert ? -1 : 1)
     clampScrollOrigin()
     updateEditorFrame()
+    layoutOnSheetCharts()
     needsDisplay = true
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
     let point = convert(event.locationInWindow, from: nil)
+
+    if let viewModel, contentRect.contains(point), let chart = chartHitTest(at: point) {
+      viewModel.selectChart(id: chart.id)
+      needsDisplay = true
+      return chartContextMenu()
+    }
 
     if let viewModel, contentRect.contains(point), let hit = imageHitTest(at: point) {
       viewModel.selectImage(id: hit.id, bringToFront: true)
@@ -2667,12 +2885,20 @@ final class SpreadsheetGridNSView: NSView {
     if let viewModel {
       switch headerHit(at: point) {
       case .row(let row):
+        // Keep a multi-row header selection so Insert can offer that many rows.
+        if viewModel.selectionAxis == .row, viewModel.isRowInSelection(row) {
+          break
+        }
         viewModel.selectRow(row)
         needsDisplay = true
       case .column(let col):
+        if viewModel.selectionAxis == .column, viewModel.isColumnInSelection(col) {
+          break
+        }
         viewModel.selectColumn(col)
         needsDisplay = true
       case .content:
+        viewModel.selectChart(id: nil)
         viewModel.selectImage(id: nil)
         let address = addressAtContent(point: point)
         if !viewModel.isAddressSelected(address) {
@@ -2696,6 +2922,24 @@ final class SpreadsheetGridNSView: NSView {
     menu.addItem(.separator())
     addStructureSubmenus(to: menu)
     return menu
+  }
+
+  private func chartContextMenu() -> NSMenu {
+    let menu = NSMenu()
+    addMenuItem(menu, "Edit Chart…", #selector(handleMenuEditChart(_:)))
+    addMenuItem(menu, "Delete Chart", #selector(handleMenuDeleteChart(_:)))
+    return menu
+  }
+
+  @objc private func handleMenuEditChart(_ sender: Any?) {
+    guard let id = viewModel?.selectedChartID else { return }
+    viewModel?.beginEditChart(id: id)
+  }
+
+  @objc private func handleMenuDeleteChart(_ sender: Any?) {
+    guard let id = viewModel?.selectedChartID else { return }
+    viewModel?.removeChart(id: id)
+    needsDisplay = true
   }
 
   private func imageContextMenu() -> NSMenu {
@@ -2752,16 +2996,36 @@ final class SpreadsheetGridNSView: NSView {
 
     if showRows || showCols {
       if showRows {
-        addMenuItem(menu, "Insert Row Above", #selector(handleMenuInsertRowAbove(_:)))
-        addMenuItem(menu, "Insert Row Below", #selector(handleMenuInsertRowBelow(_:)))
+        addMenuItem(
+          menu,
+          viewModel.insertRowAboveTitle,
+          #selector(handleMenuInsertRowAbove(_:)),
+          tag: viewModel.rowInsertCount
+        )
+        addMenuItem(
+          menu,
+          viewModel.insertRowBelowTitle,
+          #selector(handleMenuInsertRowBelow(_:)),
+          tag: viewModel.rowInsertCount
+        )
         addMenuItem(menu, "Delete Row(s)", #selector(handleMenuDeleteRows(_:)))
       }
       if showRows && showCols {
         menu.addItem(.separator())
       }
       if showCols {
-        addMenuItem(menu, "Insert Column Left", #selector(handleMenuInsertColumnLeft(_:)))
-        addMenuItem(menu, "Insert Column Right", #selector(handleMenuInsertColumnRight(_:)))
+        addMenuItem(
+          menu,
+          viewModel.insertColumnLeftTitle,
+          #selector(handleMenuInsertColumnLeft(_:)),
+          tag: viewModel.columnInsertCount
+        )
+        addMenuItem(
+          menu,
+          viewModel.insertColumnRightTitle,
+          #selector(handleMenuInsertColumnRight(_:)),
+          tag: viewModel.columnInsertCount
+        )
         addMenuItem(menu, "Delete Column(s)", #selector(handleMenuDeleteColumns(_:)))
       }
       menu.addItem(.separator())
@@ -2788,10 +3052,16 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @discardableResult
-  private func addMenuItem(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
+  private func addMenuItem(_ menu: NSMenu, _ title: String, _ action: Selector, tag: Int = 0) -> NSMenuItem {
     let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
     item.target = self
+    item.tag = tag
     return item
+  }
+
+  private func menuInsertCount(from sender: Any?) -> Int? {
+    guard let item = sender as? NSMenuItem, item.tag > 0 else { return nil }
+    return item.tag
   }
 
   private func addStructureMenuItems(to menu: NSMenu) {
@@ -2839,12 +3109,12 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @objc private func handleMenuInsertRowAbove(_ sender: Any?) {
-    viewModel?.insertRowsAbove()
+    viewModel?.insertRowsAbove(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
   @objc private func handleMenuInsertRowBelow(_ sender: Any?) {
-    viewModel?.insertRowsBelow()
+    viewModel?.insertRowsBelow(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
@@ -2854,12 +3124,12 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @objc private func handleMenuInsertColumnLeft(_ sender: Any?) {
-    viewModel?.insertColumnsLeft()
+    viewModel?.insertColumnsLeft(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
   @objc private func handleMenuInsertColumnRight(_ sender: Any?) {
-    viewModel?.insertColumnsRight()
+    viewModel?.insertColumnsRight(count: menuInsertCount(from: sender))
     syncDisplay()
   }
 
@@ -2993,6 +3263,11 @@ final class SpreadsheetGridNSView: NSView {
 
     switch event.keyCode {
     case 51, 117:
+      if let chartID = viewModel.selectedChartID {
+        viewModel.removeChart(id: chartID)
+        needsDisplay = true
+        return
+      }
       if viewModel.selectedImageID != nil {
         viewModel.deleteSelectedImage()
         needsDisplay = true
@@ -3000,6 +3275,11 @@ final class SpreadsheetGridNSView: NSView {
       }
       viewModel.clearSelection()
     case 53:
+      if viewModel.selectedChartID != nil {
+        viewModel.selectChart(id: nil)
+        needsDisplay = true
+        return
+      }
       if viewModel.selectedImageID != nil {
         viewModel.selectImage(id: nil)
         needsDisplay = true
@@ -3036,7 +3316,16 @@ final class SpreadsheetGridNSView: NSView {
       showEditor(selectAll: false)
       return
     case 48:
-      viewModel.moveSelection(rowDelta: 0, colDelta: event.modifierFlags.contains(.shift) ? -1 : 1, extending: event.modifierFlags.contains(.shift))
+      // While editing, Tab / Shift-Tab already committed and moved one cell.
+      // Handling this same key again would extend the range.
+      if suppressFollowingTabMove || event.timestamp == lastTabMoveTimestamp {
+        break
+      }
+      viewModel.moveSelection(
+        rowDelta: 0,
+        colDelta: event.modifierFlags.contains(.shift) ? -1 : 1,
+        extending: event.modifierFlags.contains(.shift)
+      )
     default:
       // Command and control shortcuts must not type into the selected cell.
       let shortcutMods = event.modifierFlags.intersection([.command, .control])
@@ -3151,10 +3440,11 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
       if applyFormulaTabCompletion(in: textView) {
         return true
       }
-      commitEditorAndMove(rowDelta: 0, colDelta: 1)
+      commitTabMove(colDelta: 1)
       return true
     case #selector(NSResponder.insertBacktab(_:)):
-      commitEditorAndMove(rowDelta: 0, colDelta: -1)
+      // Shift-Tab commits and moves one cell left. It must not extend the range.
+      commitTabMove(colDelta: -1)
       return true
     case #selector(NSResponder.moveUp(_:)):
       commitEditorAndMove(rowDelta: -1, colDelta: 0)
@@ -3175,10 +3465,19 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
       commitEditorAndMove(rowDelta: 1, colDelta: 0, extending: true)
       return true
     case #selector(NSResponder.moveLeftAndModifySelection(_:)):
-      commitEditorAndMove(rowDelta: 0, colDelta: -1, extending: true)
+      // Some field editors deliver Shift-Tab as a selection-modifying move.
+      if isTabKeyDown(NSApp.currentEvent) {
+        commitTabMove(colDelta: -1)
+      } else {
+        commitEditorAndMove(rowDelta: 0, colDelta: -1, extending: true)
+      }
       return true
     case #selector(NSResponder.moveRightAndModifySelection(_:)):
-      commitEditorAndMove(rowDelta: 0, colDelta: 1, extending: true)
+      if isTabKeyDown(NSApp.currentEvent) {
+        commitTabMove(colDelta: 1)
+      } else {
+        commitEditorAndMove(rowDelta: 0, colDelta: 1, extending: true)
+      }
       return true
     default:
       return false
@@ -3211,6 +3510,16 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
     let movement = (obj.userInfo?["NSTextMovement"] as? NSNumber)?.intValue
     if movement == NSTextMovement.cancel.rawValue {
       hideEditor(commit: false)
+      return
+    }
+    // Field editor ended on Tab / Shift-Tab before the command handler moved.
+    // Move one cell and do not let the same key extend the selection.
+    if movement == NSTextMovement.tab.rawValue {
+      commitTabMove(colDelta: 1)
+      return
+    }
+    if movement == NSTextMovement.backtab.rawValue {
+      commitTabMove(colDelta: -1)
       return
     }
     hideEditor(commit: true)
@@ -3304,6 +3613,37 @@ final class CellFieldEditor: NSTextView {
       return
     }
     super.insertText(insertString, replacementRange: replacementRange)
+  }
+
+  override func insertCompletion(
+    _ word: String,
+    forPartialWordRange charRange: NSRange,
+    movement: Int,
+    isFinal flag: Bool
+  ) {
+    let partial = Self.partialWord(in: string, range: charRange)
+    let before = string
+    super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+    // Return on a finished token (`=SUM`) accepts the popup again and never
+    // reaches insertNewline. Commit when this key did not change the text.
+    let commitOnReturn = flag
+      && movement == NSTextMovement.`return`.rawValue
+      && (before == string || FormulaAutocomplete.isExactCompletion(partial: partial, completion: word))
+    guard commitOnReturn else { return }
+    let editor = self
+    DispatchQueue.main.async {
+      guard editor.window?.firstResponder === editor else { return }
+      editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    }
+  }
+
+  private static func partialWord(in text: String, range: NSRange) -> String {
+    let ns = text as NSString
+    guard range.location != NSNotFound,
+          range.length >= 0,
+          NSMaxRange(range) <= ns.length
+    else { return "" }
+    return ns.substring(with: range)
   }
 }
 

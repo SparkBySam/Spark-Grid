@@ -55,6 +55,15 @@ enum BugBashRunner {
     results.append(cfParseNumber())
     results.append(MainActor.assumeIsolated { sortRemapsMerge() })
     results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
+    results.append(MainActor.assumeIsolated { selectionSizedInsert() })
+    results.append(MainActor.assumeIsolated { insertChartEmptySelection() })
+    results.append(formulaExactTokenSkipsAutocomplete())
+    results.append(MainActor.assumeIsolated { editExistingChart() })
+    results.append(onSheetChartFrame())
+    results.append(weeklyCallsLastLabel())
+    results.append(chartValueColors())
+    results.append(legacyChartLandsUnderData())
+    results.append(cfFillTextContrast())
     return results
   }
 
@@ -641,10 +650,13 @@ enum BugBashRunner {
         return Result(name: "chart round-trip", passed: false, detail: "missing charts json part")
       }
       let imported = try XLSXCodec.importWorkbook(from: data)
-      guard imported.activeSheet.charts.count == 1,
-            imported.activeSheet.charts[0].title == "Test"
+      let saved = imported.activeSheet.charts
+      guard saved.count == 1,
+            saved[0].title == "Test",
+            saved[0].anchorRow == 4,
+            saved[0].anchorCol == 0
       else {
-        return Result(name: "chart round-trip", passed: false, detail: "charts: \(imported.activeSheet.charts)")
+        return Result(name: "chart round-trip", passed: false, detail: "charts: \(saved)")
       }
       return Result(name: "chart round-trip", passed: true, detail: "ok")
     } catch {
@@ -904,6 +916,641 @@ enum BugBashRunner {
       )
     }
     return Result(name: "insert column right edge", passed: true, detail: "column \(lastCol + 1)")
+  }
+
+  @MainActor
+  private static func insertChartEmptySelection() -> Result {
+    let name = "insert chart empty selection"
+    var sheet = Sheet(name: "Charts")
+    sheet.setCell(Cell(raw: "Name"), at: .origin)
+    sheet.setCell(Cell(raw: "Ada"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 1, col: 1))
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    guard vm.selectionRange.isSingleCell else {
+      return Result(name: name, passed: false, detail: "expected a single-cell selection")
+    }
+    guard vm.chartSelectionRange == nil else {
+      return Result(name: name, passed: false, detail: "invented a range from nearby cells")
+    }
+    vm.beginInsertChart(preferredKind: .line)
+    guard vm.isInsertChartPresented, vm.pendingChartKind == .line else {
+      return Result(name: name, passed: false, detail: "chart menu did not open")
+    }
+    guard vm.activeSheet.charts.isEmpty else {
+      return Result(name: name, passed: false, detail: "chart created before a range was chosen")
+    }
+    let refused = vm.insertChart(
+      SheetChart(kind: .bar, dataRange: .singleOrigin, anchorRow: 0, anchorCol: 0)
+    )
+    guard !refused, vm.activeSheet.charts.isEmpty, vm.isInsertChartPresented else {
+      return Result(name: name, passed: false, detail: "single-cell insert was accepted")
+    }
+    guard ChartDataRangeParser.parse("") == nil,
+          ChartDataRangeParser.parse("A1") == nil,
+          ChartDataRangeParser.parse("A1:A1") == nil,
+          ChartDataRangeParser.parse("A:A") == nil,
+          ChartDataRangeParser.parse("Sheet1!A1:B2") == nil
+    else {
+      return Result(name: name, passed: false, detail: "parser accepted an empty selection")
+    }
+    guard let parsed = ChartDataRangeParser.parse("A1:B2"), !parsed.isSingleCell else {
+      return Result(name: name, passed: false, detail: "parser rejected A1:B2")
+    }
+    let inserted = vm.insertChart(
+      SheetChart(
+        kind: .line,
+        title: "Picked",
+        dataRange: parsed,
+        categoryColumn: 0,
+        valueColumn: 1,
+        anchorRow: 4,
+        anchorCol: 0
+      )
+    )
+    guard inserted, vm.activeSheet.charts.count == 1, vm.activeSheet.charts[0].dataRange == parsed else {
+      return Result(name: name, passed: false, detail: "explicit range was not inserted")
+    }
+    guard !vm.isInsertChartPresented else {
+      return Result(name: name, passed: false, detail: "menu stayed open after insert")
+    }
+
+    let ranged = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    ranged.selectRange(from: .origin, to: CellAddress(row: 1, col: 1))
+    guard let chosen = ranged.chartSelectionRange, !chosen.isSingleCell else {
+      return Result(name: name, passed: false, detail: "multi-cell selection was dropped")
+    }
+    ranged.beginInsertChart()
+    guard ranged.isInsertChartPresented, ranged.activeSheet.charts.isEmpty else {
+      return Result(name: name, passed: false, detail: "ranged insert opened wrong")
+    }
+    return Result(name: name, passed: true, detail: "menu opens; chart waits for a range")
+  }
+
+  /// `=SU` still offers SUM. After that token is `=SUM`, the popup must stay
+  /// closed so Return commits the cell instead of accepting SUM again.
+  private static func formulaExactTokenSkipsAutocomplete() -> Result {
+    let named: [String] = []
+    let offersPartial = FormulaAutocomplete.shouldOfferPopup(in: "=SU", utf16Cursor: 3, namedRanges: named)
+    let offersExact = FormulaAutocomplete.shouldOfferPopup(in: "=SUM", utf16Cursor: 4, namedRanges: named)
+    let offersLower = FormulaAutocomplete.shouldOfferPopup(in: "=sum", utf16Cursor: 4, namedRanges: named)
+    guard offersPartial, !offersExact, !offersLower else {
+      return Result(
+        name: "formula exact token",
+        passed: false,
+        detail: "popup SU=\(offersPartial) SUM=\(offersExact) sum=\(offersLower)"
+      )
+    }
+    guard FormulaAutocomplete.isExactCompletion(partial: "SUM", completion: "SUM"),
+          !FormulaAutocomplete.isExactCompletion(partial: "SU", completion: "SUM")
+    else {
+      return Result(name: "formula exact token", passed: false, detail: "exact-match check failed")
+    }
+    let matches = FormulaAutocomplete.suggestions(matching: "SUM", namedRanges: named)
+    guard matches == ["SUM"] else {
+      return Result(name: "formula exact token", passed: false, detail: "SUM matches \(matches)")
+    }
+    return Result(name: "formula exact token", passed: true, detail: "=SU offers popup; =SUM does not")
+  }
+
+  @MainActor
+  private static func editExistingChart() -> Result {
+    let name = "edit existing chart"
+    var sheet = Sheet(name: "Weekly Calls")
+    sheet.setCell(Cell(raw: "Week"), at: .origin)
+    sheet.setCell(Cell(raw: "Calls"), at: CellAddress(row: 0, col: 1))
+    for index in 1...4 {
+      sheet.setCell(Cell(raw: "Week \(index)"), at: CellAddress(row: index, col: 0))
+      sheet.setCell(Cell(raw: "\(index * 3)"), at: CellAddress(row: index, col: 1))
+    }
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    let range = CellRange(start: .origin, end: CellAddress(row: 4, col: 1))
+    let inserted = vm.insertChart(
+      SheetChart(
+        kind: .bar,
+        title: "Calls by Week",
+        dataRange: range,
+        categoryColumn: 0,
+        valueColumn: 1,
+        hasHeaderRow: true,
+        valueMode: .values,
+        anchorRow: 7,
+        anchorCol: 0,
+        rowSpan: 12,
+        colSpan: 8
+      )
+    )
+    guard inserted, vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "chart was not inserted")
+    }
+    let original = vm.activeSheet.charts[0]
+    guard vm.selectedChartID == original.id else {
+      return Result(name: name, passed: false, detail: "inserted chart was not selected on the sheet")
+    }
+    vm.beginEditChart(id: original.id)
+    guard vm.isInsertChartPresented, vm.editingChartID == original.id, vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "edit did not reopen the existing chart")
+    }
+    var edited = original
+    edited.kind = .line
+    edited.categoryColumn = 1
+    edited.valueColumn = 0
+    edited.valueMode = .count
+    edited.title = "Calls by Week"
+    guard vm.updateChart(edited) else {
+      return Result(name: name, passed: false, detail: "update was refused")
+    }
+    guard vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "update inserted a second chart")
+    }
+    let saved = vm.activeSheet.charts[0]
+    guard saved.id == original.id,
+          saved.kind == .line,
+          saved.categoryColumn == 1,
+          saved.valueColumn == 0,
+          saved.valueMode == .count,
+          saved.dataRange == range,
+          saved.anchorRow == 7,
+          saved.anchorCol == 0,
+          saved.rowSpan == 12,
+          saved.colSpan == 8,
+          !vm.isInsertChartPresented,
+          vm.editingChartID == nil
+    else {
+      return Result(name: name, passed: false, detail: "saved \(saved.kind) anchor \(saved.anchorRow),\(saved.anchorCol)")
+    }
+    var rejected = saved
+    rejected.dataRange = .singleOrigin
+    guard !vm.updateChart(rejected), vm.activeSheet.charts[0].dataRange == range else {
+      return Result(name: name, passed: false, detail: "single-cell edit was accepted")
+    }
+    vm.selection = .origin
+    vm.beginInsertChart(preferredKind: .bar)
+    guard vm.editingChartID == nil, vm.isInsertChartPresented, vm.chartSelectionRange == nil else {
+      return Result(name: name, passed: false, detail: "empty selection started an edit")
+    }
+    guard vm.activeSheet.charts.count == 1 else {
+      return Result(name: name, passed: false, detail: "empty selection created a chart")
+    }
+    return Result(name: name, passed: true, detail: "type, range, and series update; anchor stays")
+  }
+
+  private static func onSheetChartFrame() -> Result {
+    let name = "on-sheet chart frame"
+    let frame = OnSheetChartGeometry.frame(
+      anchorRow: 7,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 8,
+      rowCount: 1_000,
+      columnCount: 26,
+      xForColumn: { 28 + CGFloat($0) * 80 },
+      yForRow: { 28 + CGFloat($0) * 22 },
+      columnWidth: { _ in 80 },
+      rowHeight: { _ in 22 }
+    )
+    guard frame.width == 640, frame.height == 264, frame.minX == 28, frame.minY == 28 + 7 * 22 else {
+      return Result(name: name, passed: false, detail: "\(frame)")
+    }
+    let dataBottom: CGFloat = 28 + 5 * 22
+    guard frame.minY >= dataBottom else {
+      return Result(name: name, passed: false, detail: "chart covers the data rows")
+    }
+    guard OnSheetChartGeometry.placedHeight(top: frame.minY, bottom: frame.maxY) == frame.height else {
+      return Result(name: name, passed: false, detail: "placed height \(String(describing: OnSheetChartGeometry.placedHeight(top: frame.minY, bottom: frame.maxY)))")
+    }
+    // bottom - top is negative when the lower edge sits above the upper edge.
+    guard OnSheetChartGeometry.placedHeight(top: 400, bottom: 120) == nil else {
+      return Result(name: name, passed: false, detail: "reversed edges were treated as a view height")
+    }
+    guard OnSheetChartGeometry.placedHeight(top: 10, bottom: 10.5) == nil else {
+      return Result(name: name, passed: false, detail: "sub-point height was placed")
+    }
+    let collapsed = OnSheetChartGeometry.frame(
+      anchorRow: 0,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 4,
+      rowCount: 100,
+      columnCount: 8,
+      xForColumn: { CGFloat($0) * 80 },
+      yForRow: { 400 - CGFloat($0) * 30 },
+      columnWidth: { _ in 80 },
+      rowHeight: { _ in -10 }
+    )
+    guard collapsed == .zero else {
+      return Result(name: name, passed: false, detail: "negative row span produced \(collapsed)")
+    }
+    let scrolled = OnSheetChartGeometry.frame(
+      anchorRow: 0,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 4,
+      rowCount: 100,
+      columnCount: 8,
+      xForColumn: { CGFloat($0) * 80 },
+      yForRow: { row in
+        row < 2 ? CGFloat(row) * 22 : CGFloat(row) * 22 - 800
+      },
+      columnWidth: { _ in 80 },
+      rowHeight: { _ in 22 }
+    )
+    guard scrolled.height >= 1, scrolled.height == 12 * 22 else {
+      return Result(name: name, passed: false, detail: "scrolled span \(scrolled.height)")
+    }
+    return Result(name: name, passed: true, detail: "\(Int(frame.width))×\(Int(frame.height)) at row 7")
+  }
+
+  private static func weeklyCallsLastLabel() -> Result {
+    let name = "weekly calls last label"
+    let names = [
+      "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
+      "Mon 2", "Tue 2", "Wed 2", "Thu 2", "Fri 2", "Sat 2", "Closing Call",
+    ]
+    let count = names.count
+    let indexes = ChartCategoryLabelLayout.labelIndexes(count: count)
+    guard indexes.last == count - 1 else {
+      return Result(name: name, passed: false, detail: "last category was dropped from the axis")
+    }
+    let chartWidth: CGFloat = 280
+    let plotMinX: CGFloat = 36
+    let plotWidth = chartWidth - plotMinX
+    let items = indexes.map { ChartCategoryLabelLayout.Item(index: $0, text: names[$0]) }
+    let placements = ChartCategoryLabelLayout.placements(
+      items: items,
+      chartWidth: chartWidth,
+      barCenterX: { index in
+        ChartCategoryLabelLayout.barCenterX(
+          index: index,
+          count: count,
+          plotMinX: plotMinX,
+          plotWidth: plotWidth
+        )
+      },
+      labelWidth: { ChartCategoryLabelLayout.measure($0, fontSize: 8) }
+    )
+    guard let last = placements.first(where: { $0.index == count - 1 }) else {
+      return Result(name: name, passed: false, detail: "last label was not placed")
+    }
+    let center = ChartCategoryLabelLayout.barCenterX(
+      index: count - 1,
+      count: count,
+      plotMinX: plotMinX,
+      plotWidth: plotWidth
+    )
+    let labelWidth = ChartCategoryLabelLayout.measure(names[count - 1], fontSize: 8)
+    let centeredMaxX = center + labelWidth / 2
+    guard center > plotMinX, center < chartWidth else {
+      return Result(name: name, passed: false, detail: "last bar center \(center) is off the chart")
+    }
+    guard centeredMaxX > chartWidth + 1 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "fixture does not clip a centered label (center \(center), width \(labelWidth), chart \(chartWidth))"
+      )
+    }
+    guard last.text == "Closing Call", last.minX >= -0.01, last.maxX <= chartWidth + 0.01 else {
+      return Result(name: name, passed: false, detail: "last label \(last.text) \(last.minX)...\(last.maxX)")
+    }
+    let outside = placements.filter { $0.minX < -0.01 || $0.maxX > chartWidth + 0.01 }
+    guard outside.isEmpty else {
+      return Result(name: name, passed: false, detail: "label outside the chart")
+    }
+    return Result(name: name, passed: true, detail: "Closing Call fits; centered max \(Int(centeredMaxX.rounded()))")
+  }
+
+  private static func chartValueColors() -> Result {
+    let name = "chart value colors"
+    guard ChartMarkPalette.usesDistinctValueColors(.bar),
+          ChartMarkPalette.usesDistinctValueColors(.line),
+          !ChartMarkPalette.usesDistinctValueColors(.area)
+    else {
+      return Result(name: name, passed: false, detail: "bar/line should vary; area stays flat")
+    }
+    let colors = (0..<8).map { ChartMarkPalette.swatch(at: $0) }
+    guard Set(colors).count == colors.count else {
+      return Result(name: name, passed: false, detail: "first 8 swatches are not distinct")
+    }
+    return Result(name: name, passed: true, detail: "8 distinct bar/line swatches")
+  }
+
+  @MainActor
+  private static func selectionSizedInsert() -> Result {
+    let name = "selection sized insert"
+
+    guard SpreadsheetViewModel.structureInsertTitle(count: 1, singular: "Column", plural: "Columns", placement: "Left")
+            == "Insert Column Left",
+          SpreadsheetViewModel.structureInsertTitle(count: 3, singular: "Column", plural: "Columns", placement: "Right")
+            == "Insert 3 Columns Right",
+          SpreadsheetViewModel.structureInsertTitle(count: 3, singular: "Row", plural: "Rows", placement: "Above")
+            == "Insert 3 Rows Above",
+          SpreadsheetViewModel.structureInsertTitle(count: 4, singular: "Row", plural: "Rows", placement: "Below")
+            == "Insert 4 Rows Below"
+    else {
+      return Result(name: name, passed: false, detail: "menu title wording")
+    }
+
+    func raw(_ vm: SpreadsheetViewModel, _ row: Int, _ col: Int) -> String {
+      vm.activeSheet.cell(at: CellAddress(row: row, col: col)).raw
+    }
+
+    do {
+      var sheet = Sheet(name: "Cols")
+      sheet.setCell(Cell(raw: "left"), at: CellAddress(row: 0, col: 1))
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 0, col: 2))
+      sheet.setCell(Cell(raw: "right"), at: CellAddress(row: 0, col: 5))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumns(from: 2, to: 4)
+      guard vm.columnInsertCount == 3, vm.rowInsertCount == 1 else {
+        return Result(name: name, passed: false, detail: "header columns count \(vm.columnInsertCount) rows \(vm.rowInsertCount)")
+      }
+      guard vm.insertColumnLeftTitle == "Insert 3 Columns Left",
+            vm.insertColumnRightTitle == "Insert 3 Columns Right",
+            vm.insertRowAboveTitle == "Insert Row Above"
+      else {
+        return Result(name: name, passed: false, detail: "header column menu titles")
+      }
+      vm.insertColumnsLeft()
+      guard raw(vm, 0, 1) == "left", raw(vm, 0, 2).isEmpty, raw(vm, 0, 5) == "sel", raw(vm, 0, 8) == "right" else {
+        return Result(name: name, passed: false, detail: "insert 3 columns left shifted \(raw(vm, 0, 5))")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "ColsRight")
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 0, col: 4))
+      sheet.setCell(Cell(raw: "after"), at: CellAddress(row: 0, col: 7))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumns(from: 4, to: 6)
+      vm.insertColumnsRight()
+      let selected = vm.selectionRange.normalized
+      guard raw(vm, 0, 4) == "sel", raw(vm, 0, 7).isEmpty, raw(vm, 0, 10) == "after" else {
+        return Result(name: name, passed: false, detail: "insert 3 columns right did not open a gap of 3")
+      }
+      guard selected.minCol == 7, selected.maxCol == 9, vm.selectionAxis == .column else {
+        return Result(name: name, passed: false, detail: "insert right selection \(selected.minCol)-\(selected.maxCol)")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Rows")
+      sheet.setCell(Cell(raw: "above"), at: CellAddress(row: 1, col: 0))
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 2, col: 0))
+      sheet.setCell(Cell(raw: "below"), at: CellAddress(row: 5, col: 0))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRows(from: 2, to: 4)
+      guard vm.rowInsertCount == 3, vm.columnInsertCount == 1,
+            vm.insertRowAboveTitle == "Insert 3 Rows Above",
+            vm.insertRowBelowTitle == "Insert 3 Rows Below",
+            vm.insertColumnLeftTitle == "Insert Column Left"
+      else {
+        return Result(name: name, passed: false, detail: "header row counts/titles")
+      }
+      vm.insertRowsAbove()
+      guard raw(vm, 1, 0) == "above", raw(vm, 2, 0).isEmpty, raw(vm, 5, 0) == "sel", raw(vm, 8, 0) == "below" else {
+        return Result(name: name, passed: false, detail: "insert 3 rows above")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "RowsBelow")
+      sheet.setCell(Cell(raw: "sel"), at: CellAddress(row: 2, col: 0))
+      sheet.setCell(Cell(raw: "after"), at: CellAddress(row: 5, col: 0))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRows(from: 2, to: 4)
+      vm.insertRowsBelow()
+      guard raw(vm, 2, 0) == "sel", raw(vm, 5, 0).isEmpty, raw(vm, 8, 0) == "after" else {
+        return Result(name: name, passed: false, detail: "insert 3 rows below")
+      }
+      let selected = vm.selectionRange.normalized
+      guard selected.minRow == 2, selected.maxRow == 4 else {
+        return Result(name: name, passed: false, detail: "row below selection moved")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Rect")
+      sheet.setCell(Cell(raw: "keep"), at: CellAddress(row: 0, col: 1))
+      sheet.setCell(Cell(raw: "body"), at: CellAddress(row: 1, col: 2))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRange(from: CellAddress(row: 1, col: 2), to: CellAddress(row: 4, col: 4))
+      guard vm.selectionAxis == .cells, vm.rowInsertCount == 4, vm.columnInsertCount == 3 else {
+        return Result(name: name, passed: false, detail: "rectangle counts rows \(vm.rowInsertCount) cols \(vm.columnInsertCount)")
+      }
+      guard vm.insertRowAboveTitle == "Insert 4 Rows Above",
+            vm.insertColumnLeftTitle == "Insert 3 Columns Left"
+      else {
+        return Result(name: name, passed: false, detail: "rectangle menu titles")
+      }
+      vm.insertRowsAbove()
+      guard raw(vm, 0, 1) == "keep", raw(vm, 5, 2) == "body", raw(vm, 1, 2).isEmpty else {
+        return Result(name: name, passed: false, detail: "rectangle row insert used \(raw(vm, 5, 2))")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "RectCols")
+      sheet.setCell(Cell(raw: "keep"), at: CellAddress(row: 1, col: 1))
+      sheet.setCell(Cell(raw: "body"), at: CellAddress(row: 1, col: 2))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectRange(from: CellAddress(row: 1, col: 2), to: CellAddress(row: 4, col: 4))
+      vm.insertColumnsLeft()
+      guard raw(vm, 1, 1) == "keep", raw(vm, 1, 5) == "body", raw(vm, 1, 2).isEmpty else {
+        return Result(name: name, passed: false, detail: "rectangle column insert")
+      }
+      vm.selectRange(from: CellAddress(row: 1, col: 2), to: CellAddress(row: 4, col: 4))
+      vm.insertColumnsRight()
+      let selected = vm.selectionRange.normalized
+      guard selected.minRow == 1, selected.maxRow == 4, selected.minCol == 5, selected.maxCol == 7 else {
+        return Result(name: name, passed: false, detail: "rectangle insert right selection")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "One")
+      sheet.setCell(Cell(raw: "only"), at: CellAddress(row: 3, col: 3))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.select(CellAddress(row: 3, col: 3))
+      guard vm.rowInsertCount == 1, vm.columnInsertCount == 1,
+            vm.insertRowAboveTitle == "Insert Row Above",
+            vm.insertColumnRightTitle == "Insert Column Right"
+      else {
+        return Result(name: name, passed: false, detail: "single cell labels")
+      }
+      vm.insertColumnsLeft()
+      guard raw(vm, 3, 4) == "only", raw(vm, 3, 3).isEmpty else {
+        return Result(name: name, passed: false, detail: "single cell inserted more than one column")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Gaps")
+      sheet.setCell(Cell(raw: "b"), at: CellAddress(row: 0, col: 1))
+      sheet.setCell(Cell(raw: "gap"), at: CellAddress(row: 0, col: 2))
+      sheet.setCell(Cell(raw: "d"), at: CellAddress(row: 0, col: 3))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumn(1)
+      vm.commandClickColumn(3)
+      vm.commandClickColumn(5)
+      guard vm.columnInsertCount == 3, vm.insertColumnLeftTitle == "Insert 3 Columns Left" else {
+        return Result(name: name, passed: false, detail: "disjoint columns counted \(vm.columnInsertCount)")
+      }
+      vm.insertColumnsLeft()
+      guard raw(vm, 0, 1).isEmpty, raw(vm, 0, 4) == "b", raw(vm, 0, 5) == "gap", raw(vm, 0, 6) == "d" else {
+        return Result(name: name, passed: false, detail: "disjoint insert count was not 3")
+      }
+    }
+
+    do {
+      var sheet = Sheet(name: "Edge")
+      let last = Workbook.defaultColumnCount - 1
+      sheet.setCell(Cell(raw: "end"), at: CellAddress(row: 0, col: last - 1))
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+      vm.selectColumns(from: last - 1, to: last)
+      let before = vm.activeSheet.effectiveColumnCount
+      guard vm.columnInsertCount == 2 else {
+        return Result(name: name, passed: false, detail: "edge selection count \(vm.columnInsertCount)")
+      }
+      vm.insertColumnsRight()
+      guard vm.activeSheet.effectiveColumnCount == before + 2 else {
+        return Result(name: name, passed: false, detail: "edge insert grew by \(vm.activeSheet.effectiveColumnCount - before)")
+      }
+      guard raw(vm, 0, last - 1) == "end" else {
+        return Result(name: name, passed: false, detail: "edge insert moved the selected column")
+      }
+    }
+
+    return Result(name: name, passed: true, detail: "rows and columns match the selection")
+  }
+
+  private static func legacyChartLandsUnderData() -> Result {
+    let name = "legacy chart lands under data"
+    let range = CellRange(
+      start: CellAddress(row: 2, col: 0),
+      end: CellAddress(row: 8, col: 5)
+    )
+    let covering = SheetChart(
+      kind: .bar,
+      title: "Calls by Rep",
+      dataRange: range,
+      categoryColumn: 0,
+      valueColumn: 1,
+      hasHeaderRow: true,
+      valueMode: .values,
+      anchorRow: 0,
+      anchorCol: 0
+    )
+    let placed = covering.positionedUnderData()
+    guard placed.anchorRow == 10, placed.anchorCol == 0, placed.id == covering.id else {
+      return Result(name: name, passed: false, detail: "moved to \(placed.anchorRow),\(placed.anchorCol)")
+    }
+    let already = SheetChart(
+      id: covering.id,
+      kind: .bar,
+      title: "Calls by Rep",
+      dataRange: range,
+      categoryColumn: 0,
+      valueColumn: 1,
+      anchorRow: 10,
+      anchorCol: 0,
+      rowSpan: 12,
+      colSpan: 8
+    )
+    let kept = already.positionedUnderData()
+    guard kept == already else {
+      return Result(name: name, passed: false, detail: "anchored chart moved to \(kept.anchorRow),\(kept.anchorCol)")
+    }
+    var sheet = Sheet(name: "Weekly Calls")
+    sheet.charts = [covering]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let chart = imported.sheets[0].charts.first
+      guard chart?.anchorRow == 10, chart?.anchorCol == 0, chart?.title == "Calls by Rep" else {
+        return Result(name: name, passed: false, detail: "import kept \(String(describing: chart?.anchorRow))")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    return Result(name: name, passed: true, detail: "covering chart opens under A3:F9")
+  }
+
+  private static func cfFillTextContrast() -> Result {
+    let name = "cf fill text contrast"
+    let yellow = CodableColor(red: 1, green: 0.953, blue: 0.804, alpha: 1)
+    let dark = CodableColor(red: 0.12, green: 0.18, blue: 0.42, alpha: 1)
+    guard CodableColor.contrastingText(on: yellow).relativeLuminance < 0.2,
+          CodableColor.contrastingText(on: dark).relativeLuminance > 0.8
+    else {
+      return Result(name: name, passed: false, detail: "luminance threshold missed the palette")
+    }
+
+    let stops = [
+      ColorScaleStop(type: .min, value: nil, color: CodableColor(red: 0.992, green: 0.886, blue: 0.882, alpha: 1)),
+      ColorScaleStop(type: .percentile, value: 50, color: yellow),
+      ColorScaleStop(type: .max, value: nil, color: CodableColor(red: 0.847, green: 0.953, blue: 0.863, alpha: 1)),
+    ]
+    let scale = ConditionalFormatRule(
+      range: CellRange(start: CellAddress(row: 3, col: 4), end: CellAddress(row: 8, col: 4)),
+      predicate: .colorScale(stops),
+      style: ConditionalFormatStyle()
+    )
+    let values = [0.41, 0.37, 0.44, 0.29, 0.38, 0.33]
+    let lightPaint = ConditionalFormatEvaluator.resolvedPaint(
+      at: CellAddress(row: 3, col: 4),
+      base: nil,
+      rules: [scale],
+      value: .number(0.41),
+      displayString: "0.41",
+      numberFormat: nil,
+      numericValuesInRange: { _ in values },
+      evaluateFormula: { _, _, _ in .blank }
+    )
+    guard let lightText = lightPaint.format?.textColor, lightText.relativeLuminance < 0.25 else {
+      return Result(name: name, passed: false, detail: "scale text \(String(describing: lightPaint.format?.textColor))")
+    }
+
+    var whiteBase = CellFormat()
+    whiteBase.textColor = CodableColor(red: 1, green: 1, blue: 1, alpha: 1)
+    let darkRule = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: .origin),
+      predicate: .greaterThan(0),
+      style: ConditionalFormatStyle(fillColor: dark)
+    )
+    let darkPaint = ConditionalFormatEvaluator.resolvedPaint(
+      at: .origin,
+      base: whiteBase,
+      rules: [darkRule],
+      value: .number(5),
+      displayString: "5",
+      numberFormat: nil,
+      numericValuesInRange: { _ in [] },
+      evaluateFormula: { _, _, _ in .blank }
+    )
+    guard let darkText = darkPaint.format?.textColor, darkText.relativeLuminance > 0.8 else {
+      return Result(name: name, passed: false, detail: "dark fill text \(String(describing: darkPaint.format?.textColor))")
+    }
+
+    let chosen = CodableColor(red: 0.45, green: 0.12, blue: 0.12, alpha: 1)
+    let keptRule = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: .origin),
+      predicate: .greaterThan(0),
+      style: ConditionalFormatStyle(textColor: chosen, fillColor: yellow)
+    )
+    let keptPaint = ConditionalFormatEvaluator.resolvedPaint(
+      at: .origin,
+      base: nil,
+      rules: [keptRule],
+      value: .number(5),
+      displayString: "5",
+      numberFormat: nil,
+      numericValuesInRange: { _ in [] },
+      evaluateFormula: { _, _, _ in .blank }
+    )
+    guard let keptText = keptPaint.format?.textColor, abs(keptText.red - chosen.red) < 0.01 else {
+      return Result(name: name, passed: false, detail: "rule text was replaced \(String(describing: keptPaint.format?.textColor))")
+    }
+    return Result(name: name, passed: true, detail: "dark on light scale, light on dark fill")
   }
 }
 #endif

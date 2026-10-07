@@ -124,16 +124,53 @@ extension SpreadsheetViewModel {
     beginInsertChart(preferredKind: kind)
   }
 
+  /// The current selection when it covers more than one cell.
+  /// A single cell is not a chart range, and nearby data is left alone.
+  var chartSelectionRange: CellRange? {
+    let range = selectionRange
+    guard !range.isSingleCell else { return nil }
+    return range
+  }
+
   func beginInsertChart(preferredKind: SheetChart.Kind = .bar) {
     commitEditIfNeeded()
-    let n = selectionRange.normalized
-    guard n.minRow != n.maxRow || n.minCol != n.maxCol else { return }
+    editingChartID = nil
     pendingChartKind = preferredKind
     isInsertChartPresented = true
   }
 
-  func insertChart(_ chart: SheetChart) {
+  /// Opens the chart sheet on an existing chart so type, range, and series can change.
+  func beginEditChart(id: UUID) {
     commitEditIfNeeded()
+    guard activeSheet.charts.contains(where: { $0.id == id }) else { return }
+    editingChartID = id
+    selectChart(id: id)
+    isInsertChartPresented = true
+  }
+
+  func selectChart(id: UUID?) {
+    if id != nil { selectedImageID = nil }
+    let changed = selectedChartID != id
+    selectedChartID = id
+    if let id {
+      requestScrollToChart(id)
+    }
+    if changed {
+      notifyGridRefresh()
+    }
+  }
+
+  func requestScrollToChart(_ id: UUID) {
+    chartScrollID = id
+    chartScrollToken &+= 1
+  }
+
+  /// Inserts `chart` when its data range covers more than one cell.
+  /// A single-cell range is refused so an empty selection cannot become a chart.
+  @discardableResult
+  func insertChart(_ chart: SheetChart) -> Bool {
+    commitEditIfNeeded()
+    guard !chart.dataRange.isSingleCell else { return false }
     var sheet = activeSheet
     let before = sheet.charts
     var next = chart
@@ -142,7 +179,32 @@ extension SpreadsheetViewModel {
     }
     sheet.charts.append(next)
     applyCharts(sheet.charts, undoBefore: before, actionName: "Insert Chart")
+    selectedChartID = next.id
+    requestScrollToChart(next.id)
     isInsertChartPresented = false
+    editingChartID = nil
+    return true
+  }
+
+  /// Replaces an existing chart. A single-cell range is refused and the chart stays as it was.
+  /// The on-sheet anchor is whatever `chart` carries, so callers can keep the frame put.
+  @discardableResult
+  func updateChart(_ chart: SheetChart) -> Bool {
+    commitEditIfNeeded()
+    guard !chart.dataRange.isSingleCell else { return false }
+    var sheet = activeSheet
+    guard let index = sheet.charts.firstIndex(where: { $0.id == chart.id }) else { return false }
+    let before = sheet.charts
+    var next = chart
+    if next.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      next.title = "\(next.kind.title) Chart"
+    }
+    sheet.charts[index] = next
+    applyCharts(sheet.charts, undoBefore: before, actionName: "Edit Chart")
+    selectedChartID = next.id
+    isInsertChartPresented = false
+    editingChartID = nil
+    return true
   }
 
   func removeChart(id: UUID) {
@@ -150,6 +212,11 @@ extension SpreadsheetViewModel {
     let before = sheet.charts
     sheet.charts.removeAll { $0.id == id }
     guard sheet.charts != before else { return }
+    if selectedChartID == id { selectedChartID = nil }
+    if editingChartID == id {
+      editingChartID = nil
+      isInsertChartPresented = false
+    }
     applyCharts(sheet.charts, undoBefore: before, actionName: "Delete Chart")
   }
 

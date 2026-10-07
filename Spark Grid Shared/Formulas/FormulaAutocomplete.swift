@@ -36,7 +36,24 @@ enum FormulaAutocomplete {
     guard let partial = partialWord(in: text, utf16Cursor: utf16Cursor) else { return false }
     guard partial.token.count >= minimumAutoPopupLength else { return false }
     guard !isReferenceContext(in: text, tokenRange: partial.nsRange) else { return false }
-    return !suggestions(matching: partial.token, namedRanges: namedRanges).isEmpty
+    let matches = suggestions(matching: partial.token, namedRanges: namedRanges)
+    guard !matches.isEmpty else { return false }
+    // An exact token (`=SUM`) is finished. Another popup would swallow Return
+    // and accept SUM again instead of committing the cell.
+    if isExactCompletion(partial: partial.token, matches: matches) {
+      return false
+    }
+    return true
+  }
+
+  /// The caret token is already one of the suggestions (`SUM` == `SUM`).
+  static func isExactCompletion(partial: String, completion: String) -> Bool {
+    guard !partial.isEmpty else { return false }
+    return completion.caseInsensitiveCompare(partial) == .orderedSame
+  }
+
+  static func isExactCompletion(partial: String, matches: [String]) -> Bool {
+    matches.contains { isExactCompletion(partial: partial, completion: $0) }
   }
 
   /// Best single suggestion for Tab-to-complete, if any.

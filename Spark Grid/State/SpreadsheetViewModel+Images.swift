@@ -72,10 +72,15 @@ extension SpreadsheetViewModel {
   }
 
   func selectImage(id: UUID?, bringToFront: Bool = false) {
+    let clearedChart = id != nil && selectedChartID != nil
+    if id != nil { selectedChartID = nil }
     if let id, bringToFront {
       reorderImage(id: id, toFront: true, recordUndo: false)
     }
-    guard selectedImageID != id else { return }
+    guard selectedImageID != id else {
+      if clearedChart { notifyGridRefresh() }
+      return
+    }
     selectedImageID = id
     notifyGridRefresh()
   }
