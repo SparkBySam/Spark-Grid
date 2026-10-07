@@ -56,6 +56,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { sortRemapsMerge() })
     results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
     results.append(MainActor.assumeIsolated { insertChartEmptySelection() })
+    results.append(formulaExactTokenSkipsAutocomplete())
     return results
   }
 
@@ -973,6 +974,32 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "ranged insert opened wrong")
     }
     return Result(name: name, passed: true, detail: "menu opens; chart waits for a range")
+  }
+
+  /// `=SU` still offers SUM. After that token is `=SUM`, the popup must stay
+  /// closed so Return commits the cell instead of accepting SUM again.
+  private static func formulaExactTokenSkipsAutocomplete() -> Result {
+    let named: [String] = []
+    let offersPartial = FormulaAutocomplete.shouldOfferPopup(in: "=SU", utf16Cursor: 3, namedRanges: named)
+    let offersExact = FormulaAutocomplete.shouldOfferPopup(in: "=SUM", utf16Cursor: 4, namedRanges: named)
+    let offersLower = FormulaAutocomplete.shouldOfferPopup(in: "=sum", utf16Cursor: 4, namedRanges: named)
+    guard offersPartial, !offersExact, !offersLower else {
+      return Result(
+        name: "formula exact token",
+        passed: false,
+        detail: "popup SU=\(offersPartial) SUM=\(offersExact) sum=\(offersLower)"
+      )
+    }
+    guard FormulaAutocomplete.isExactCompletion(partial: "SUM", completion: "SUM"),
+          !FormulaAutocomplete.isExactCompletion(partial: "SU", completion: "SUM")
+    else {
+      return Result(name: "formula exact token", passed: false, detail: "exact-match check failed")
+    }
+    let matches = FormulaAutocomplete.suggestions(matching: "SUM", namedRanges: named)
+    guard matches == ["SUM"] else {
+      return Result(name: "formula exact token", passed: false, detail: "SUM matches \(matches)")
+    }
+    return Result(name: "formula exact token", passed: true, detail: "=SU offers popup; =SUM does not")
   }
 }
 #endif

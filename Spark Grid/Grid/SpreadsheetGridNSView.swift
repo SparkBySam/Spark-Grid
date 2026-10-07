@@ -32,6 +32,10 @@ final class SpreadsheetGridNSView: NSView {
   private var lastSelectionDirtyRect: NSRect = .null
   private let editor = CellEditorTextField()
   private var isEditorActive = false
+  /// Tab / Shift-Tab already moved the cell for this key event. The grid must
+  /// not handle that same key again and grow the selection.
+  private var suppressFollowingTabMove = false
+  private var lastTabMoveTimestamp: TimeInterval = -1
   private var isDraggingSelection = false
   private var isDraggingFill = false
   private enum ImageResizeCorner { case bottomRight }
@@ -2197,6 +2201,25 @@ final class SpreadsheetGridNSView: NSView {
     scrollSelectionIntoView()
   }
 
+  /// Commit the edit and move one cell for Tab or Shift-Tab, as a single cell.
+  /// Ignores a second delivery of the same key so the range cannot grow afterward.
+  private func commitTabMove(colDelta: Int) {
+    if let event = NSApp.currentEvent, isTabKeyDown(event) {
+      if event.timestamp == lastTabMoveTimestamp { return }
+      lastTabMoveTimestamp = event.timestamp
+    }
+    suppressFollowingTabMove = true
+    commitEditorAndMove(rowDelta: 0, colDelta: colDelta, extending: false)
+    DispatchQueue.main.async { [weak self] in
+      self?.suppressFollowingTabMove = false
+    }
+  }
+
+  private func isTabKeyDown(_ event: NSEvent?) -> Bool {
+    guard let event, event.type == .keyDown else { return false }
+    return event.keyCode == 48
+  }
+
   private func updateEditorFrame() {
     guard let viewModel else { return }
     let sheet = viewModel.activeSheet
@@ -3036,7 +3059,16 @@ final class SpreadsheetGridNSView: NSView {
       showEditor(selectAll: false)
       return
     case 48:
-      viewModel.moveSelection(rowDelta: 0, colDelta: event.modifierFlags.contains(.shift) ? -1 : 1, extending: event.modifierFlags.contains(.shift))
+      // While editing, Tab / Shift-Tab already committed and moved one cell.
+      // Handling this same key again would extend the range.
+      if suppressFollowingTabMove || event.timestamp == lastTabMoveTimestamp {
+        break
+      }
+      viewModel.moveSelection(
+        rowDelta: 0,
+        colDelta: event.modifierFlags.contains(.shift) ? -1 : 1,
+        extending: event.modifierFlags.contains(.shift)
+      )
     default:
       // Command and control shortcuts must not type into the selected cell.
       let shortcutMods = event.modifierFlags.intersection([.command, .control])
@@ -3151,10 +3183,11 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
       if applyFormulaTabCompletion(in: textView) {
         return true
       }
-      commitEditorAndMove(rowDelta: 0, colDelta: 1)
+      commitTabMove(colDelta: 1)
       return true
     case #selector(NSResponder.insertBacktab(_:)):
-      commitEditorAndMove(rowDelta: 0, colDelta: -1)
+      // Shift-Tab commits and moves one cell left. It must not extend the range.
+      commitTabMove(colDelta: -1)
       return true
     case #selector(NSResponder.moveUp(_:)):
       commitEditorAndMove(rowDelta: -1, colDelta: 0)
@@ -3175,10 +3208,19 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
       commitEditorAndMove(rowDelta: 1, colDelta: 0, extending: true)
       return true
     case #selector(NSResponder.moveLeftAndModifySelection(_:)):
-      commitEditorAndMove(rowDelta: 0, colDelta: -1, extending: true)
+      // Some field editors deliver Shift-Tab as a selection-modifying move.
+      if isTabKeyDown(NSApp.currentEvent) {
+        commitTabMove(colDelta: -1)
+      } else {
+        commitEditorAndMove(rowDelta: 0, colDelta: -1, extending: true)
+      }
       return true
     case #selector(NSResponder.moveRightAndModifySelection(_:)):
-      commitEditorAndMove(rowDelta: 0, colDelta: 1, extending: true)
+      if isTabKeyDown(NSApp.currentEvent) {
+        commitTabMove(colDelta: 1)
+      } else {
+        commitEditorAndMove(rowDelta: 0, colDelta: 1, extending: true)
+      }
       return true
     default:
       return false
@@ -3211,6 +3253,16 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
     let movement = (obj.userInfo?["NSTextMovement"] as? NSNumber)?.intValue
     if movement == NSTextMovement.cancel.rawValue {
       hideEditor(commit: false)
+      return
+    }
+    // Field editor ended on Tab / Shift-Tab before the command handler moved.
+    // Move one cell and do not let the same key extend the selection.
+    if movement == NSTextMovement.tab.rawValue {
+      commitTabMove(colDelta: 1)
+      return
+    }
+    if movement == NSTextMovement.backtab.rawValue {
+      commitTabMove(colDelta: -1)
       return
     }
     hideEditor(commit: true)
@@ -3304,6 +3356,37 @@ final class CellFieldEditor: NSTextView {
       return
     }
     super.insertText(insertString, replacementRange: replacementRange)
+  }
+
+  override func insertCompletion(
+    _ word: String,
+    forPartialWordRange charRange: NSRange,
+    movement: Int,
+    isFinal flag: Bool
+  ) {
+    let partial = Self.partialWord(in: string, range: charRange)
+    let before = string
+    super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+    // Return on a finished token (`=SUM`) accepts the popup again and never
+    // reaches insertNewline. Commit when this key did not change the text.
+    let commitOnReturn = flag
+      && movement == NSTextMovement.`return`.rawValue
+      && (before == string || FormulaAutocomplete.isExactCompletion(partial: partial, completion: word))
+    guard commitOnReturn else { return }
+    let editor = self
+    DispatchQueue.main.async {
+      guard editor.window?.firstResponder === editor else { return }
+      editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    }
+  }
+
+  private static func partialWord(in text: String, range: NSRange) -> String {
+    let ns = text as NSString
+    guard range.location != NSNotFound,
+          range.length >= 0,
+          NSMaxRange(range) <= ns.length
+    else { return "" }
+    return ns.substring(with: range)
   }
 }
 
