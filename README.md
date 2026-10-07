@@ -6,7 +6,7 @@ Site: https://sparkgridapp.com
 
 Built with SwiftUI chrome and a custom AppKit grid.
 
-**Version 1.0** is the Mac App Store release. It evaluates an everyday formula list, and it has filters, formatting, pictures, and a bar, line, or area chart in a side panel. Pivot tables and SUMIF are not in this version. Rough edges are real; please report files that break.
+**Version 1.0** is the Mac App Store release. It evaluates an everyday formula list, and it has filters, formatting, and pictures. Charts are not in that build. Pivot tables and SUMIF are not in this version. Rough edges are real; please report files that break.
 
 ## Requirements
 
@@ -32,7 +32,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - Spreadsheet grid: selection, fill handle, freeze panes, merges, zoom
 - Formula bar with lexer/parser/evaluator and autocomplete
 - Formatting toolbar, conditional formatting, AutoFilter, sort, find/replace
-- Bar, line, or area chart in a side panel, one series from the selection. Charts already in an Excel file are not imported.
+- Chart insertion exists in this source tree. It is not in the Mac App Store build. Drag to move, resize, custom series and point colors, and title, legend, axis, and gridline controls are not shipped.
 - Embedded pictures (insert, move, resize, z-order)
 - `.xlsx` / `.csv` open and save, with autosave for a file you have already saved
 
