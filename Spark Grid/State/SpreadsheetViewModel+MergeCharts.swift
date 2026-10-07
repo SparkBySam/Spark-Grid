@@ -148,16 +148,83 @@ extension SpreadsheetViewModel {
     isInsertChartPresented = true
   }
 
-  func selectChart(id: UUID?) {
+  func selectChart(id: UUID?, scroll: Bool = true) {
     if id != nil { selectedImageID = nil }
     let changed = selectedChartID != id
     selectedChartID = id
-    if let id {
+    if scroll, let id {
       requestScrollToChart(id)
     }
     if changed {
       notifyGridRefresh()
     }
+  }
+
+  func chart(with id: UUID) -> SheetChart? {
+    activeSheet.charts.first { $0.id == id }
+  }
+
+  /// Live frame while dragging. No undo until `commitChartFrame`.
+  /// `frameIsCustom` stays as it was when the drag returns to `start`.
+  func setChartFrame(
+    id: UUID,
+    anchorRow: Int,
+    anchorCol: Int,
+    rowSpan: Int,
+    colSpan: Int,
+    preservingCustomFrom start: SheetChart
+  ) {
+    guard let index = activeSheet.charts.firstIndex(where: { $0.id == id }) else { return }
+    let row = max(0, anchorRow)
+    let col = max(0, anchorCol)
+    let rows = max(SheetChart.minimumSpan, rowSpan)
+    let cols = max(SheetChart.minimumSpan, colSpan)
+    let changed = row != start.anchorRow || col != start.anchorCol
+      || rows != start.rowSpan || cols != start.colSpan
+    var sheet = activeSheet
+    guard sheet.charts[index].anchorRow != row
+      || sheet.charts[index].anchorCol != col
+      || sheet.charts[index].rowSpan != rows
+      || sheet.charts[index].colSpan != cols
+      || sheet.charts[index].frameIsCustom != (start.frameIsCustom || changed)
+    else { return }
+    sheet.charts[index].anchorRow = row
+    sheet.charts[index].anchorCol = col
+    sheet.charts[index].rowSpan = rows
+    sheet.charts[index].colSpan = cols
+    sheet.charts[index].frameIsCustom = start.frameIsCustom || changed
+    setActiveSheetPreservingFormulas(sheet)
+    notifyGridRefresh()
+  }
+
+  func commitChartFrame(
+    id: UUID,
+    before: SheetChart,
+    actionName: String = "Move Chart"
+  ) {
+    guard let after = chart(with: id) else { return }
+    guard before.anchorRow != after.anchorRow
+      || before.anchorCol != after.anchorCol
+      || before.rowSpan != after.rowSpan
+      || before.colSpan != after.colSpan
+      || before.frameIsCustom != after.frameIsCustom
+    else { return }
+    let current = activeSheet.charts
+    applyCharts(current, undoBefore: replacingChart(before, in: current), actionName: actionName)
+  }
+
+  /// Writes title, colors, legend, axis titles, or gridlines. One undo step.
+  func updateChartContent(
+    id: UUID,
+    actionName: String,
+    mutate: (inout SheetChart) -> Void
+  ) {
+    guard let index = activeSheet.charts.firstIndex(where: { $0.id == id }) else { return }
+    var charts = activeSheet.charts
+    let before = charts
+    mutate(&charts[index])
+    guard charts != before else { return }
+    applyCharts(charts, undoBefore: before, actionName: actionName)
   }
 
   func requestScrollToChart(_ id: UUID) {
@@ -196,9 +263,6 @@ extension SpreadsheetViewModel {
     guard let index = sheet.charts.firstIndex(where: { $0.id == chart.id }) else { return false }
     let before = sheet.charts
     var next = chart
-    if next.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      next.title = "\(next.kind.title) Chart"
-    }
     sheet.charts[index] = next
     applyCharts(sheet.charts, undoBefore: before, actionName: "Edit Chart")
     selectedChartID = next.id
@@ -341,6 +405,13 @@ extension SpreadsheetViewModel {
     }
     undoManager?.setActionName(actionName)
     notifyGridRefresh()
+  }
+
+  private func replacingChart(_ chart: SheetChart, in charts: [SheetChart]) -> [SheetChart] {
+    guard let index = charts.firstIndex(where: { $0.id == chart.id }) else { return charts }
+    var next = charts
+    next[index] = chart
+    return next
   }
 
   private func applyCharts(

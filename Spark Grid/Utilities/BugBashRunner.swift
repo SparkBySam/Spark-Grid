@@ -64,6 +64,8 @@ enum BugBashRunner {
     results.append(chartScaleDomainHolds())
     results.append(weeklyCallsLastLabel())
     results.append(chartValueColors())
+    results.append(chartFrameDrag())
+    results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
     return results
@@ -1328,17 +1330,247 @@ enum BugBashRunner {
 
   private static func chartValueColors() -> Result {
     let name = "chart value colors"
-    guard ChartMarkPalette.usesDistinctValueColors(.bar),
-          ChartMarkPalette.usesDistinctValueColors(.line),
-          !ChartMarkPalette.usesDistinctValueColors(.area)
-    else {
-      return Result(name: name, passed: false, detail: "bar/line should vary; area stays flat")
-    }
     let colors = (0..<8).map { ChartMarkPalette.swatch(at: $0) }
     guard Set(colors).count == colors.count else {
       return Result(name: name, passed: false, detail: "first 8 swatches are not distinct")
     }
-    return Result(name: name, passed: true, detail: "8 distinct bar/line swatches")
+    let swatch = ChartMarkPalette.swatch(at: 0)
+    let fallback = SheetChart.defaultSeriesColor(for: .bar)
+    guard abs(swatch.red - fallback.red) < 0.001,
+          abs(swatch.green - fallback.green) < 0.001,
+          abs(swatch.blue - fallback.blue) < 0.001
+    else {
+      return Result(name: name, passed: false, detail: "series default drifted from the first swatch")
+    }
+    var chart = SheetChart(
+      kind: .bar,
+      dataRange: CellRange(start: .origin, end: CellAddress(row: 3, col: 1)),
+      anchorRow: 6,
+      anchorCol: 0
+    )
+    guard chart.resolvedColor(forPoint: 0) == chart.resolvedColor(forPoint: 2),
+          chart.resolvedColor(forPoint: 0) == chart.resolvedSeriesColor
+    else {
+      return Result(name: name, passed: false, detail: "points did not share the series color")
+    }
+    let point = CodableColor(red: 0.9, green: 0.2, blue: 0.1, alpha: 1)
+    chart.setPointColor(point, at: 1)
+    guard chart.resolvedColor(forPoint: 1) == point,
+          chart.resolvedColor(forPoint: 0) == chart.resolvedSeriesColor
+    else {
+      return Result(name: name, passed: false, detail: "point override did not stick")
+    }
+    chart.setPointColor(nil, at: 1)
+    guard chart.pointColors[1] == nil, chart.resolvedColor(forPoint: 1) == chart.resolvedSeriesColor else {
+      return Result(name: name, passed: false, detail: "clearing a point did not return to the series color")
+    }
+    let series = CodableColor(red: 0.1, green: 0.6, blue: 0.3, alpha: 1)
+    chart.seriesColor = series
+    chart.setPointColor(point, at: 2)
+    guard chart.resolvedColor(forPoint: 0) == series, chart.resolvedColor(forPoint: 2) == point else {
+      return Result(name: name, passed: false, detail: "series color did not replace the default")
+    }
+    return Result(name: name, passed: true, detail: "series color, point override, and clear")
+  }
+
+  private static func chartFrameDrag() -> Result {
+    let name = "chart frame drag"
+    func columnAt(_ x: CGFloat) -> Int { min(25, max(0, Int(floor(x / 80)))) }
+    func rowAt(_ y: CGFloat) -> Int { min(99, max(0, Int(floor(y / 22)))) }
+    let start = OnSheetChartGeometry.ChartFrameAnchor(anchorRow: 4, anchorCol: 0, rowSpan: 12, colSpan: 8)
+    let rect = CGRect(x: 0, y: 88, width: 640, height: 264)
+    let moved = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .body,
+      startRect: rect,
+      translation: CGSize(width: 100, height: 30),
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard moved.anchorCol == 1, moved.anchorRow == 5, moved.colSpan == 8, moved.rowSpan == 12 else {
+      return Result(name: name, passed: false, detail: "move \(moved)")
+    }
+    let nudged = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .body,
+      startRect: rect,
+      translation: CGSize(width: 40, height: 10),
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard nudged == start else {
+      return Result(name: name, passed: false, detail: "sub-cell move changed \(nudged)")
+    }
+    let wider = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .right,
+      startRect: rect,
+      translation: CGSize(width: 80, height: 0),
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard wider.anchorCol == 0, wider.colSpan == 9, wider.rowSpan == 12 else {
+      return Result(name: name, passed: false, detail: "resize right \(wider)")
+    }
+    let inset = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .left,
+      startRect: rect,
+      translation: CGSize(width: 480, height: 0),
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: columnAt,
+      rowAt: rowAt
+    )
+    guard inset.anchorCol == 4, inset.colSpan == 4, inset.anchorRow == 4 else {
+      return Result(name: name, passed: false, detail: "resize left min span \(inset)")
+    }
+    guard OnSheetChartGeometry.frameHandle(at: CGPoint(x: 320, y: 200), in: rect, thickness: 8) == .body,
+          OnSheetChartGeometry.frameHandle(at: CGPoint(x: 2, y: 200), in: rect, thickness: 8) == .left,
+          OnSheetChartGeometry.frameHandle(at: CGPoint(x: 638, y: 90), in: rect, thickness: 8) == .topRight,
+          OnSheetChartGeometry.frameHandle(at: CGPoint(x: -40, y: -40), in: rect, thickness: 8) == nil
+    else {
+      return Result(name: name, passed: false, detail: "handle hit test")
+    }
+    let wide = OnSheetChartGeometry.previewHeight(colSpan: 16, rowSpan: 4, width: 320)
+    let tall = OnSheetChartGeometry.previewHeight(colSpan: 4, rowSpan: 16, width: 320)
+    guard tall > wide else {
+      return Result(name: name, passed: false, detail: "preview tall \(tall) wide \(wide)")
+    }
+    return Result(name: name, passed: true, detail: "move, resize, handles, preview size")
+  }
+
+  @MainActor
+  private static func chartMoveResizeAndColorRoundTrip() -> Result {
+    let name = "chart move color round-trip"
+    var sheet = Sheet(name: "Weekly Calls")
+    sheet.setCell(Cell(raw: "Week"), at: .origin)
+    sheet.setCell(Cell(raw: "Calls"), at: CellAddress(row: 0, col: 1))
+    for index in 1...4 {
+      sheet.setCell(Cell(raw: "Week \(index)"), at: CellAddress(row: index, col: 0))
+      sheet.setCell(Cell(raw: "\(index * 3)"), at: CellAddress(row: index, col: 1))
+    }
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    let range = CellRange(start: .origin, end: CellAddress(row: 4, col: 1))
+    let inserted = vm.insertChart(
+      SheetChart(
+        kind: .bar,
+        title: "Calls by Week",
+        dataRange: range,
+        categoryColumn: 0,
+        valueColumn: 1,
+        anchorRow: 7,
+        anchorCol: 0
+      )
+    )
+    guard inserted, let original = vm.activeSheet.charts.first else {
+      return Result(name: name, passed: false, detail: "chart was not inserted")
+    }
+    vm.setChartFrame(
+      id: original.id,
+      anchorRow: 0,
+      anchorCol: 0,
+      rowSpan: 6,
+      colSpan: 5,
+      preservingCustomFrom: original
+    )
+    vm.commitChartFrame(id: original.id, before: original, actionName: "Move Chart")
+    let series = CodableColor(red: 0.12, green: 0.55, blue: 0.32, alpha: 1)
+    let point = CodableColor(red: 0.86, green: 0.24, blue: 0.18, alpha: 1)
+    vm.updateChartContent(id: original.id, actionName: "Chart Color") {
+      $0.seriesColor = series
+      $0.setPointColor(point, at: 1)
+      $0.showsLegend = true
+      $0.showsGridlines = false
+      $0.categoryAxisTitle = "Week"
+      $0.valueAxisTitle = "Calls"
+      $0.title = "Pipeline"
+    }
+    guard let live = vm.chart(with: original.id) else {
+      return Result(name: name, passed: false, detail: "chart disappeared")
+    }
+    guard live.anchorRow == 0, live.anchorCol == 0, live.rowSpan == 6, live.colSpan == 5, live.frameIsCustom else {
+      return Result(name: name, passed: false, detail: "frame \(live.anchorRow),\(live.anchorCol) \(live.colSpan)×\(live.rowSpan)")
+    }
+    guard live.placementDescription == "At A1 · 5×6" else {
+      return Result(name: name, passed: false, detail: live.placementDescription)
+    }
+    guard live.seriesColor == series,
+          live.resolvedColor(forPoint: 1) == point,
+          live.resolvedColor(forPoint: 0) == series,
+          live.showsLegend, !live.showsGridlines,
+          live.categoryAxisTitle == "Week",
+          live.valueAxisTitle == "Calls",
+          live.title == "Pipeline"
+    else {
+      return Result(name: name, passed: false, detail: "format did not apply")
+    }
+    vm.updateChartContent(id: original.id, actionName: "Chart Color") {
+      $0.setPointColor(nil, at: 1)
+    }
+    guard vm.chart(with: original.id)?.resolvedColor(forPoint: 1) == series else {
+      return Result(name: name, passed: false, detail: "cleared point kept its color")
+    }
+    vm.updateChartContent(id: original.id, actionName: "Chart Color") {
+      $0.setPointColor(point, at: 1)
+    }
+    do {
+      let data = try XLSXCodec.exportWorkbook(vm.workbook)
+      let chartXML = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/charts/chart1.xml") ?? ""
+      guard chartXML.contains("srgbClr val=\"\(XLSXCodec.rgbHex(series))\""),
+            chartXML.contains("srgbClr val=\"\(XLSXCodec.rgbHex(point))\""),
+            chartXML.contains("<c:dPt>"),
+            chartXML.contains("legendPos val=\"b\""),
+            chartXML.contains(">Week<"),
+            chartXML.contains(">Calls<"),
+            chartXML.contains(">Pipeline<"),
+            !chartXML.contains("<c:majorGridlines")
+      else {
+        return Result(name: name, passed: false, detail: "excel chart xml missed format")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let saved = imported.sheets[0].charts.first
+      guard let saved else {
+        return Result(name: name, passed: false, detail: "import dropped the chart")
+      }
+      guard saved.anchorRow == 0, saved.anchorCol == 0, saved.rowSpan == 6, saved.colSpan == 5,
+            saved.frameIsCustom, saved.seriesColor == series, saved.pointColors[1] == point,
+            saved.showsLegend, !saved.showsGridlines,
+            saved.categoryAxisTitle == "Week", saved.valueAxisTitle == "Calls",
+            saved.title == "Pipeline"
+      else {
+        return Result(name: name, passed: false, detail: "reopen \(saved.anchorRow),\(saved.anchorCol) legend \(saved.showsLegend)")
+      }
+      let kept = saved.positionedUnderData()
+      guard kept.anchorRow == 0, kept.anchorCol == 0 else {
+        return Result(name: name, passed: false, detail: "custom frame was moved under the data")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    let legacyJSON = """
+    {"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","kind":"line","title":"Old","dataRange":{"start":{"row":0,"col":0},"end":{"row":3,"col":1}},"anchorRow":1,"anchorCol":2,"rowSpan":10,"colSpan":6}
+    """
+    guard let decoded = try? JSONDecoder().decode(SheetChart.self, from: Data(legacyJSON.utf8)) else {
+      return Result(name: name, passed: false, detail: "legacy chart json did not decode")
+    }
+    guard decoded.seriesColor == nil, decoded.pointColors.isEmpty, !decoded.showsLegend,
+          decoded.showsGridlines, decoded.categoryAxisTitle.isEmpty, !decoded.frameIsCustom,
+          decoded.anchorRow == 1, decoded.rowSpan == 10
+    else {
+      return Result(name: name, passed: false, detail: "legacy defaults \(decoded.showsGridlines) custom \(decoded.frameIsCustom)")
+    }
+    return Result(name: name, passed: true, detail: "frame and colors reopen; legacy json still decodes")
   }
 
   @MainActor

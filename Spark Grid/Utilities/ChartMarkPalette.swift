@@ -1,6 +1,8 @@
 import Foundation
 
-/// Distinct swatches for bar and line values. Area charts stay a single fill.
+/// Preset series colors. A chart paints one series color (its own, or the first
+/// swatch) and optional per-point overrides. The swatches stay distinct so the
+/// format controls can offer them as a palette.
 enum ChartMarkPalette {
   struct RGB: Equatable, Hashable {
     var red: Double
@@ -25,14 +27,5 @@ enum ChartMarkPalette {
     let count = swatches.count
     let wrapped = ((index % count) + count) % count
     return swatches[wrapped]
-  }
-
-  static func usesDistinctValueColors(_ kind: SheetChart.Kind) -> Bool {
-    switch kind {
-    case .bar, .line:
-      return true
-    case .area:
-      return false
-    }
   }
 }

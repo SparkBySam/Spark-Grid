@@ -22,6 +22,15 @@ struct InsertChartSheet: View {
   @State private var dataRange: CellRange?
   /// On-sheet frame kept while editing so a type or range change does not move the chart.
   @State private var keptAnchor: KeptAnchor?
+  @State private var titleText = ""
+  @State private var titleEdited = false
+  @State private var showsLegend = false
+  @State private var showsGridlines = true
+  @State private var categoryAxisTitle = ""
+  @State private var valueAxisTitle = ""
+  @State private var seriesColor: CodableColor?
+  @State private var pointColors: [Int: CodableColor] = [:]
+  @State private var frameIsCustom = false
   @FocusState private var rangeFieldFocused: Bool
 
   private struct KeptAnchor {
@@ -54,7 +63,7 @@ struct InsertChartSheet: View {
     return SheetChart(
       id: draftID,
       kind: kind,
-      title: draftTitle,
+      title: resolvedTitle,
       dataRange: dataRange,
       categoryColumn: categoryColumn,
       valueColumn: valueColumn,
@@ -63,7 +72,31 @@ struct InsertChartSheet: View {
       anchorRow: anchorRow,
       anchorCol: anchorCol,
       rowSpan: rowSpan,
-      colSpan: colSpan
+      colSpan: colSpan,
+      seriesColor: seriesColor,
+      pointColors: pointColors,
+      showsLegend: showsLegend,
+      showsGridlines: showsGridlines,
+      categoryAxisTitle: categoryAxisTitle,
+      valueAxisTitle: valueAxisTitle,
+      frameIsCustom: frameIsCustom
+    )
+  }
+
+  /// A new chart takes the series description until the title field is edited.
+  /// An existing chart keeps the title it was saved with.
+  private var resolvedTitle: String {
+    if titleEdited { return titleText }
+    return draftTitle
+  }
+
+  private var titleField: Binding<String> {
+    Binding(
+      get: { resolvedTitle },
+      set: { newValue in
+        titleEdited = true
+        titleText = newValue
+      }
     )
   }
 
@@ -144,15 +177,49 @@ struct InsertChartSheet: View {
           Text(footerText)
             .font(.caption)
         }
+
+        if let chart = draftChart {
+          Section {
+            ChartFormatFields(
+              title: titleField,
+              showsLegend: $showsLegend,
+              showsGridlines: $showsGridlines,
+              categoryAxisTitle: $categoryAxisTitle,
+              valueAxisTitle: $valueAxisTitle,
+              seriesColor: ChartColorPaint.color(chart.resolvedSeriesColor),
+              onSeriesColor: { seriesColor = ChartColorPaint.codable($0) },
+              points: plottedPoints(for: chart),
+              pointColor: { ChartColorPaint.color(chart.resolvedColor(forPoint: $0)) },
+              isPointOverride: { pointColors[$0] != nil },
+              onPointColor: { index, color in
+                pointColors[index] = ChartColorPaint.codable(color)
+              },
+              onClearPointColor: { pointColors[$0] = nil }
+            )
+          } header: {
+            Text("Format")
+          }
+        }
       }
       .formStyle(.grouped)
-      .frame(maxHeight: 280)
+      .frame(maxHeight: 380)
 
       VStack(alignment: .leading, spacing: 8) {
         Text("Preview")
           .font(.headline)
+        if let chart = draftChart {
+          let title = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !title.isEmpty {
+            Text(title)
+              .font(.system(size: 13, weight: .semibold))
+              .lineLimit(1)
+          }
+          Text(chart.placementDescription)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+        }
         preview
-          .frame(width: 440, height: 200)
+          .frame(width: 440, height: previewHeight)
           .clipped()
           .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
       }
@@ -176,7 +243,7 @@ struct InsertChartSheet: View {
       }
       .padding(16)
     }
-    .frame(width: 480, height: 600)
+    .frame(width: 520, height: 760)
     .onAppear(perform: configureDefaultsIfNeeded)
     .onChange(of: rangeText) { _, _ in
       commitRangeText()
@@ -211,6 +278,37 @@ struct InsertChartSheet: View {
     return "Enter a range such as A1:D12."
   }
 
+  private var previewHeight: CGFloat {
+    guard let chart = draftChart else { return 200 }
+    return OnSheetChartGeometry.previewHeight(
+      colSpan: chart.colSpan,
+      rowSpan: chart.rowSpan,
+      width: 440,
+      minHeight: 160,
+      maxHeight: 220
+    )
+  }
+
+  private func plottedPoints(for chart: SheetChart) -> [ChartPreviewSeries.Point] {
+    ChartPreviewSeries.points(
+      for: chart,
+      labelFor: { viewModel.displayString(at: $0) },
+      numberFor: { viewModel.displayValue(at: $0).asChartNumber }
+    ).points
+  }
+
+  private func resetFormat() {
+    titleText = ""
+    titleEdited = false
+    showsLegend = false
+    showsGridlines = true
+    categoryAxisTitle = ""
+    valueAxisTitle = ""
+    seriesColor = nil
+    pointColors = [:]
+    frameIsCustom = false
+  }
+
   private func header(for column: Int) -> String {
     columnOptions.first(where: { $0.column == column })?.header ?? ""
   }
@@ -239,6 +337,7 @@ struct InsertChartSheet: View {
     }
     kind = viewModel.pendingChartKind
     keptAnchor = nil
+    resetFormat()
     if let selection = viewModel.chartSelectionRange {
       mustChooseRange = false
       adopt(selection)
@@ -271,6 +370,15 @@ struct InsertChartSheet: View {
     let parsed = ChartDataRangeParser.parse(text)
     dataRange = parsed
     rangeText = text
+    titleEdited = true
+    titleText = chart.title
+    showsLegend = chart.showsLegend
+    showsGridlines = chart.showsGridlines
+    categoryAxisTitle = chart.categoryAxisTitle
+    valueAxisTitle = chart.valueAxisTitle
+    seriesColor = chart.seriesColor
+    pointColors = chart.pointColors
+    frameIsCustom = chart.frameIsCustom
     guard let parsed else {
       columnOptions = []
       return

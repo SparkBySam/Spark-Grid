@@ -51,6 +51,20 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
   var anchorCol: Int
   var rowSpan: Int
   var colSpan: Int
+  /// Whole-series color. Nil uses `defaultSeriesColor(for:)`.
+  var seriesColor: CodableColor?
+  /// Plotted-point index → color. A missing index uses the series color.
+  var pointColors: [Int: CodableColor]
+  var showsLegend: Bool
+  var showsGridlines: Bool
+  var categoryAxisTitle: String
+  var valueAxisTitle: String
+  /// Set once the user moves or resizes the chart. Import then keeps that
+  /// frame, including when the frame covers the data range.
+  var frameIsCustom: Bool
+
+  /// Smallest on-sheet span, in rows or columns.
+  static let minimumSpan = 4
 
   init(
     id: UUID = UUID(),
@@ -64,7 +78,14 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     anchorRow: Int,
     anchorCol: Int,
     rowSpan: Int = 12,
-    colSpan: Int = 8
+    colSpan: Int = 8,
+    seriesColor: CodableColor? = nil,
+    pointColors: [Int: CodableColor] = [:],
+    showsLegend: Bool = false,
+    showsGridlines: Bool = true,
+    categoryAxisTitle: String = "",
+    valueAxisTitle: String = "",
+    frameIsCustom: Bool = false
   ) {
     self.id = id
     self.kind = kind
@@ -76,14 +97,23 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     self.valueMode = valueMode
     self.anchorRow = anchorRow
     self.anchorCol = anchorCol
-    self.rowSpan = max(4, rowSpan)
-    self.colSpan = max(4, colSpan)
+    self.rowSpan = max(Self.minimumSpan, rowSpan)
+    self.colSpan = max(Self.minimumSpan, colSpan)
+    self.seriesColor = seriesColor
+    self.pointColors = pointColors
+    self.showsLegend = showsLegend
+    self.showsGridlines = showsGridlines
+    self.categoryAxisTitle = categoryAxisTitle
+    self.valueAxisTitle = valueAxisTitle
+    self.frameIsCustom = frameIsCustom
   }
 
   enum CodingKeys: String, CodingKey {
     case id, kind, title, dataRange
     case categoryColumn, valueColumn, hasHeaderRow, valueMode
     case anchorRow, anchorCol, rowSpan, colSpan
+    case seriesColor, pointColors, showsLegend, showsGridlines
+    case categoryAxisTitle, valueAxisTitle, frameIsCustom
   }
 
   init(from decoder: Decoder) throws {
@@ -100,12 +130,78 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     anchorCol = try c.decodeIfPresent(Int.self, forKey: .anchorCol) ?? 0
     rowSpan = try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 12
     colSpan = try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 8
+    seriesColor = try c.decodeIfPresent(CodableColor.self, forKey: .seriesColor)
+    pointColors = try c.decodeIfPresent([Int: CodableColor].self, forKey: .pointColors) ?? [:]
+    showsLegend = try c.decodeIfPresent(Bool.self, forKey: .showsLegend) ?? false
+    showsGridlines = try c.decodeIfPresent(Bool.self, forKey: .showsGridlines) ?? true
+    categoryAxisTitle = try c.decodeIfPresent(String.self, forKey: .categoryAxisTitle) ?? ""
+    valueAxisTitle = try c.decodeIfPresent(String.self, forKey: .valueAxisTitle) ?? ""
+    frameIsCustom = try c.decodeIfPresent(Bool.self, forKey: .frameIsCustom) ?? false
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(kind, forKey: .kind)
+    try c.encode(title, forKey: .title)
+    try c.encode(dataRange, forKey: .dataRange)
+    try c.encodeIfPresent(categoryColumn, forKey: .categoryColumn)
+    try c.encodeIfPresent(valueColumn, forKey: .valueColumn)
+    try c.encode(hasHeaderRow, forKey: .hasHeaderRow)
+    try c.encode(valueMode, forKey: .valueMode)
+    try c.encode(anchorRow, forKey: .anchorRow)
+    try c.encode(anchorCol, forKey: .anchorCol)
+    try c.encode(rowSpan, forKey: .rowSpan)
+    try c.encode(colSpan, forKey: .colSpan)
+    try c.encodeIfPresent(seriesColor, forKey: .seriesColor)
+    try c.encode(pointColors, forKey: .pointColors)
+    try c.encode(showsLegend, forKey: .showsLegend)
+    try c.encode(showsGridlines, forKey: .showsGridlines)
+    try c.encode(categoryAxisTitle, forKey: .categoryAxisTitle)
+    try c.encode(valueAxisTitle, forKey: .valueAxisTitle)
+    try c.encode(frameIsCustom, forKey: .frameIsCustom)
+  }
+
+  /// Color used when the chart has no series color of its own.
+  /// Bar and line use the first palette swatch. Area uses a steady blue.
+  static func defaultSeriesColor(for kind: Kind) -> CodableColor {
+    switch kind {
+    case .bar, .line:
+      return CodableColor(red: 0.18, green: 0.45, blue: 0.86, alpha: 1)
+    case .area:
+      return CodableColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1)
+    }
+  }
+
+  /// Series color, or the kind's default when the series color is unset.
+  var resolvedSeriesColor: CodableColor {
+    seriesColor ?? Self.defaultSeriesColor(for: kind)
+  }
+
+  /// Point color, or the series color when this point has no override.
+  func resolvedColor(forPoint index: Int) -> CodableColor {
+    pointColors[index] ?? resolvedSeriesColor
+  }
+
+  mutating func setPointColor(_ color: CodableColor?, at index: Int) {
+    if let color {
+      pointColors[index] = color
+    } else {
+      pointColors.removeValue(forKey: index)
+    }
+  }
+
+  /// Where the chart sits, for the side panel and Edit Chart.
+  var placementDescription: String {
+    let cell = CellAddress(row: anchorRow, col: anchorCol).a1
+    return "At \(cell) · \(colSpan)×\(rowSpan)"
   }
 
   /// Charts saved before they were drawn on the sheet sit on top of their data
   /// (anchor 0,0, or any frame that covers the plotted cells). Those move just
-  /// under the data range. A frame that is already clear of the data stays put.
+  /// under the data range. A frame the user placed stays put, even over the data.
   func positionedUnderData() -> SheetChart {
+    if frameIsCustom { return self }
     let n = dataRange.normalized
     let frameRows = max(1, rowSpan)
     let frameCols = max(1, colSpan)

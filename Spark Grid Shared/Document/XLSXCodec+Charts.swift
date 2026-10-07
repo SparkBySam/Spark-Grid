@@ -136,6 +136,7 @@ extension XLSXCodec {
     // as both cats and a placeholder val ref so the part remains valid.
     let exportValRef = chart.valueMode == .count ? catRef : valRef
 
+    let seriesBody = seriesXML(chart, catRef: catRef, valRef: exportValRef)
     let seriesInner: String
     switch chart.kind {
     case .bar:
@@ -143,12 +144,7 @@ extension XLSXCodec {
       <c:barChart>
         <c:barDir val="col"/>
         <c:grouping val="clustered"/>
-        <c:ser>
-          <c:idx val="0"/><c:order val="0"/>
-          <c:tx><c:v>\(escapeXML(chart.title))</c:v></c:tx>
-          <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-          <c:val><c:numRef><c:f>\(escapeXML(exportValRef))</c:f></c:numRef></c:val>
-        </c:ser>
+        \(seriesBody)
         <c:axId val="1"/><c:axId val="2"/>
       </c:barChart>
       """
@@ -156,12 +152,7 @@ extension XLSXCodec {
       seriesInner = """
       <c:lineChart>
         <c:grouping val="standard"/>
-        <c:ser>
-          <c:idx val="0"/><c:order val="0"/>
-          <c:tx><c:v>\(escapeXML(chart.title))</c:v></c:tx>
-          <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-          <c:val><c:numRef><c:f>\(escapeXML(exportValRef))</c:f></c:numRef></c:val>
-        </c:ser>
+        \(seriesBody)
         <c:axId val="1"/><c:axId val="2"/>
       </c:lineChart>
       """
@@ -169,12 +160,7 @@ extension XLSXCodec {
       seriesInner = """
       <c:areaChart>
         <c:grouping val="standard"/>
-        <c:ser>
-          <c:idx val="0"/><c:order val="0"/>
-          <c:tx><c:v>\(escapeXML(chart.title))</c:v></c:tx>
-          <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-          <c:val><c:numRef><c:f>\(escapeXML(exportValRef))</c:f></c:numRef></c:val>
-        </c:ser>
+        \(seriesBody)
         <c:axId val="1"/><c:axId val="2"/>
       </c:areaChart>
       """
@@ -184,25 +170,110 @@ extension XLSXCodec {
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
       <c:chart>
-        <c:title>
-          <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(chart.title))</a:t></a:r></a:p></c:rich></c:tx>
-          <c:overlay val="0"/>
-        </c:title>
+        \(titleXML(chart))
         <c:plotArea>
           <c:layout/>
           \(seriesInner)
-          <c:catAx>
-            <c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling>
-            <c:axPos val="b"/><c:crossAx val="2"/>
-          </c:catAx>
-          <c:valAx>
-            <c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling>
-            <c:axPos val="l"/><c:crossAx val="1"/>
-          </c:valAx>
+          \(axisXML(tag: "c:catAx", id: "1", position: "b", cross: "2", title: chart.categoryAxisTitle, gridlines: chart.showsGridlines))
+          \(axisXML(tag: "c:valAx", id: "2", position: "l", cross: "1", title: chart.valueAxisTitle, gridlines: chart.showsGridlines))
         </c:plotArea>
-        <c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>
+        \(legendXML(chart))
       </c:chart>
     </c:chartSpace>
+    """
+  }
+
+  private static func seriesXML(_ chart: SheetChart, catRef: String, valRef: String) -> String {
+    let seriesName = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let name = seriesName.isEmpty ? chart.kind.title : seriesName
+    let color = chart.seriesColor ?? SheetChart.defaultSeriesColor(for: chart.kind)
+    let fill = solidFillXML(color)
+    let shape: String
+    switch chart.kind {
+    case .line:
+      shape = """
+      <c:spPr><a:ln w="19050">\(fill)</a:ln></c:spPr>
+      <c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>\(fill)</c:spPr></c:marker>
+      """
+    case .bar, .area:
+      shape = "<c:spPr>\(fill)</c:spPr>"
+    }
+    let points = chart.pointColors.keys.sorted().compactMap { index -> String? in
+      guard let point = chart.pointColors[index] else { return nil }
+      let pointFill = solidFillXML(point)
+      return """
+      <c:dPt><c:idx val="\(index)"/>\(pointShapeXML(pointFill, kind: chart.kind))</c:dPt>
+      """
+    }.joined()
+    return """
+    <c:ser>
+      <c:idx val="0"/><c:order val="0"/>
+      <c:tx><c:v>\(escapeXML(name))</c:v></c:tx>
+      \(shape)
+      \(points)
+      <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
+      <c:val><c:numRef><c:f>\(escapeXML(valRef))</c:f></c:numRef></c:val>
+    </c:ser>
+    """
+  }
+
+  private static func pointShapeXML(_ fill: String, kind: SheetChart.Kind) -> String {
+    switch kind {
+    case .line:
+      return "<c:marker><c:symbol val=\"circle\"/><c:spPr>\(fill)</c:spPr></c:marker><c:spPr><a:ln>\(fill)</a:ln></c:spPr>"
+    case .bar, .area:
+      return "<c:spPr>\(fill)</c:spPr>"
+    }
+  }
+
+  private static func solidFillXML(_ color: CodableColor) -> String {
+    "<a:solidFill><a:srgbClr val=\"\(rgbHex(color))\"/></a:solidFill>"
+  }
+
+  private static func titleXML(_ chart: SheetChart) -> String {
+    let title = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !title.isEmpty else { return #"<c:autoTitleDeleted val="1"/>"# }
+    return """
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(title))</a:t></a:r></a:p></c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    """
+  }
+
+  private static func legendXML(_ chart: SheetChart) -> String {
+    if chart.showsLegend {
+      return #"<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>"#
+    }
+    return #"<c:legend><c:delete val="1"/></c:legend>"#
+  }
+
+  private static func axisXML(
+    tag: String,
+    id: String,
+    position: String,
+    cross: String,
+    title: String,
+    gridlines: Bool
+  ) -> String {
+    let grid = gridlines ? "<c:majorGridlines/>" : ""
+    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let titleXML = trimmed.isEmpty ? "" : """
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(trimmed))</a:t></a:r></a:p></c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    """
+    return """
+    <\(tag)>
+      <c:axId val="\(id)"/>
+      <c:scaling><c:orientation val="minMax"/></c:scaling>
+      <c:axPos val="\(position)"/>
+      \(grid)
+      \(titleXML)
+      <c:crossAx val="\(cross)"/>
+    </\(tag)>
     """
   }
 }
