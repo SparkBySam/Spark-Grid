@@ -172,9 +172,32 @@ struct SheetChartView: View {
     return Self.computePoints(chart: chart, viewModel: viewModel).totalCount
   }
 
-  /// Room under the plot for category names. Charts subtracts this from the
-  /// view height; the plot is not placed when that remainder is under 1pt.
+  /// Ideal room under the plot for category names. Charts subtracts the
+  /// *actual* padding we hand it from the proposed height, so handing it
+  /// this constant unconditionally let the padding alone exceed a small
+  /// proposed height (side panel mid-resize, first layout, or an on-sheet
+  /// card squeezed by its title) and Charts trapped computing a negative
+  /// plot height inside `PositionScaleRange.plotFrame`. `plotSlot(in:)`
+  /// scales the real padding down instead, so it can never reach that.
   static let plotBottomInset: CGFloat = 20
+  /// Smallest interior height/width we ever ask Charts to lay out a plot
+  /// into. Generous enough to leave room for Charts' own automatic axis
+  /// insets too, not just our explicit bottom padding.
+  static let minimumPlotHeight: CGFloat = 32
+  static let minimumPlotWidth: CGFloat = 60
+  /// Below this, the reserved strip under the plot is too thin to draw the
+  /// category-label overlay without clipping it; the plot itself still draws.
+  private static let minimumCategoryLabelPadding: CGFloat = 14
+
+  /// Bottom plot padding clamped so it can never reach `availableHeight`,
+  /// no matter how small the proposed size is. `idealPadding` (20) used to
+  /// be handed to `.chartPlotStyle` unconditionally; once `availableHeight`
+  /// dropped below it (side panel mid-resize, first layout, or an on-sheet
+  /// card squeezed by its title), Charts computed a negative plot height in
+  /// `PositionScaleRange.plotFrame` and trapped.
+  static func clampedBottomPadding(idealPadding: CGFloat, availableHeight: CGFloat) -> CGFloat {
+    max(0, min(idealPadding, availableHeight - minimumPlotHeight))
+  }
 
   var body: some View {
     GeometryReader { geo in
@@ -203,12 +226,12 @@ struct SheetChartView: View {
         .frame(width: innerWidth, height: innerHeight)
         .position(x: size.width / 2, y: size.height / 2)
       }
-    } else if let slot = plotSlotHeight(in: size) {
+    } else if let slot = plotSlot(in: size) {
       let caption = captionHeight
       let spacing: CGFloat = caption >= 1 ? 6 : 0
       VStack(alignment: .leading, spacing: spacing) {
-        chartBody
-          .frame(width: size.width, height: slot)
+        chartBody(bottomPadding: slot.bottomPadding, showAxisLabels: slot.showAxisLabels)
+          .frame(width: size.width, height: slot.height)
         if caption >= 1 {
           Text("Showing first \(ChartPreviewSeries.maxPreviewPoints) of \(renderTotalCount)")
             .font(.system(size: 9))
@@ -224,15 +247,20 @@ struct SheetChartView: View {
     renderTotalCount > ChartPreviewSeries.maxPreviewPoints ? 14 : 0
   }
 
-  /// Chart view height, or nil when the plot inset would reverse the edges.
-  private func plotSlotHeight(in size: CGSize) -> CGFloat? {
-    guard size.width >= 1 else { return nil }
+  /// Chart slot sized from the proposed size, with the bottom padding and
+  /// axis labels scaled to what is actually available so neither can ever
+  /// exceed it. `nil` only when there is no positive height to place at all.
+  private func plotSlot(in size: CGSize) -> (height: CGFloat, bottomPadding: CGFloat, showAxisLabels: Bool)? {
     let spacing: CGFloat = captionHeight >= 1 ? 6 : 0
-    let slotBottom = size.height - captionHeight - spacing
-    guard OnSheetChartGeometry.placedHeight(top: Self.plotBottomInset, bottom: slotBottom) != nil else {
+    guard let height = OnSheetChartGeometry.placedHeight(top: 0, bottom: size.height - captionHeight - spacing) else {
       return nil
     }
-    return slotBottom
+    // Scaled down (never past zero) once the slot is too short to spare the
+    // full inset — this is what actually keeps the padding inside the
+    // proposed size, rather than just skipping the chart near the boundary.
+    let bottomPadding = Self.clampedBottomPadding(idealPadding: Self.plotBottomInset, availableHeight: height)
+    let showAxisLabels = size.width >= Self.minimumPlotWidth
+    return (height, bottomPadding, showAxisLabels)
   }
 
   private var emptyDetail: String {
@@ -244,8 +272,14 @@ struct SheetChartView: View {
     }
   }
 
+  /// - Parameters:
+  ///   - bottomPadding: Bottom plot padding, already clamped by `plotSlot(in:)`
+  ///     so it never exceeds the height this view is given.
+  ///   - showAxisLabels: Hides the leading value-axis labels (and the width
+  ///     Charts reserves for them) once the proposed width is too narrow to
+  ///     spare that room, e.g. mid-resize of the side panel.
   @ViewBuilder
-  private var chartBody: some View {
+  private func chartBody(bottomPadding: CGFloat, showAxisLabels: Bool) -> some View {
     let points = renderPoints
     let labelIndexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
     let lineGradient = LinearGradient(
@@ -290,17 +324,19 @@ struct SheetChartView: View {
     .chartYScale(domain: yDomain)
     .chartXScale(domain: -0.5...(Double(max(0, points.count - 1)) + 0.5))
     .chartPlotStyle { plot in
-      plot.padding(.bottom, Self.plotBottomInset)
+      plot.padding(.bottom, bottomPadding)
     }
     .chartYAxis {
-      AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
-          .foregroundStyle(Color.secondary.opacity(0.3))
-        AxisValueLabel {
-          if let number = value.as(Double.self) {
-            Text(Self.formatAxisNumber(number))
-              .font(.system(size: 9))
-              .foregroundStyle(.secondary)
+      if showAxisLabels {
+        AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+          AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+            .foregroundStyle(Color.secondary.opacity(0.3))
+          AxisValueLabel {
+            if let number = value.as(Double.self) {
+              Text(Self.formatAxisNumber(number))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            }
           }
         }
       }
@@ -315,7 +351,8 @@ struct SheetChartView: View {
       GeometryReader { geo in
         if let plotAnchor = proxy.plotFrame {
           let plot = geo[plotAnchor].standardized
-          if OnSheetChartGeometry.placedHeight(top: plot.minY, bottom: plot.maxY) != nil {
+          if bottomPadding >= Self.minimumCategoryLabelPadding,
+             OnSheetChartGeometry.placedHeight(top: plot.minY, bottom: plot.maxY) != nil {
             let placements = categoryPlacements(plot: plot, chartWidth: geo.size.width)
             ForEach(placements, id: \.index) { placement in
               Text(placement.text)
