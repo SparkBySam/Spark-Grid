@@ -94,10 +94,12 @@ enum FormulaFunctionCatalog {
     FormulaFunctionEntry(name: "TRIM", kind: .text, arguments: "text"),
     FormulaFunctionEntry(name: "UPPER", kind: .text, arguments: "text"),
 
+    FormulaFunctionEntry(name: "HLOOKUP", kind: .lookup, arguments: "lookup_value, table_array, row_index_num, [range_lookup]"),
     FormulaFunctionEntry(name: "INDEX", kind: .lookup, arguments: "array, row_num, [column_num]"),
     FormulaFunctionEntry(name: "MATCH", kind: .lookup, arguments: "lookup_value, lookup_array, [match_type]"),
     FormulaFunctionEntry(name: "VLOOKUP", kind: .lookup, arguments: "lookup_value, table_array, col_index_num, [range_lookup]"),
-    FormulaFunctionEntry(name: "XLOOKUP", kind: .lookup, arguments: "lookup_value, lookup_array, return_array, [if_not_found]"),
+    FormulaFunctionEntry(name: "XLOOKUP", kind: .lookup, arguments: "lookup_value, lookup_array, return_array, [if_not_found], [match_mode]"),
+    FormulaFunctionEntry(name: "XMATCH", kind: .lookup, arguments: "lookup_value, lookup_array, [match_mode]"),
 
     FormulaFunctionEntry(name: "DATE", kind: .dateTime, arguments: "year, month, day"),
     FormulaFunctionEntry(name: "DAY", kind: .dateTime, arguments: "serial_number"),

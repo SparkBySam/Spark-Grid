@@ -1,5 +1,24 @@
 import Foundation
 
+private enum XLookupMatchMode {
+  case exact
+  case nextSmaller
+  case nextLarger
+  case wildcard
+}
+
+private enum XLookupHit {
+  case found(Int)
+  case notFound
+  case failed(CellValue)
+}
+
+private enum LookupKind {
+  case number(Double)
+  case text(String)
+  case bool(Bool)
+}
+
 struct FormulaEvaluator {
   /// Resolves a cell reference (local or cross-sheet).
   typealias ValueLookup = (FormulaRef) -> CellValue
@@ -273,10 +292,14 @@ struct FormulaEvaluator {
       return evalXLOOKUP(args)
     case "VLOOKUP":
       return evalVLOOKUP(args)
+    case "HLOOKUP":
+      return evalHLOOKUP(args)
     case "INDEX":
       return evalINDEX(args)
     case "MATCH":
       return evalMATCH(args)
+    case "XMATCH":
+      return evalXMATCH(args)
     case "TODAY":
       guard args.isEmpty else { return .error(.value) }
       return .number(ExcelDate.serial(from: Date()))
@@ -509,7 +532,8 @@ struct FormulaEvaluator {
   }
 
   private func evalXLOOKUP(_ args: [FormulaExpr]) -> CellValue {
-    guard args.count >= 3, args.count <= 4 else { return .error(.value) }
+    // 4-argument calls stay exact: the fourth value is if_not_found, not a match mode.
+    guard args.count >= 3, args.count <= 5 else { return .error(.value) }
     let needle = evaluate(args[0])
     if case .error = needle { return needle }
 
@@ -520,31 +544,160 @@ struct FormulaEvaluator {
       return .error(.value)
     }
 
-    for (index, value) in lookupValues.enumerated() {
-      if case .error = value { return value }
-      if valuesEqual(needle, value) {
-        let result = returnValues[index]
-        if case .error = result { return result }
-        return result
-      }
+    let mode: XLookupMatchMode
+    if args.count == 5 {
+      let modeValue = evaluate(args[4])
+      if case .error = modeValue { return modeValue }
+      guard let parsed = xLookupMatchMode(from: modeValue) else { return .error(.value) }
+      mode = parsed
+    } else {
+      mode = .exact
     }
 
-    if args.count == 4 {
-      return evaluate(args[3])
+    switch xLookupIndex(needle: needle, in: lookupValues, mode: mode) {
+    case .found(let index):
+      let result = returnValues[index]
+      if case .error = result { return result }
+      return result
+    case .failed(let error):
+      return error
+    case .notFound:
+      if args.count >= 4 {
+        return evaluate(args[3])
+      }
+      return .error(.na)
     }
-    return .error(.na)
+  }
+
+  private func evalXMATCH(_ args: [FormulaExpr]) -> CellValue {
+    guard args.count == 2 || args.count == 3 else { return .error(.value) }
+    let needle = evaluate(args[0])
+    if case .error = needle { return needle }
+    guard let values = rangeValues(args[1]), !values.isEmpty else { return .error(.value) }
+
+    let mode: XLookupMatchMode
+    if args.count == 3 {
+      let modeValue = evaluate(args[2])
+      if case .error = modeValue { return modeValue }
+      guard let parsed = xLookupMatchMode(from: modeValue) else { return .error(.value) }
+      mode = parsed
+    } else {
+      mode = .exact
+    }
+
+    switch xLookupIndex(needle: needle, in: values, mode: mode) {
+    case .found(let index):
+      return .number(Double(index + 1))
+    case .failed(let error):
+      return error
+    case .notFound:
+      return .error(.na)
+    }
+  }
+
+  /// 0 exact, -1 next smaller, 1 next larger, 2 wildcard. Anything else is invalid.
+  private func xLookupMatchMode(from value: CellValue) -> XLookupMatchMode? {
+    guard let number = value.asNumber else { return nil }
+    let rounded = number.rounded(.down)
+    guard rounded.isFinite, let code = Int(exactly: rounded) else { return nil }
+    switch code {
+    case 0: return .exact
+    case -1: return .nextSmaller
+    case 1: return .nextLarger
+    case 2: return .wildcard
+    default: return nil
+    }
+  }
+
+  private func xLookupIndex(needle: CellValue, in values: [CellValue], mode: XLookupMatchMode) -> XLookupHit {
+    switch mode {
+    case .exact:
+      for (index, value) in values.enumerated() {
+        if case .error = value { return .failed(value) }
+        if valuesEqual(needle, value) { return .found(index) }
+      }
+      return .notFound
+    case .wildcard:
+      let pattern = needle.asString
+      for (index, value) in values.enumerated() {
+        if case .error = value { return .failed(value) }
+        if isBlankForCount(value) { continue }
+        if excelWildcardMatch(criteriaText(value), pattern: pattern) { return .found(index) }
+      }
+      return .notFound
+    case .nextSmaller, .nextLarger:
+      var best: (index: Int, key: CellValue)?
+      for (index, value) in values.enumerated() {
+        if case .error = value { return .failed(value) }
+        if valuesEqual(needle, value) { return .found(index) }
+        guard let order = lookupCompare(value, needle) else { continue }
+        let isCandidate = mode == .nextSmaller
+          ? order == .orderedAscending
+          : order == .orderedDescending
+        guard isCandidate else { continue }
+        if let current = best {
+          guard let against = lookupCompare(value, current.key) else { continue }
+          let closer = mode == .nextSmaller
+            ? against == .orderedDescending
+            : against == .orderedAscending
+          if closer { best = (index, value) }
+        } else {
+          best = (index, value)
+        }
+      }
+      if let best { return .found(best.index) }
+      return .notFound
+    }
+  }
+
+  /// Numbers, then text, then booleans. Text compares without case.
+  private func lookupCompare(_ lhs: CellValue, _ rhs: CellValue) -> ComparisonResult? {
+    guard let left = lookupKind(lhs), let right = lookupKind(rhs) else { return nil }
+    switch (left, right) {
+    case (.number(let left), .number(let right)):
+      if left < right { return .orderedAscending }
+      if left > right { return .orderedDescending }
+      return .orderedSame
+    case (.text(let left), .text(let right)):
+      return left.caseInsensitiveCompare(right)
+    case (.bool(let left), .bool(let right)):
+      if left == right { return .orderedSame }
+      return left ? .orderedDescending : .orderedAscending
+    case (.number, .text), (.number, .bool), (.text, .bool):
+      return .orderedAscending
+    case (.text, .number), (.bool, .number), (.bool, .text):
+      return .orderedDescending
+    }
+  }
+
+  private func lookupKind(_ value: CellValue) -> LookupKind? {
+    switch value {
+    case .number(let number): return .number(number)
+    case .string(let text): return .text(text)
+    case .bool(let flag): return .bool(flag)
+    case .blank, .error: return nil
+    }
   }
 
   private func evalVLOOKUP(_ args: [FormulaExpr]) -> CellValue {
+    tableLookup(args, horizontal: false)
+  }
+
+  private func evalHLOOKUP(_ args: [FormulaExpr]) -> CellValue {
+    tableLookup(args, horizontal: true)
+  }
+
+  /// VLOOKUP walks the first column. HLOOKUP walks the first row. Same exact and approximate rules.
+  private func tableLookup(_ args: [FormulaExpr], horizontal: Bool) -> CellValue {
     guard args.count >= 3, args.count <= 4 else { return .error(.value) }
     let needle = evaluate(args[0])
     if case .error = needle { return needle }
 
     guard case .range(let start, let end) = resolveToRange(args[1]) else { return .error(.value) }
-    let colIndexValue = evaluate(args[2])
-    if case .error = colIndexValue { return colIndexValue }
-    guard let colIndexNumber = colIndexValue.asNumber else { return .error(.value) }
-    let colIndex = Int(colIndexNumber.rounded(.down))
+    let indexValue = evaluate(args[2])
+    if case .error = indexValue { return indexValue }
+    guard let indexNumber = indexValue.asNumber else { return .error(.value) }
+    let index = Int(indexNumber.rounded(.down))
 
     var exact = false // Excel default: approximate match
     if args.count == 4 {
@@ -555,36 +708,35 @@ struct FormulaEvaluator {
     }
 
     let n = normalizedBounds(start: start, end: end)
-    let width = n.maxCol - n.minCol + 1
-    guard colIndex >= 1, colIndex <= width else { return .error(.ref) }
+    let span = horizontal ? (n.maxRow - n.minRow + 1) : (n.maxCol - n.minCol + 1)
+    guard index >= 1, index <= span else { return .error(.ref) }
 
-    let resultCol = n.minCol + colIndex - 1
+    let resultOffset = (horizontal ? n.minRow : n.minCol) + index - 1
     var approximate: (key: Double, value: CellValue)?
+    let outerStart = horizontal ? n.minCol : n.minRow
+    let outerEnd = horizontal ? n.maxCol : n.maxRow
 
-    for row in n.minRow...n.maxRow {
+    for position in outerStart...outerEnd {
       let keyRef = FormulaRef(
         sheet: start.sheet,
-        row: row,
-        col: n.minCol,
+        row: horizontal ? n.minRow : position,
+        col: horizontal ? position : n.minCol,
         absRow: false,
         absCol: false
       )
       let key = lookup(keyRef)
       if case .error = key { return key }
 
-      let resultRef = FormulaRef(
+      let result = lookup(FormulaRef(
         sheet: start.sheet,
-        row: row,
-        col: resultCol,
+        row: horizontal ? resultOffset : position,
+        col: horizontal ? position : resultOffset,
         absRow: false,
         absCol: false
-      )
-      let result = lookup(resultRef)
+      ))
 
       if exact {
-        if valuesEqual(needle, key) {
-          return result
-        }
+        if valuesEqual(needle, key) { return result }
       } else {
         guard let needleNum = needle.asNumber, let keyNum = key.asNumber else { continue }
         if keyNum <= needleNum {
@@ -595,9 +747,7 @@ struct FormulaEvaluator {
       }
     }
 
-    if exact {
-      return .error(.na)
-    }
+    if exact { return .error(.na) }
     return approximate?.value ?? .error(.na)
   }
 
