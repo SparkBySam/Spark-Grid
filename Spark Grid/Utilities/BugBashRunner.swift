@@ -1393,53 +1393,62 @@ enum BugBashRunner {
     guard moved.anchorCol == 1, moved.anchorRow == 5, moved.colSpan == 8, moved.rowSpan == 12 else {
       return Result(name: name, passed: false, detail: "move \(moved)")
     }
-    let corrected = SpreadsheetGridNSView.chartDragTranslation(dx: 100, dy: 30)
-    guard corrected.width == 100, corrected.height == -30 else {
-      return Result(name: name, passed: false, detail: "vertical sign \(corrected)")
+    let downward = SpreadsheetGridNSView.chartDragTranslation(dx: 100, dy: 30)
+    guard downward.width == 100, downward.height == 30 else {
+      return Result(name: name, passed: false, detail: "downward sign \(downward)")
     }
-    let correctedMove = OnSheetChartGeometry.anchorAfterDrag(
+    let followed = OnSheetChartGeometry.anchorAfterDrag(
       start: start,
       handle: .body,
       startRect: rect,
-      translation: corrected,
+      translation: downward,
       minimumSpan: SheetChart.minimumSpan,
       rowLimit: 100,
       columnLimit: 26,
       columnAt: columnAt,
       rowAt: rowAt
     )
-    guard correctedMove.anchorCol == 1, correctedMove.anchorRow == 2,
-          correctedMove.colSpan == 8, correctedMove.rowSpan == 12
-    else {
-      return Result(name: name, passed: false, detail: "negated move \(correctedMove)")
+    guard followed.anchorCol == 1, followed.anchorRow == 5, followed.rowSpan == 12 else {
+      return Result(name: name, passed: false, detail: "pointer down \(followed)")
     }
-    let correctedBottom = OnSheetChartGeometry.anchorAfterDrag(
+    let grown = OnSheetChartGeometry.anchorAfterDrag(
       start: start,
       handle: .bottom,
       startRect: rect,
-      translation: corrected,
+      translation: downward,
       minimumSpan: SheetChart.minimumSpan,
       rowLimit: 100,
       columnLimit: 26,
       columnAt: columnAt,
       rowAt: rowAt
     )
-    guard correctedBottom.anchorRow == 4, correctedBottom.anchorCol == 0, correctedBottom.rowSpan == 11 else {
-      return Result(name: name, passed: false, detail: "negated bottom \(correctedBottom)")
+    guard grown.anchorRow == 4, grown.anchorCol == 0, grown.rowSpan == 14 else {
+      return Result(name: name, passed: false, detail: "bottom follows \(grown)")
     }
-    let correctedTop = OnSheetChartGeometry.anchorAfterDrag(
+    let loweredTop = OnSheetChartGeometry.anchorAfterDrag(
       start: start,
       handle: .top,
       startRect: rect,
-      translation: corrected,
+      translation: downward,
       minimumSpan: SheetChart.minimumSpan,
       rowLimit: 100,
       columnLimit: 26,
       columnAt: columnAt,
       rowAt: rowAt
     )
-    guard correctedTop.anchorRow == 2, correctedTop.rowSpan == 14, correctedTop.anchorCol == 0 else {
-      return Result(name: name, passed: false, detail: "negated top \(correctedTop)")
+    guard loweredTop.anchorRow == 5, loweredTop.rowSpan == 11, loweredTop.anchorCol == 0 else {
+      return Result(name: name, passed: false, detail: "top follows \(loweredTop)")
+    }
+    let layer = CGRect(x: 28, y: 28, width: 800, height: 600)
+    let atRest = CGRect(x: 100, y: 200, width: 320, height: 180)
+    let scrolled = atRest.offsetBy(dx: 0, dy: -40)
+    let hostAtRest = OnSheetChartGeometry.hostFrame(chartRect: atRest, layerFrame: layer)
+    let hostScrolled = OnSheetChartGeometry.hostFrame(chartRect: scrolled, layerFrame: layer)
+    guard hostAtRest.minY == 172, hostScrolled.minY == 132,
+          hostAtRest.minY - hostScrolled.minY == 40,
+          hostScrolled.minX == hostAtRest.minX
+    else {
+      return Result(name: name, passed: false, detail: "scroll host \(hostAtRest) \(hostScrolled)")
     }
     let nudged = OnSheetChartGeometry.anchorAfterDrag(
       start: start,
