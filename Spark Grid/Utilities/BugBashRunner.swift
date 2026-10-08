@@ -73,6 +73,7 @@ enum BugBashRunner {
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
     results.append(everydayFormulas())
+    results.append(lookupFormulas())
     results.append(formulaFunctionPicker())
     results.append(excelFormatCodes())
     results.append(definedNamesResolve())
@@ -2930,6 +2931,154 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "NOW got \(now.displayString)")
     }
     return Result(name: name, passed: true, detail: "criteria, wildcards, text, and rounding")
+  }
+
+  private static func lookupFormulas() -> Result {
+    let name = "lookup formulas"
+    let missing = ["HLOOKUP", "XMATCH", "XLOOKUP", "VLOOKUP"].filter { !FormulaFunctions.all.contains($0) }
+    if !missing.isEmpty {
+      return Result(name: name, passed: false, detail: "catalog missing \(missing.joined(separator: ", "))")
+    }
+
+    let cells: [CellAddress: String] = [
+      CellAddress(row: 0, col: 0): "10",
+      CellAddress(row: 1, col: 0): "20",
+      CellAddress(row: 2, col: 0): "30",
+      CellAddress(row: 3, col: 0): "15",
+      CellAddress(row: 4, col: 0): "20",
+      CellAddress(row: 0, col: 1): "a",
+      CellAddress(row: 1, col: 1): "b",
+      CellAddress(row: 2, col: 1): "c",
+      CellAddress(row: 3, col: 1): "d",
+      CellAddress(row: 4, col: 1): "later",
+      CellAddress(row: 0, col: 2): "east",
+      CellAddress(row: 1, col: 2): "west",
+      CellAddress(row: 2, col: 2): "eastern",
+      CellAddress(row: 0, col: 3): "5",
+      CellAddress(row: 1, col: 3): "7",
+      CellAddress(row: 2, col: 3): "9",
+      CellAddress(row: 0, col: 4): "apple",
+      CellAddress(row: 1, col: 4): "banana",
+      CellAddress(row: 2, col: 4): "cherry",
+      CellAddress(row: 0, col: 5): "1",
+      CellAddress(row: 1, col: 5): "2",
+      CellAddress(row: 2, col: 5): "3",
+      CellAddress(row: 1, col: 6): "star*",
+      CellAddress(row: 2, col: 6): "starX",
+      CellAddress(row: 1, col: 7): "11",
+      CellAddress(row: 2, col: 7): "22",
+      CellAddress(row: 5, col: 0): "10",
+      CellAddress(row: 5, col: 1): "20",
+      CellAddress(row: 5, col: 2): "30",
+      CellAddress(row: 6, col: 0): "a",
+      CellAddress(row: 6, col: 1): "b",
+      CellAddress(row: 6, col: 2): "c",
+      CellAddress(row: 8, col: 0): "30",
+      CellAddress(row: 8, col: 1): "10",
+      CellAddress(row: 8, col: 2): "20",
+      CellAddress(row: 9, col: 0): "x",
+      CellAddress(row: 9, col: 1): "y",
+      CellAddress(row: 9, col: 2): "z",
+      CellAddress(row: 11, col: 0): "east",
+      CellAddress(row: 11, col: 1): "west",
+      CellAddress(row: 11, col: 2): "eastern",
+      CellAddress(row: 12, col: 0): "5",
+      CellAddress(row: 12, col: 1): "7",
+      CellAddress(row: 12, col: 2): "9",
+      CellAddress(row: 14, col: 0): "10",
+      CellAddress(row: 14, col: 1): "20",
+      CellAddress(row: 14, col: 2): "20",
+      CellAddress(row: 15, col: 0): "p",
+      CellAddress(row: 15, col: 1): "q",
+      CellAddress(row: 15, col: 2): "r",
+      CellAddress(row: 19, col: 0): "10",
+      CellAddress(row: 20, col: 0): "20",
+      CellAddress(row: 21, col: 0): "20",
+      CellAddress(row: 19, col: 1): "p",
+      CellAddress(row: 20, col: 1): "q",
+      CellAddress(row: 21, col: 1): "r",
+    ]
+    let cases: [(String, CellValue)] = [
+      ("=VLOOKUP(20,A1:B3,2,FALSE)", .string("b")),
+      ("=VLOOKUP(25,A1:B3,2)", .string("b")),
+      ("=VLOOKUP(25,A1:B3,2,TRUE)", .string("b")),
+      ("=VLOOKUP(20,A20:B22,2)", .string("r")),
+      ("=VLOOKUP(20,A20:B22,2,FALSE)", .string("q")),
+      ("=VLOOKUP(5,A1:B3,2)", .error(.na)),
+      ("=VLOOKUP(20,A1:B3,3,FALSE)", .error(.ref)),
+      ("=VLOOKUP(\"z\",A1:B3,2,FALSE)", .error(.na)),
+      ("=HLOOKUP(20,A6:C7,2,FALSE)", .string("b")),
+      ("=HLOOKUP(25,A6:C7,2)", .string("b")),
+      ("=HLOOKUP(25,A6:C7,2,TRUE)", .string("b")),
+      ("=hlookup(20,A6:C7,1,FALSE)", .number(20)),
+      ("=HLOOKUP(25,A6:C7,2,FALSE)", .error(.na)),
+      ("=HLOOKUP(5,A6:C7,2)", .error(.na)),
+      ("=HLOOKUP(20,A6:C7,3,FALSE)", .error(.ref)),
+      ("=HLOOKUP(10,A6:C7,0,FALSE)", .error(.ref)),
+      ("=HLOOKUP(10,A6:C7,\"x\",FALSE)", .error(.value)),
+      ("=HLOOKUP(10,A6:C7)", .error(.value)),
+      ("=HLOOKUP(25,A9:C10,2)", .string("z")),
+      ("=HLOOKUP(10,A9:C10,2,FALSE)", .string("y")),
+      ("=HLOOKUP(\"WEST\",A12:C13,2,FALSE)", .number(7)),
+      ("=HLOOKUP(\"nope\",A12:C13,2,FALSE)", .error(.na)),
+      ("=HLOOKUP(20,A15:C16,2)", .string("r")),
+      ("=HLOOKUP(20,A15:C16,2,FALSE)", .string("q")),
+      ("=XLOOKUP(20,A1:A3,B1:B3)", .string("b")),
+      ("=XLOOKUP(20,A1:A3,B1:B3,\"missing\")", .string("b")),
+      ("=XLOOKUP(\"z\",A1:A3,B1:B3,9)", .number(9)),
+      ("=XLOOKUP(25,A1:A3,B1:B3,\"missing\")", .string("missing")),
+      ("=XLOOKUP(\"*east*\",C1:C3,D1:D3,\"no\")", .string("no")),
+      ("=XLOOKUP(20,A6:C6,A7:C7)", .string("b")),
+      ("=XLOOKUP(\"APPLE\",E1:E3,F1:F3)", .number(1)),
+      ("=XLOOKUP(20,A1:A3,B1:B3,\"no\",0)", .string("b")),
+      ("=XLOOKUP(25,A1:A5,B1:B5,\"missing\",-1)", .string("b")),
+      ("=XLOOKUP(25,A1:A5,B1:B5,\"missing\",1)", .string("c")),
+      ("=XLOOKUP(5,A1:A4,B1:B4,\"missing\",-1)", .string("missing")),
+      ("=XLOOKUP(40,A1:A4,B1:B4,\"missing\",1)", .string("missing")),
+      ("=XLOOKUP(20,A1:A5,B1:B5,\"missing\",-1)", .string("b")),
+      ("=XLOOKUP(\"blueberry\",E1:E3,F1:F3,\"missing\",-1)", .number(2)),
+      ("=XLOOKUP(\"blueberry\",E1:E3,F1:F3,\"missing\",1)", .number(3)),
+      ("=XLOOKUP(\"aardvark\",E1:E3,F1:F3,\"missing\",-1)", .string("missing")),
+      ("=XLOOKUP(\"date\",E1:E3,F1:F3,\"missing\",1)", .string("missing")),
+      ("=XLOOKUP(25,A6:C6,A7:C7,\"missing\",-1)", .string("b")),
+      ("=XLOOKUP(25,A6:C6,A7:C7,\"missing\",1)", .string("c")),
+      ("=XLOOKUP(\"*east*\",C1:C3,D1:D3,\"no\",2)", .number(5)),
+      ("=XLOOKUP(\"w*\",C1:C3,D1:D3,\"no\",2)", .number(7)),
+      ("=XLOOKUP(\"*ern\",C1:C3,D1:D3,\"no\",2)", .number(9)),
+      ("=XLOOKUP(\"2*\",A1:A3,B1:B3,\"no\",2)", .string("b")),
+      ("=XLOOKUP(\"star~*\",G2:G3,H2:H3,\"no\",2)", .number(11)),
+      ("=XLOOKUP(\"nope*\",C1:C3,D1:D3,\"no\",2)", .string("no")),
+      ("=XLOOKUP(20,A1:A3,B1:B3,\"no\",3)", .error(.value)),
+      ("=XLOOKUP(20,A1:A3,B1:B3,\"no\",0,1)", .error(.value)),
+      ("=XLOOKUP(10,A1:A3)", .error(.value)),
+      ("=XMATCH(20,A1:A3)", .number(2)),
+      ("=XMATCH(\"z\",A1:A3)", .error(.na)),
+      ("=XMATCH(25,A1:A4,-1)", .number(2)),
+      ("=XMATCH(25,A1:A4,1)", .number(3)),
+      ("=XMATCH(5,A1:A4,-1)", .error(.na)),
+      ("=XMATCH(\"blueberry\",E1:E3,-1)", .number(2)),
+      ("=XMATCH(\"blueberry\",E1:E3,1)", .number(3)),
+      ("=XMATCH(\"w*\",C1:C3,2)", .number(2)),
+      ("=XMATCH(\"*ern\",C1:C3,2)", .number(3)),
+      ("=XMATCH(\"star~*\",G2:G3,2)", .number(1)),
+      ("=XMATCH(30,A6:C6)", .number(3)),
+      ("=XMATCH(25,A6:C6,-1)", .number(2)),
+      ("=XMATCH(25,A6:C6,1)", .number(3)),
+      ("=xmatch(20,A1:A3,0)", .number(2)),
+      ("=XMATCH(20,A1:A3,4)", .error(.value)),
+      ("=XMATCH(10)", .error(.value)),
+    ]
+    for (formula, expected) in cases {
+      let value = evalFormula(formula, cells: cells)
+      if !sameCellValue(value, expected) {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "\(formula) got \(value.displayString) expected \(expected.displayString)"
+        )
+      }
+    }
+    return Result(name: name, passed: true, detail: "HLOOKUP, XMATCH, and XLOOKUP match modes")
   }
 
   private static func sameCellValue(_ lhs: CellValue, _ rhs: CellValue) -> Bool {

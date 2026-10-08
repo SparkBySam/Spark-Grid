@@ -10,7 +10,7 @@ enum FormulaFunctions {
     "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN",
     "LEN", "LEFT", "RIGHT", "MID", "TRIM", "UPPER", "LOWER",
     "SUBSTITUTE", "TEXTJOIN", "CONCAT", "CONCATENATE", "TEXT",
-    "XLOOKUP", "VLOOKUP", "INDEX", "MATCH",
+    "XLOOKUP", "XMATCH", "VLOOKUP", "HLOOKUP", "INDEX", "MATCH",
     "TODAY", "NOW", "DATE", "YEAR", "MONTH", "DAY",
   ].sorted()
 

@@ -442,7 +442,7 @@ extension FormulaEvaluator {
     }
   }
 
-  private func criteriaText(_ value: CellValue) -> String {
+  func criteriaText(_ value: CellValue) -> String {
     switch value {
     case .number:
       return value.displayString
@@ -455,7 +455,7 @@ extension FormulaEvaluator {
     }
   }
 
-  private func isBlankForCount(_ value: CellValue) -> Bool {
+  func isBlankForCount(_ value: CellValue) -> Bool {
     switch value {
     case .blank:
       return true
@@ -487,7 +487,7 @@ extension FormulaEvaluator {
     return false
   }
 
-  private func excelWildcardMatch(_ text: String, pattern: String) -> Bool {
+  func excelWildcardMatch(_ text: String, pattern: String) -> Bool {
     let haystack = Array(text.lowercased())
     let needle = Array(pattern.lowercased())
     func match(from textIndex: Int, patternIndex: Int) -> Bool {
