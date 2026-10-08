@@ -56,6 +56,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { sortRemapsMerge() })
     results.append(MainActor.assumeIsolated { insertColumnPastLastColumn() })
     results.append(MainActor.assumeIsolated { selectionSizedInsert() })
+    results.append(MainActor.assumeIsolated { freezeThroughSelection() })
     results.append(MainActor.assumeIsolated { insertChartEmptySelection() })
     results.append(formulaExactTokenSkipsAutocomplete())
     results.append(MainActor.assumeIsolated { editExistingChart() })
@@ -2101,6 +2102,120 @@ enum BugBashRunner {
     }
 
     return Result(name: name, passed: true, detail: "rows and columns match the selection")
+  }
+
+  /// Freeze keeps every row or column through the far edge of the selection.
+  @MainActor
+  private static func freezeThroughSelection() -> Result {
+    let name = "freeze through selection"
+
+    do {
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Rows")]))
+      vm.selectRows(from: 0, to: 2)
+      guard vm.freezeRowsTitle == "Freeze up to row 3",
+            vm.freezeColumnsTitle == "Freeze up to column A"
+      else {
+        return Result(name: name, passed: false, detail: "rows 1–3 titles \(vm.freezeRowsTitle) / \(vm.freezeColumnsTitle)")
+      }
+      guard vm.freezeRowsAtSelection(),
+            vm.activeSheet.frozenRows == 3,
+            vm.activeSheet.frozenColumns == 0
+      else {
+        return Result(name: name, passed: false, detail: "rows 1–3 froze \(vm.activeSheet.frozenRows)")
+      }
+      guard vm.freezeColumnsAtSelection(),
+            vm.activeSheet.frozenColumns == 1,
+            vm.activeSheet.frozenRows == 3
+      else {
+        return Result(name: name, passed: false, detail: "row selection columns froze \(vm.activeSheet.frozenColumns)")
+      }
+    }
+
+    do {
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Cols")]))
+      vm.selectColumns(from: 0, to: 2)
+      guard vm.freezeColumnsTitle == "Freeze up to column C",
+            vm.freezeRowsTitle == "Freeze up to row 1"
+      else {
+        return Result(name: name, passed: false, detail: "columns A–C titles \(vm.freezeColumnsTitle) / \(vm.freezeRowsTitle)")
+      }
+      guard vm.freezeColumnsAtSelection(),
+            vm.activeSheet.frozenColumns == 3,
+            vm.activeSheet.frozenRows == 0
+      else {
+        return Result(name: name, passed: false, detail: "columns A–C froze \(vm.activeSheet.frozenColumns)")
+      }
+      guard vm.freezeRowsAtSelection(),
+            vm.activeSheet.frozenRows == 1,
+            vm.activeSheet.frozenColumns == 3
+      else {
+        return Result(name: name, passed: false, detail: "column selection rows froze \(vm.activeSheet.frozenRows)")
+      }
+    }
+
+    do {
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Below")]))
+      vm.selectRows(from: 4, to: 6)
+      guard vm.freezeRowsTitle == "Freeze up to row 7" else {
+        return Result(name: name, passed: false, detail: "rows 5–7 title \(vm.freezeRowsTitle)")
+      }
+      guard vm.freezeRowsAtSelection(), vm.activeSheet.frozenRows == 7 else {
+        return Result(name: name, passed: false, detail: "rows 5–7 froze \(vm.activeSheet.frozenRows)")
+      }
+    }
+
+    do {
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Right")]))
+      vm.selectColumns(from: 2, to: 4)
+      guard vm.freezeColumnsTitle == "Freeze up to column E" else {
+        return Result(name: name, passed: false, detail: "columns C–E title \(vm.freezeColumnsTitle)")
+      }
+      guard vm.freezeColumnsAtSelection(), vm.activeSheet.frozenColumns == 5 else {
+        return Result(name: name, passed: false, detail: "columns C–E froze \(vm.activeSheet.frozenColumns)")
+      }
+    }
+
+    do {
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Block")]))
+      vm.selectRange(from: CellAddress(row: 4, col: 1), to: CellAddress(row: 7, col: 3))
+      guard vm.freezeRowsTitle == "Freeze up to row 8",
+            vm.freezeColumnsTitle == "Freeze up to column D"
+      else {
+        return Result(name: name, passed: false, detail: "block titles \(vm.freezeRowsTitle) / \(vm.freezeColumnsTitle)")
+      }
+      guard vm.freezeRowsAtSelection(),
+            vm.activeSheet.frozenRows == 8,
+            vm.activeSheet.frozenColumns == 0
+      else {
+        return Result(name: name, passed: false, detail: "block rows froze \(vm.activeSheet.frozenRows)")
+      }
+      guard vm.freezeColumnsAtSelection(),
+            vm.activeSheet.frozenColumns == 4,
+            vm.activeSheet.frozenRows == 8
+      else {
+        return Result(name: name, passed: false, detail: "block columns froze \(vm.activeSheet.frozenColumns) rows \(vm.activeSheet.frozenRows)")
+      }
+    }
+
+    do {
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Reverse")]))
+      vm.selectRange(from: CellAddress(row: 7, col: 3), to: CellAddress(row: 4, col: 1))
+      guard vm.freezeRowsTitle == "Freeze up to row 8",
+            vm.freezeColumnsTitle == "Freeze up to column D"
+      else {
+        return Result(name: name, passed: false, detail: "reverse titles \(vm.freezeRowsTitle) / \(vm.freezeColumnsTitle)")
+      }
+      vm.selectRows(from: 2, to: 0)
+      guard vm.freezeRowsTitle == "Freeze up to row 3" else {
+        return Result(name: name, passed: false, detail: "upward rows title \(vm.freezeRowsTitle)")
+      }
+      vm.selectColumns(from: 2, to: 0)
+      guard vm.freezeColumnsTitle == "Freeze up to column C" else {
+        return Result(name: name, passed: false, detail: "leftward columns title \(vm.freezeColumnsTitle)")
+      }
+    }
+
+    return Result(name: name, passed: true, detail: "freeze follows the bottom row and right column")
   }
 
   private static func legacyChartLandsUnderData() -> Result {

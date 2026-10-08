@@ -3583,8 +3583,8 @@ final class SpreadsheetGridNSView: NSView {
 
     let freeze = NSMenu(title: "Freeze")
     addMenuItem(freeze, "Freeze Panes", #selector(handleMenuFreezePanes(_:)))
-    addMenuItem(freeze, "Freeze Rows", #selector(handleMenuFreezeRows(_:)))
-    addMenuItem(freeze, "Freeze Columns", #selector(handleMenuFreezeColumns(_:)))
+    addMenuItem(freeze, viewModel.freezeRowsTitle, #selector(handleMenuFreezeRows(_:)))
+    addMenuItem(freeze, viewModel.freezeColumnsTitle, #selector(handleMenuFreezeColumns(_:)))
     freeze.addItem(.separator())
     addMenuItem(freeze, "Unfreeze Panes", #selector(handleMenuUnfreezePanes(_:)))
     let freezeItem = NSMenuItem(title: "Freeze", action: nil, keyEquivalent: "")
