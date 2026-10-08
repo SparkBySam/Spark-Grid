@@ -4766,10 +4766,8 @@ enum BugBashRunner {
     let full = NSRange(location: 0, length: (textView.string as NSString).length)
     guard full.length > 0 else { return 0 }
     var marked = 0
-    layout.enumerateTemporaryAttributes(in: full, options: []) { attributes, range, _ in
-      let state = (attributes[.spellingState] as? NSNumber)?.intValue
-        ?? (attributes[.spellingState] as? Int)
-        ?? 0
+    layout.enumerateTemporaryAttribute(.spellingState, in: full, options: []) { value, range, _ in
+      let state = (value as? NSNumber)?.intValue ?? (value as? Int) ?? 0
       if state != 0 {
         marked += range.length
       }
