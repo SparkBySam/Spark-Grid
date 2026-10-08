@@ -175,6 +175,93 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
     }
     return String(value)
   }
+
+  var primaryEditText: String? {
+    switch self {
+    case .greaterThan(let v), .lessThan(let v), .greaterOrEqual(let v), .lessOrEqual(let v),
+         .equal(let v), .notEqual(let v):
+      return Self.editNumber(v)
+    case .between(let a, _), .notBetween(let a, _):
+      return Self.editNumber(a)
+    case .textContains(let s):
+      return s
+    case .formula(let f):
+      return f
+    case .blanks, .nonBlanks, .colorScale, .dataBar, .iconSet:
+      return nil
+    }
+  }
+
+  var secondaryEditText: String? {
+    switch self {
+    case .between(_, let b), .notBetween(_, let b):
+      return Self.editNumber(b)
+    default:
+      return nil
+    }
+  }
+
+  var editsValues: Bool {
+    switch self {
+    case .blanks, .nonBlanks, .colorScale, .dataBar, .iconSet:
+      return false
+    default:
+      return true
+    }
+  }
+
+  func replacingEditValues(primary: String, secondary: String) -> ConditionalFormatPredicate? {
+    switch self {
+    case .greaterThan:
+      guard let v = Self.parseEditNumber(primary) else { return nil }
+      return .greaterThan(v)
+    case .lessThan:
+      guard let v = Self.parseEditNumber(primary) else { return nil }
+      return .lessThan(v)
+    case .greaterOrEqual:
+      guard let v = Self.parseEditNumber(primary) else { return nil }
+      return .greaterOrEqual(v)
+    case .lessOrEqual:
+      guard let v = Self.parseEditNumber(primary) else { return nil }
+      return .lessOrEqual(v)
+    case .equal:
+      guard let v = Self.parseEditNumber(primary) else { return nil }
+      return .equal(v)
+    case .notEqual:
+      guard let v = Self.parseEditNumber(primary) else { return nil }
+      return .notEqual(v)
+    case .between:
+      guard let a = Self.parseEditNumber(primary), let b = Self.parseEditNumber(secondary) else { return nil }
+      return .between(a, b)
+    case .notBetween:
+      guard let a = Self.parseEditNumber(primary), let b = Self.parseEditNumber(secondary) else { return nil }
+      return .notBetween(a, b)
+    case .textContains:
+      guard !primary.isEmpty else { return nil }
+      return .textContains(primary)
+    case .formula:
+      var formula = primary.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !formula.isEmpty else { return nil }
+      if !formula.hasPrefix("=") { formula = "=\(formula)" }
+      return .formula(formula)
+    case .blanks, .nonBlanks, .colorScale, .dataBar, .iconSet:
+      return self
+    }
+  }
+
+  private static func editNumber(_ value: Double) -> String {
+    if value.rounded() == value, abs(value) < 1e12 {
+      return String(Int(value))
+    }
+    return String(value)
+  }
+
+  private static func parseEditNumber(_ raw: String) -> Double? {
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: ",", with: "")
+      .replacingOccurrences(of: "$", with: "")
+    return Double(text)
+  }
 }
 
 struct ConditionalFormatRule: Identifiable, Codable, Equatable, Sendable {
@@ -196,6 +283,15 @@ struct ConditionalFormatRule: Identifiable, Codable, Equatable, Sendable {
     self.stopIfTrue = stopIfTrue
     self.predicate = predicate
     self.style = style
+  }
+
+  func edited(rangeText: String, primary: String, secondary: String) -> ConditionalFormatRule? {
+    guard let range = CellRange.fromA1(rangeText) else { return nil }
+    guard let predicate = predicate.replacingEditValues(primary: primary, secondary: secondary) else { return nil }
+    var copy = self
+    copy.range = range
+    copy.predicate = predicate
+    return copy
   }
 }
 

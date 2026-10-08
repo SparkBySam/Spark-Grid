@@ -73,6 +73,9 @@ enum BugBashRunner {
     results.append(everydayFormulas())
     results.append(excelFormatCodes())
     results.append(definedNamesResolve())
+    results.append(MainActor.assumeIsolated { nameManagerEditsSheet() })
+    results.append(MainActor.assumeIsolated { cellFormatCodeEditsSheet() })
+    results.append(MainActor.assumeIsolated { conditionalFormatRuleEdit() })
     return results
   }
 
@@ -2503,33 +2506,182 @@ enum BugBashRunner {
         return Result(name: name, passed: false, detail: "could not patch workbook.xml")
       }
       let imported = try XLSXCodec.importWorkbook(from: patched)
-      if imported.namedRange(named: "Broken") != nil {
-        return Result(name: name, passed: false, detail: "OFFSET name was imported")
+      guard let broken = imported.namedRange(named: "Broken"),
+            broken.resolvesToRange == false,
+            broken.refersTo?.contains("OFFSET") == true
+      else {
+        return Result(name: name, passed: false, detail: "OFFSET name was dropped or resolved")
       }
       guard let sales = imported.namedRange(named: "Sales"),
+            sales.resolvesToRange,
             sales.sheetName == "Q3 Sales",
             sales.startRow == 0, sales.endRow == 1, sales.startCol == 0,
             let rate = imported.namedRange(named: "Rate"),
+            rate.resolvesToRange,
             rate.sheetName == "Q3 Sales",
             rate.startRow == 0, rate.startCol == 1, rate.endRow == 0, rate.endCol == 1
       else {
         return Result(name: name, passed: false, detail: "Sales or Rate did not parse")
       }
+      var withFormula = imported
+      var formulaSheet = withFormula.activeSheet
+      formulaSheet.setCell(Cell(raw: "=Broken"), at: CellAddress(row: 3, col: 0))
+      withFormula.activeSheet = formulaSheet
       let patchedEngine = FormulaEngine()
-      patchedEngine.rebuild(workbook: imported)
-      let total = patchedEngine.displayValue(at: CellAddress(row: 0, col: 2), sheet: imported.activeSheet)
-      let rateValue = patchedEngine.displayValue(at: CellAddress(row: 1, col: 2), sheet: imported.activeSheet)
-      if total != .number(30) || rateValue != .number(4) {
+      patchedEngine.rebuild(workbook: withFormula)
+      let total = patchedEngine.displayValue(at: CellAddress(row: 0, col: 2), sheet: withFormula.activeSheet)
+      let rateValue = patchedEngine.displayValue(at: CellAddress(row: 1, col: 2), sheet: withFormula.activeSheet)
+      let offsetValue = patchedEngine.displayValue(at: CellAddress(row: 3, col: 0), sheet: withFormula.activeSheet)
+      if total != .number(30) || rateValue != .number(4) || offsetValue != .error(.name) {
         return Result(
           name: name,
           passed: false,
-          detail: "SUM(Sales)=\(total.displayString) Rate=\(rateValue.displayString)"
+          detail: "SUM(Sales)=\(total.displayString) Rate=\(rateValue.displayString) OFFSET=\(offsetValue.displayString)"
         )
+      }
+      let again = try XLSXCodec.exportWorkbook(imported)
+      let workbookXML = XLSXCodec.zipEntryString(archiveData: again, entryPath: "xl/workbook.xml") ?? ""
+      if !workbookXML.contains("name=\"Broken\"") || !workbookXML.contains("OFFSET") {
+        return Result(name: name, passed: false, detail: "export replaced OFFSET with a range")
       }
     } catch {
       return Result(name: name, passed: false, detail: error.localizedDescription)
     }
-    return Result(name: name, passed: true, detail: "Sales and Rate resolve; OFFSET skipped")
+    return Result(name: name, passed: true, detail: "Sales and Rate resolve; OFFSET stays unresolved")
+  }
+
+  private static func nameManagerEditsSheet() -> Result {
+    let name = "name manager edits"
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "20"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "=SUM(Sales)"), at: CellAddress(row: 2, col: 0))
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    if let error = viewModel.upsertDefinedName(originalName: nil, name: "Sales", refersTo: "Sheet1!$A$1:$A$2") {
+      return Result(name: name, passed: false, detail: error)
+    }
+    if viewModel.displayValue(at: CellAddress(row: 2, col: 0)) != .number(30) {
+      return Result(name: name, passed: false, detail: "add did not sum Sales")
+    }
+    if let error = viewModel.upsertDefinedName(originalName: "Sales", name: "Sales", refersTo: "Sheet1!$A$1") {
+      return Result(name: name, passed: false, detail: error)
+    }
+    if viewModel.displayValue(at: CellAddress(row: 2, col: 0)) != .number(10) {
+      return Result(name: name, passed: false, detail: "reference change did not update SUM")
+    }
+    if let error = viewModel.upsertDefinedName(originalName: "Sales", name: "Revenue", refersTo: "Sheet1!$A$1") {
+      return Result(name: name, passed: false, detail: error)
+    }
+    if viewModel.activeSheet.cell(at: CellAddress(row: 2, col: 0)).raw != "=SUM(Revenue)" {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "rename left \(viewModel.activeSheet.cell(at: CellAddress(row: 2, col: 0)).raw)"
+      )
+    }
+    if let error = viewModel.upsertDefinedName(
+      originalName: nil,
+      name: "Grow",
+      refersTo: "OFFSET(Sheet1!$A$1,0,0,2,1)"
+    ) {
+      return Result(name: name, passed: false, detail: error)
+    }
+    guard let grow = viewModel.workbook.namedRange(named: "Grow"), grow.resolvesToRange == false else {
+      return Result(name: name, passed: false, detail: "OFFSET was stored as a range")
+    }
+    viewModel.setCellValue("=Grow", at: CellAddress(row: 3, col: 0))
+    if viewModel.displayValue(at: CellAddress(row: 3, col: 0)) != .error(.name) {
+      return Result(name: name, passed: false, detail: "OFFSET name resolved")
+    }
+    viewModel.deleteDefinedName(named: "Revenue")
+    if viewModel.workbook.namedRange(named: "Revenue") != nil
+      || viewModel.displayValue(at: CellAddress(row: 2, col: 0)) != .error(.name)
+    {
+      return Result(name: name, passed: false, detail: "delete left Revenue in use")
+    }
+    return Result(name: name, passed: true, detail: "add, retarget, rename, unresolved formula, delete")
+  }
+
+  private static func cellFormatCodeEditsSheet() -> Result {
+    let name = "cell format code edits"
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "1234.5"), at: .origin)
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    viewModel.selection = .origin
+    viewModel.setFormatCode("#,##0.00")
+    let grouped = viewModel.displayString(at: .origin)
+    if grouped != "1,234.50" || viewModel.selectedFormat.formatCode != "#,##0.00" {
+      return Result(name: name, passed: false, detail: "thousands \(grouped)")
+    }
+    viewModel.setFormatCode("$#,##0.00")
+    let currency = viewModel.displayString(at: .origin)
+    if currency != "$1,234.50" || viewModel.selectedFormat.numberFormat != .currency {
+      return Result(name: name, passed: false, detail: "currency \(currency)")
+    }
+    guard let noon = octoberEighth2026() else {
+      return Result(name: name, passed: false, detail: "date components")
+    }
+    let serial = ExcelDate.serial(from: noon)
+    viewModel.setCellValue(String(serial), at: .origin)
+    viewModel.setFormatCode("d-mmm-yy")
+    let dated = viewModel.displayString(at: .origin)
+    if dated != "8-Oct-26" || viewModel.selectedFormat.numberFormat != .date {
+      return Result(name: name, passed: false, detail: "date \(dated)")
+    }
+    viewModel.setCellValue("0.75", at: .origin)
+    viewModel.setFormatCode("h:mm AM/PM")
+    let timed = viewModel.displayString(at: .origin)
+    if timed != "6:00 PM" || viewModel.selectedFormat.numberFormat != .time {
+      return Result(name: name, passed: false, detail: "time \(timed)")
+    }
+    viewModel.setCellValue("1234.5", at: .origin)
+    viewModel.setFormatCode(nil)
+    let cleared = viewModel.displayString(at: .origin)
+    if cleared != "1234.5" || viewModel.selectedFormat.formatCode != nil || viewModel.selectedFormat.numberFormat != .general {
+      return Result(name: name, passed: false, detail: "clear \(cleared)")
+    }
+    return Result(name: name, passed: true, detail: "code edits the stored format")
+  }
+
+  private static func conditionalFormatRuleEdit() -> Result {
+    let name = "conditional format rule edit"
+    var sheet = Sheet(name: "Sheet1")
+    let original = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: CellAddress(row: 9, col: 0)),
+      predicate: .greaterThan(10),
+      style: .redFill
+    )
+    sheet.conditionalFormats = [original]
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    guard let edited = viewModel.activeSheet.conditionalFormats[0].edited(
+      rangeText: "B2:B4",
+      primary: "12",
+      secondary: ""
+    ) else {
+      return Result(name: name, passed: false, detail: "edit helper rejected a valid rule")
+    }
+    viewModel.replaceConditionalFormatRule(edited)
+    guard let stored = viewModel.activeSheet.conditionalFormats.first,
+          stored.range.a1Label == "B2:B4",
+          stored.predicate == .greaterThan(12)
+    else {
+      return Result(name: name, passed: false, detail: "rule was not updated on the sheet")
+    }
+    let untouched = ConditionalFormatRule(
+      range: original.range,
+      predicate: .colorScale([
+        ColorScaleStop(type: .min, value: nil, color: CodableColor(red: 1, green: 0, blue: 0, alpha: 1)),
+        ColorScaleStop(type: .max, value: nil, color: CodableColor(red: 0, green: 1, blue: 0, alpha: 1)),
+      ]),
+      style: ConditionalFormatStyle()
+    )
+    guard let kept = untouched.edited(rangeText: "C1:C3", primary: "", secondary: ""),
+          kept.range.a1Label == "C1:C3",
+          kept.predicate == untouched.predicate
+    else {
+      return Result(name: name, passed: false, detail: "color scale range edit changed the rule")
+    }
+    return Result(name: name, passed: true, detail: "stored rule range and value")
   }
 
   private static func octoberEighth2026() -> Date? {

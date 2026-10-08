@@ -1023,6 +1023,22 @@ final class SpreadsheetViewModel {
     }
   }
 
+  /// Stores the number-format code already used on import. Display follows that code.
+  func setFormatCode(_ raw: String?) {
+    updateSelectedFormat { format in
+      let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if trimmed.isEmpty || trimmed.caseInsensitiveCompare("General") == .orderedSame {
+        format.numberFormat = .general
+        format.formatCode = nil
+        format.decimalPlaces = nil
+        return
+      }
+      format.formatCode = trimmed
+      format.numberFormat = ExcelFormatCode.numberFormatKind(for: trimmed)
+      format.decimalPlaces = nil
+    }
+  }
+
   /// Default color used when applying border presets from the toolbar.
   var borderColor: CodableColor?
   /// Line style used when applying border presets (thin, dashed, dotted, …).
@@ -1609,6 +1625,10 @@ final class SpreadsheetViewModel {
   ) {
     var next: [String: NamedRange] = [:]
     for (key, named) in workbook.namedRanges {
+      guard named.resolvesToRange else {
+        next[key] = named
+        continue
+      }
       guard named.sheetName.caseInsensitiveCompare(mutatedSheetName) == .orderedSame else {
         next[key] = named
         continue

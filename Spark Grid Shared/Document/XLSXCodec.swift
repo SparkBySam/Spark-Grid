@@ -131,10 +131,14 @@ enum XLSXCodec {
     for raw in globals + locals {
       let key = raw.name.uppercased()
       if raw.localSheet != nil, named[key] != nil { continue }
-      guard let range = namedRange(name: raw.name, formula: raw.formula, sheets: sheets, localSheet: raw.localSheet) else {
-        continue
-      }
-      named[key] = range
+      let formula = raw.formula.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !formula.isEmpty else { continue }
+      named[key] = DefinedNameFormula.make(
+        name: raw.name,
+        formula: formula,
+        sheets: sheets,
+        localSheet: raw.localSheet
+      )
     }
     return named
   }
@@ -155,68 +159,6 @@ enum XLSXCodec {
       return decodeXMLEntities((attributes as NSString).substring(with: match.range(at: 1)))
     }
     return nil
-  }
-
-  private static func namedRange(name: String, formula: String, sheets: [Sheet], localSheet: String?) -> NamedRange? {
-    var text = formula.trimmingCharacters(in: .whitespacesAndNewlines)
-    if text.hasPrefix("=") {
-      text = String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    text = firstDefinedNameArea(text)
-    if text.hasPrefix("["), let close = text.firstIndex(of: "]") {
-      text = String(text[text.index(after: close)...])
-    }
-    guard !text.isEmpty else { return nil }
-
-    let start: FormulaRef
-    let end: FormulaRef
-    if let range = A1Reference.parseFormulaRange(text) {
-      start = range.0
-      end = range.1
-    } else if let cell = A1Reference.parseFormulaRef(text) {
-      start = cell
-      end = cell
-    } else {
-      return nil
-    }
-
-    var resolvedStart = start
-    var resolvedEnd = end
-    if resolvedStart.sheet == nil {
-      resolvedStart.sheet = localSheet ?? end.sheet ?? sheets.first?.name
-    }
-    if resolvedEnd.sheet == nil {
-      resolvedEnd.sheet = resolvedStart.sheet
-    }
-    guard let sheetName = resolvedStart.sheet ?? resolvedEnd.sheet,
-          let sheet = sheets.first(where: { $0.name.caseInsensitiveCompare(sheetName) == .orderedSame })
-    else { return nil }
-
-    let bounds = A1Reference.resolvedBounds(
-      start: resolvedStart,
-      end: resolvedEnd,
-      maxRow: max(0, sheet.effectiveRowCount - 1),
-      maxCol: max(0, sheet.effectiveColumnCount - 1)
-    )
-    return NamedRange(
-      name: name,
-      sheetName: sheet.name,
-      range: CellRange(
-        start: CellAddress(row: bounds.minRow, col: bounds.minCol),
-        end: CellAddress(row: bounds.maxRow, col: bounds.maxCol)
-      )
-    )
-  }
-
-  private static func firstDefinedNameArea(_ formula: String) -> String {
-    var quoted = false
-    for index in formula.indices {
-      if formula[index] == "'" { quoted.toggle() }
-      if formula[index] == ",", !quoted {
-        return String(formula[..<index]).trimmingCharacters(in: .whitespacesAndNewlines)
-      }
-    }
-    return formula.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   /// CoreXLSX drops shared-formula followers (`<f t="shared" si="…"/>`). Expand them from sheet XML.
@@ -656,22 +598,7 @@ enum XLSXCodec {
   }
 
   private static func classifyNumberFormat(_ code: String) -> CellFormat.NumberFormat {
-    let custom = code.lowercased()
-    if custom == "general" || custom == "@" { return .general }
-    if custom.contains("%") { return .percent }
-    if custom.contains("$") || custom.contains("¥") || custom.contains("€") || custom.contains("£")
-      || custom.contains("₩") || custom.contains("₹") || custom.contains("₽") || custom.contains("[$")
-    {
-      return .currency
-    }
-    if custom.contains("e+") || custom.contains("e-") { return .scientific }
-    let looksLikeDate = (custom.contains("y") || custom.contains("d")) && custom.contains("m")
-    if looksLikeDate { return .date }
-    if custom.contains("h") && (custom.contains(":") || custom.contains("m") || custom.contains("s")) {
-      return .time
-    }
-    if custom.contains("0") || custom.contains("#") { return .number }
-    return .general
+    ExcelFormatCode.numberFormatKind(for: code)
   }
 
   private static func codableColor(from color: Color?) -> CodableColor? {
@@ -881,10 +808,7 @@ enum XLSXCodec {
     if !workbook.namedRanges.isEmpty {
       let items = workbook.namedRanges.values.sorted { $0.name.uppercased() < $1.name.uppercased() }
       let body = items.map { named -> String in
-        let sheetRef = escapeXML(named.sheetName.replacingOccurrences(of: "'", with: "''"))
-        let start = CellAddress(row: named.startRow, col: named.startCol).a1
-        let end = CellAddress(row: named.endRow, col: named.endCol).a1
-        let formula = "'\(sheetRef)'!\(start):\(end)"
+        let formula = named.referenceText
         return #"<definedName name="\#(escapeXML(named.name))">\#(escapeXML(formula))</definedName>"#
       }.joined()
       definedNames = "<definedNames>\(body)</definedNames>"

@@ -43,6 +43,12 @@ struct SpreadsheetFormatCommands: Commands {
       }
       .disabled(viewModel == nil)
 
+      Button("Cell Format…") {
+        guard let viewModel else { return }
+        CellFormatViewerPresenter.present(from: viewModel)
+      }
+      .disabled(viewModel == nil)
+
       Menu("Borders") {
         ForEach(BorderPreset.allCases, id: \.self) { preset in
           Button(preset.title) { viewModel?.applyBorderPreset(preset) }

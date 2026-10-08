@@ -39,6 +39,47 @@ struct CellFormat: Codable, Equatable, Sendable {
   enum NumberFormat: String, Codable, Sendable {
     case general, number, currency, percent, scientific, date, time
   }
+
+  /// Code shown in the cell-format viewer. An imported `formatCode` wins; otherwise the builtin code for `numberFormat`.
+  var viewerFormatCode: String {
+    if let formatCode {
+      let trimmed = formatCode.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty { return trimmed }
+    }
+    return Self.builtinFormatCode(for: numberFormat, decimalPlaces: decimalPlaces)
+  }
+
+  static func builtinFormatCode(for format: NumberFormat, decimalPlaces: Int?) -> String {
+    let places = decimalPlaces ?? defaultViewerPlaces(for: format)
+    switch format {
+    case .general:
+      return "General"
+    case .number:
+      return "0" + fractionZeros(places)
+    case .currency:
+      return "$0" + fractionZeros(places)
+    case .percent:
+      return "0" + fractionZeros(places) + "%"
+    case .scientific:
+      return "0" + fractionZeros(max(places, 2)) + "E+00"
+    case .date:
+      return "m/d/yyyy"
+    case .time:
+      return "h:mm:ss AM/PM"
+    }
+  }
+
+  private static func defaultViewerPlaces(for format: NumberFormat) -> Int {
+    switch format {
+    case .general, .date, .time: return 0
+    case .number, .currency, .percent, .scientific: return 2
+    }
+  }
+
+  private static func fractionZeros(_ places: Int) -> String {
+    guard places > 0 else { return "" }
+    return "." + String(repeating: "0", count: places)
+  }
 }
 
 /// Per-side borders for a cell.
