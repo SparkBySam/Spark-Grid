@@ -1023,7 +1023,8 @@ final class SpreadsheetViewModel {
     }
   }
 
-  /// Stores the number-format code already used on import. Display follows that code.
+  /// Stores a custom number-format code. Empty or General clears it.
+  /// Preset formats go through `setNumberFormat`, which removes a custom code.
   func setFormatCode(_ raw: String?) {
     updateSelectedFormat { format in
       let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

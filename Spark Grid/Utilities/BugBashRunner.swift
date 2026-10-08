@@ -2364,17 +2364,44 @@ enum BugBashRunner {
       return CellFormatRenderer.displayText(for: .number(number), format: format, fallbackRaw: "")
     }
 
+    func shownText(_ text: String, code: String) -> String {
+      var format = CellFormat()
+      format.formatCode = code
+      return CellFormatRenderer.displayText(for: .string(text), format: format, fallbackRaw: text)
+    }
+
+    let sections = "#,##0.00;(#,##0.00);\"zero\";\"id \"@"
     let checks: [(String, String)] = [
       (shown(1234.5, code: "€#,##0.00"), "€1,234.50"),
       (shown(-1234.5, code: "€#,##0.00"), "-€1,234.50"),
       (shown(1234.5, code: "[$£-809]#,##0.00"), "£1,234.50"),
+      (shown(1234.5, code: "\"$\"#,##0.00"), "$1,234.50"),
       (shown(1234.5, code: "#,##0.00"), "1,234.50"),
       (shown(1234.4, code: "#,##0"), "1,234"),
+      (shown(1234.5, code: "#,##0.00 \"kg\""), "1,234.50 kg"),
+      (shown(1234.5, code: "\"Qty \"#,##0.00"), "Qty 1,234.50"),
+      (shown(5, code: "\"say \"\"hi\"\" \"0"), "say \"hi\" 5"),
+      (shown(1, code: "\"a;b\""), "a;b"),
+      (shown(5, code: "0\\;0"), "5;0"),
       (shown(0.5, code: "0%"), "50%"),
       (shown(0.256, code: "0.00%"), "25.60%"),
+      (shown(-0.256, code: "0.00%"), "-25.60%"),
+      (shown(0.256, code: "0.00\"%\""), "0.26%"),
       (shown(-1234.5, code: "$#,##0.00_);($#,##0.00)"), "($1,234.50)"),
+      (shown(1234.5, code: sections), "1,234.50"),
+      (shown(-1234.5, code: sections), "(1,234.50)"),
+      (shown(0, code: sections), "zero"),
+      (shown(0, code: "0;-0;;"), ""),
+      (shown(1234, code: "\"n/a\""), "n/a"),
       (shown(1234, code: "0.00E+00"), "1.23E+03"),
       (shown(1234.5, code: "#,##0.00", places: 0), "1,235"),
+      (shownText("Hello", code: sections), "id Hello"),
+      (shownText("Hello", code: "0;0;0;@\" and \"@"), "Hello and Hello"),
+      (shownText("Hello", code: "0;0;0;\"@\"@"), "@Hello"),
+      (shownText("Hello", code: "0;0;0;[Red]@"), "Hello"),
+      (shownText("Hello", code: "0;0;0;\"n/a\""), "n/a"),
+      (shownText("Hello", code: "0;0;0;\"a;b \"@"), "a;b Hello"),
+      (shownText("Hello", code: "0.00"), "Hello"),
     ]
     for (actual, expected) in checks where actual != expected {
       return Result(name: name, passed: false, detail: "\(actual) expected \(expected)")
@@ -2395,9 +2422,14 @@ enum BugBashRunner {
       (shown(serial, code: "dd/mm/yyyy"), "08/10/2026"),
       (shown(serial, code: "d-mmm-yy"), "8-Oct-26"),
       (shown(serial, code: "m/d/yyyy"), "10/8/2026"),
+      (shown(serial, code: "yyyy-mm-dd"), "2026-10-08"),
+      (shown(serial, code: "d \"of\" mmm yyyy"), "8 of Oct 2026"),
       (shown(0.75, code: "h:mm"), "18:00"),
       (shown(0.75, code: "h:mm AM/PM"), "6:00 PM"),
+      (shown(0.75, code: "h:mm \"AM\""), "18:00 AM"),
+      (shown(0.75, code: "h\"h\" mm\"m\""), "18h 00m"),
       (shown(1.5, code: "[h]:mm:ss"), "36:00:00"),
+      (shown(1.5, code: "[h]:mm \"sec\""), "36:00"),
     ]
     for (actual, expected) in dates where actual != expected {
       return Result(name: name, passed: false, detail: "\(actual) expected \(expected)")
@@ -2415,6 +2447,11 @@ enum BugBashRunner {
       var dated = CellFormat()
       dated.numberFormat = .date
       sheet.setCell(Cell(raw: String(serial), format: dated), at: CellAddress(row: 2, col: 0))
+      var custom = CellFormat()
+      custom.formatCode = sections
+      custom.numberFormat = .number
+      sheet.setCell(Cell(raw: "1234.5", format: custom), at: CellAddress(row: 3, col: 0))
+      sheet.setCell(Cell(raw: "Hello", format: custom), at: CellAddress(row: 4, col: 0))
 
       let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
       let imported = try XLSXCodec.importWorkbook(from: data)
@@ -2456,10 +2493,25 @@ enum BugBashRunner {
       if dateCell.format?.formatCode != "d-mmm-yy" || dateShown != "8-Oct-26" {
         return Result(name: name, passed: false, detail: "builtin 15 \(dateCell.format?.formatCode ?? "") \(dateShown)")
       }
+      let customNumber = imported.sheets[0].cell(at: CellAddress(row: 3, col: 0))
+      let customShown = CellFormatRenderer.displayText(
+        for: .number(1234.5),
+        format: customNumber.format,
+        fallbackRaw: customNumber.raw
+      )
+      if customNumber.format?.formatCode != sections || customShown != "1,234.50" {
+        return Result(name: name, passed: false, detail: "custom reimport \(customNumber.format?.formatCode ?? "") \(customShown)")
+      }
+      let customText = imported.sheets[0].cell(at: CellAddress(row: 4, col: 0))
+      let textShown = CellFormatRenderer.displayText(for: .string("Hello"), format: customText.format, fallbackRaw: "Hello")
+      let rawShown = CellFormatRenderer.displayText(raw: "Hello", format: customText.format)
+      if customText.format?.formatCode != sections || textShown != "id Hello" || rawShown != "id Hello" {
+        return Result(name: name, passed: false, detail: "text reimport \(customText.format?.formatCode ?? "") \(textShown) \(rawShown)")
+      }
     } catch {
       return Result(name: name, passed: false, detail: error.localizedDescription)
     }
-    return Result(name: name, passed: true, detail: "symbol, grouping, and date pattern")
+    return Result(name: name, passed: true, detail: "sections, quotes, symbol, and date pattern")
   }
 
   private static func definedNamesResolve() -> Result {
@@ -2640,7 +2692,83 @@ enum BugBashRunner {
     if cleared != "1234.5" || viewModel.selectedFormat.formatCode != nil || viewModel.selectedFormat.numberFormat != .general {
       return Result(name: name, passed: false, detail: "clear \(cleared)")
     }
-    return Result(name: name, passed: true, detail: "code edits the stored format")
+
+    let sections = "#,##0.00;(#,##0.00);\"zero\";\"id \"@"
+    viewModel.setFormatCode(sections)
+    if viewModel.displayString(at: .origin) != "1,234.50" || viewModel.selectedFormat.formatCode != sections {
+      return Result(name: name, passed: false, detail: "apply \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("-8", at: .origin)
+    if viewModel.displayString(at: .origin) != "(8.00)" {
+      return Result(name: name, passed: false, detail: "negative section \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("0", at: .origin)
+    if viewModel.displayString(at: .origin) != "zero" {
+      return Result(name: name, passed: false, detail: "zero section \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("Hello", at: .origin)
+    if viewModel.displayString(at: .origin) != "id Hello" {
+      return Result(name: name, passed: false, detail: "text section \(viewModel.displayString(at: .origin))")
+    }
+
+    viewModel.setCellValue("1234.5", at: .origin)
+    viewModel.setFormatCode("#,##0.00")
+    viewModel.setNumberFormat(.number)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "1234.50" {
+      return Result(name: name, passed: false, detail: "number preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setFormatCode("€#,##0.00")
+    viewModel.setNumberFormat(.currency)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "$1234.50" {
+      return Result(name: name, passed: false, detail: "currency preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setFormatCode("0.00%")
+    viewModel.setNumberFormat(.general)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "1234.5" {
+      return Result(name: name, passed: false, detail: "general preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("0.5", at: .origin)
+    viewModel.setFormatCode("0%")
+    viewModel.setNumberFormat(.percent)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "50.00%" {
+      return Result(name: name, passed: false, detail: "percent preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("1234", at: .origin)
+    viewModel.setFormatCode("0.00E+00")
+    viewModel.setNumberFormat(.scientific)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "1.23e+03" {
+      return Result(name: name, passed: false, detail: "scientific preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    guard let presetNoon = octoberEighth2026() else {
+      return Result(name: name, passed: false, detail: "date components")
+    }
+    viewModel.setCellValue(String(ExcelDate.serial(from: presetNoon)), at: .origin)
+    viewModel.setFormatCode("d-mmm-yy")
+    viewModel.setNumberFormat(.date)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "10/8/2026" {
+      return Result(name: name, passed: false, detail: "date preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("0.75", at: .origin)
+    viewModel.setFormatCode("h:mm")
+    viewModel.setNumberFormat(.time)
+    if viewModel.selectedFormat.formatCode != nil || viewModel.displayString(at: .origin) != "6:00:00 PM" {
+      return Result(name: name, passed: false, detail: "time preset left \(viewModel.selectedFormat.formatCode ?? "nil") \(viewModel.displayString(at: .origin))")
+    }
+    viewModel.setCellValue("1234.5", at: .origin)
+
+    viewModel.setFormatCode(sections)
+    do {
+      let data = try XLSXCodec.exportWorkbook(viewModel.workbook)
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let cell = imported.sheets[0].cell(at: .origin)
+      let shown = CellFormatRenderer.displayText(for: .number(1234.5), format: cell.format, fallbackRaw: cell.raw)
+      if cell.format?.formatCode != sections || cell.raw != "1234.5" || shown != "1,234.50" {
+        return Result(name: name, passed: false, detail: "reopen \(cell.format?.formatCode ?? "") \(shown)")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    return Result(name: name, passed: true, detail: "custom code, text section, preset clears it")
   }
 
   private static func conditionalFormatRuleEdit() -> Result {

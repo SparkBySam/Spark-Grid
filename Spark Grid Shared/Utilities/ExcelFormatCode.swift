@@ -1,11 +1,11 @@
 import Foundation
 
-/// Renders an Excel number-format code: thousands separators, the currency symbol
-/// in the code, and the date or time pattern.
+/// Renders an Excel number-format code: decimals, thousands separators, percent,
+/// a currency symbol in the code, four sections, quoted literals, and date or time patterns.
 enum ExcelFormatCode {
   /// Maps a stored format code onto the categories the grid already displays.
   static func numberFormatKind(for code: String) -> CellFormat.NumberFormat {
-    let custom = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let custom = withoutQuotedLiterals(code).trimmingCharacters(in: .whitespacesAndNewlines)
     if custom.isEmpty || custom == "general" || custom == "@" { return .general }
     if custom.contains("%") { return .percent }
     if custom.contains("$") || custom.contains("¥") || custom.contains("€") || custom.contains("£")
@@ -63,6 +63,17 @@ enum ExcelFormatCode {
     return rendered
   }
 
+  /// Fourth section of a format code (text). Nil when the code has no text section.
+  static func formattedText(_ text: String, code: String) -> String? {
+    let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty || trimmed.caseInsensitiveCompare("General") == .orderedSame {
+      return nil
+    }
+    let sections = splitSections(trimmed)
+    guard sections.count >= 4 else { return nil }
+    return renderTextSection(sections[3], text: text)
+  }
+
   /// Fraction digits in the positive section, when the code is a number format.
   static func fractionDigits(in code: String) -> Int? {
     let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -82,24 +93,169 @@ enum ExcelFormatCode {
     var current = ""
     var quoted = false
     var brackets = 0
-    for character in code {
-      if character == "\"" { quoted.toggle() }
-      if !quoted, character == "[" { brackets += 1 }
-      if !quoted, character == "]", brackets > 0 { brackets -= 1 }
+    let chars = Array(code)
+    var index = 0
+    while index < chars.count {
+      let character = chars[index]
+      if character == "\"" {
+        current.append(character)
+        if quoted, index + 1 < chars.count, chars[index + 1] == "\"" {
+          current.append(chars[index + 1])
+          index += 2
+          continue
+        }
+        quoted.toggle()
+        index += 1
+        continue
+      }
+      if !quoted, character == "\\" {
+        current.append(character)
+        index += 1
+        if index < chars.count {
+          current.append(chars[index])
+          index += 1
+        }
+        continue
+      }
+      if !quoted, character == "[" {
+        brackets += 1
+      } else if !quoted, character == "]", brackets > 0 {
+        brackets -= 1
+      }
       if character == ";", !quoted, brackets == 0 {
         sections.append(current)
         current = ""
+        index += 1
         continue
       }
       current.append(character)
+      index += 1
     }
     sections.append(current)
     return sections
   }
 
+  /// `@` with optional color brackets. A quoted `"@"` is a literal, not this placeholder.
   private static func isTextPlaceholder(_ section: String) -> Bool {
-    let stripped = stripDecorations(section).trimmingCharacters(in: .whitespaces)
-    return stripped == "@"
+    var body = ""
+    var quoted = false
+    let chars = Array(section)
+    var index = 0
+    while index < chars.count {
+      if chars[index] == "\"" {
+        if quoted, index + 1 < chars.count, chars[index + 1] == "\"" {
+          index += 2
+          continue
+        }
+        quoted.toggle()
+        index += 1
+        continue
+      }
+      if quoted {
+        index += 1
+        continue
+      }
+      if chars[index] == "\\" {
+        index += 2
+        continue
+      }
+      if chars[index] == "[" {
+        while index < chars.count, chars[index] != "]" { index += 1 }
+        if index < chars.count { index += 1 }
+        continue
+      }
+      body.append(chars[index])
+      index += 1
+    }
+    return body.trimmingCharacters(in: .whitespaces) == "@"
+  }
+
+  private static func renderTextSection(_ section: String, text: String) -> String {
+    var result = ""
+    let chars = Array(section)
+    var index = 0
+    while index < chars.count {
+      let character = chars[index]
+      if character == "\"" {
+        let quoted = readQuotedLiteral(in: chars, opening: index)
+        result += quoted.text
+        index = quoted.next
+        continue
+      }
+      if character == "\\" {
+        index += 1
+        if index < chars.count {
+          result.append(chars[index])
+          index += 1
+        }
+        continue
+      }
+      if character == "_" || character == "*" {
+        index += min(2, chars.count - index)
+        continue
+      }
+      if character == "[" {
+        while index < chars.count, chars[index] != "]" { index += 1 }
+        if index < chars.count { index += 1 }
+        continue
+      }
+      if character == "@" {
+        result += text
+        index += 1
+        continue
+      }
+      result.append(character)
+      index += 1
+    }
+    return result
+  }
+
+  /// Lowercased code with quoted literals and escaped characters removed.
+  private static func withoutQuotedLiterals(_ section: String) -> String {
+    var result = ""
+    var quoted = false
+    let chars = Array(section)
+    var index = 0
+    while index < chars.count {
+      if chars[index] == "\"" {
+        if quoted, index + 1 < chars.count, chars[index + 1] == "\"" {
+          index += 2
+          continue
+        }
+        quoted.toggle()
+        index += 1
+        continue
+      }
+      if quoted {
+        index += 1
+        continue
+      }
+      if chars[index] == "\\" {
+        index += 2
+        continue
+      }
+      result.append(chars[index])
+      index += 1
+    }
+    return result.lowercased()
+  }
+
+  private static func readQuotedLiteral(in chars: [Character], opening index: Int) -> (text: String, next: Int) {
+    var text = ""
+    var cursor = index + 1
+    while cursor < chars.count {
+      if chars[cursor] == "\"" {
+        if cursor + 1 < chars.count, chars[cursor + 1] == "\"" {
+          text.append("\"")
+          cursor += 2
+          continue
+        }
+        return (text, cursor + 1)
+      }
+      text.append(chars[cursor])
+      cursor += 1
+    }
+    return (text, cursor)
   }
 
   private static func isDateSection(_ section: String) -> Bool {
@@ -109,6 +265,10 @@ enum ExcelFormatCode {
     var index = 0
     while index < chars.count {
       if chars[index] == "\"" {
+        if quoted, index + 1 < chars.count, chars[index + 1] == "\"" {
+          index += 2
+          continue
+        }
         quoted.toggle()
         index += 1
         continue
@@ -146,33 +306,6 @@ enum ExcelFormatCode {
     return lower.contains("m")
   }
 
-  private static func stripDecorations(_ section: String) -> String {
-    var result = ""
-    var quoted = false
-    let chars = Array(section)
-    var index = 0
-    while index < chars.count {
-      if chars[index] == "\"" {
-        quoted.toggle()
-        index += 1
-        continue
-      }
-      if quoted {
-        result.append(chars[index])
-        index += 1
-        continue
-      }
-      if chars[index] == "[" {
-        while index < chars.count, chars[index] != "]" { index += 1 }
-        if index < chars.count { index += 1 }
-        continue
-      }
-      result.append(chars[index])
-      index += 1
-    }
-    return result
-  }
-
   // MARK: - Numbers
 
   private struct ParsedNumber {
@@ -207,14 +340,9 @@ enum ExcelFormatCode {
     while index < chars.count {
       let character = chars[index]
       if character == "\"" {
-        var literal = ""
-        index += 1
-        while index < chars.count, chars[index] != "\"" {
-          literal.append(chars[index])
-          index += 1
-        }
-        if index < chars.count { index += 1 }
-        appendLiteral(literal)
+        let quoted = readQuotedLiteral(in: chars, opening: index)
+        appendLiteral(quoted.text)
+        index = quoted.next
         continue
       }
       if character == "\\" {
@@ -410,7 +538,7 @@ enum ExcelFormatCode {
     let hours = total / 3600
     let minutes = (total % 3600) / 60
     let seconds = total % 60
-    let lower = pattern.lowercased()
+    let lower = withoutQuotedLiterals(pattern)
     if lower.contains("s") {
       return String(format: "%d:%02d:%02d", hours, minutes, seconds)
     }
@@ -422,8 +550,8 @@ enum ExcelFormatCode {
 
   private static func dateFormatterPattern(from excel: String) -> String {
     let chars = Array(excel)
-    let upper = excel.uppercased()
-    let hasPeriod = upper.contains("AM/PM") || upper.contains("A/P")
+    let plain = withoutQuotedLiterals(excel)
+    let hasPeriod = plain.contains("am/pm") || plain.contains("a/p")
     var output = ""
     var index = 0
 
@@ -445,14 +573,13 @@ enum ExcelFormatCode {
       }
       let character = chars[index]
       if character == "\"" {
+        let quoted = readQuotedLiteral(in: chars, opening: index)
         output += "'"
-        index += 1
-        while index < chars.count, chars[index] != "\"" {
-          if chars[index] == "'" { output += "''" } else { output.append(chars[index]) }
-          index += 1
+        for scalar in quoted.text {
+          if scalar == "'" { output += "''" } else { output.append(scalar) }
         }
-        if index < chars.count { index += 1 }
         output += "'"
+        index = quoted.next
         continue
       }
       if character == "\\" {
@@ -524,23 +651,65 @@ enum ExcelFormatCode {
     return output
   }
 
-  private static func isMinute(_ chars: [Character], start: Int, end: Int) -> Bool {
-    func neighbor(from index: Int, step: Int) -> Character? {
-      var cursor = index
-      while cursor >= 0, cursor < chars.count {
-        let character = chars[cursor]
-        if character == ":" || character == " " || character == "." {
-          cursor += step
+  private struct TimeLetter {
+    var index: Int
+    var letter: Character
+  }
+
+  /// Date and time letters outside quotes, plus elapsed `[h]` / `[m]` / `[s]`.
+  private static func significantTimeLetters(_ chars: [Character]) -> [TimeLetter] {
+    var letters: [TimeLetter] = []
+    var index = 0
+    var quoted = false
+    while index < chars.count {
+      let character = chars[index]
+      if character == "\"" {
+        if quoted, index + 1 < chars.count, chars[index + 1] == "\"" {
+          index += 2
           continue
         }
-        return character
+        quoted.toggle()
+        index += 1
+        continue
       }
-      return nil
+      if quoted {
+        index += 1
+        continue
+      }
+      if character == "\\" {
+        index += 2
+        continue
+      }
+      if character == "[" {
+        let start = index
+        index += 1
+        var inner = ""
+        while index < chars.count, chars[index] != "]" {
+          inner.append(chars[index])
+          index += 1
+        }
+        if index < chars.count { index += 1 }
+        let lower = inner.lowercased()
+        if let first = lower.first, !lower.isEmpty, lower.allSatisfy({ $0 == "h" || $0 == "m" || $0 == "s" }) {
+          letters.append(TimeLetter(index: start, letter: first))
+        }
+        continue
+      }
+      let lower = String(character).lowercased()
+      if lower == "h" || lower == "m" || lower == "s" || lower == "y" || lower == "d" {
+        letters.append(TimeLetter(index: index, letter: Character(lower)))
+      }
+      index += 1
     }
-    if let left = neighbor(from: start - 1, step: -1), String(left).lowercased() == "h" {
+    return letters
+  }
+
+  private static func isMinute(_ chars: [Character], start: Int, end: Int) -> Bool {
+    let letters = significantTimeLetters(chars)
+    if letters.last(where: { $0.index < start })?.letter == "h" {
       return true
     }
-    if let right = neighbor(from: end, step: 1), String(right).lowercased() == "s" {
+    if letters.first(where: { $0.index >= end })?.letter == "s" {
       return true
     }
     return false

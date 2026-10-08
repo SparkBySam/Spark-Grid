@@ -18,7 +18,12 @@ enum CellFormatRenderer {
   static func displayText(raw: String, format: CellFormat?) -> String {
     guard let format, !raw.isEmpty else { return raw }
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let number = parseNumber(trimmed) else { return raw }
+    guard let number = parseNumber(trimmed) else {
+      if let rendered = renderedText(trimmed, format) {
+        return rendered
+      }
+      return raw
+    }
 
     if let rendered = renderedFormat(number, format) {
       return rendered
@@ -49,7 +54,12 @@ enum CellFormatRenderer {
       return value.displayString
     case .blank:
       return ""
-    case .bool, .string:
+    case .bool:
+      return value.displayString
+    case .string(let text):
+      if let rendered = renderedText(text, format) {
+        return rendered
+      }
       return value.displayString
     case .number(let number):
       let trimmed = fallbackRaw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -385,6 +395,11 @@ enum CellFormatRenderer {
   private static func renderedFormat(_ number: Double, _ format: CellFormat) -> String? {
     guard let code = format.formatCode else { return nil }
     return ExcelFormatCode.formatted(number, code: code, fractionDigits: format.decimalPlaces)
+  }
+
+  private static func renderedText(_ text: String, _ format: CellFormat?) -> String? {
+    guard let code = format?.formatCode else { return nil }
+    return ExcelFormatCode.formattedText(text, code: code)
   }
 
   private static func parseNumber(_ text: String) -> Double? {
