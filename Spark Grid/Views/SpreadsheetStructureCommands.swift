@@ -54,18 +54,22 @@ struct SpreadsheetStructureCommands: Commands {
         }
       }
       .disabled(viewModel == nil)
-      Button("Freeze Rows") {
+      Button {
         guard viewModel?.freezeRowsAtSelection() == true else {
           SpreadsheetGridNSView.presentFreezeRequiresOffsetAlert(axis: .rows)
           return
         }
+      } label: {
+        Text(viewModel?.freezeRowsTitle ?? "Freeze up to row 1")
       }
       .disabled(viewModel == nil)
-      Button("Freeze Columns") {
+      Button {
         guard viewModel?.freezeColumnsAtSelection() == true else {
           SpreadsheetGridNSView.presentFreezeRequiresOffsetAlert(axis: .columns)
           return
         }
+      } label: {
+        Text(viewModel?.freezeColumnsTitle ?? "Freeze up to column A")
       }
       .disabled(viewModel == nil)
       Button("Unfreeze Panes") { viewModel?.unfreezePanes() }

@@ -1402,6 +1402,38 @@ final class SpreadsheetViewModel {
     }
   }
 
+  /// Menu title for freezing every row through the bottom of the selection.
+  var freezeRowsTitle: String {
+    "Freeze up to row \(freezeThroughRow + 1)"
+  }
+
+  /// Menu title for freezing every column through the right edge of the selection.
+  var freezeColumnsTitle: String {
+    "Freeze up to column \(CellAddress(row: 0, col: freezeThroughColumn).columnLabel)"
+  }
+
+  /// Bottom selected row. A column or whole-sheet selection does not choose a row,
+  /// so the anchor row is the line (the sheet span is not a row the user picked).
+  private var freezeThroughRow: Int {
+    switch selectionAxis {
+    case .column, .sheet:
+      return selectionAnchor.row
+    case .row, .cells:
+      return structureSelectionBounds(.row).max
+    }
+  }
+
+  /// Rightmost selected column. A row or whole-sheet selection does not choose a column,
+  /// so the anchor column is the line.
+  private var freezeThroughColumn: Int {
+    switch selectionAxis {
+    case .row, .sheet:
+      return selectionAnchor.col
+    case .column, .cells:
+      return structureSelectionBounds(.column).max
+    }
+  }
+
   @discardableResult
   func freezePanesAtSelection() -> Bool {
     commitEditIfNeeded()
@@ -1415,7 +1447,7 @@ final class SpreadsheetViewModel {
   @discardableResult
   func freezeRowsAtSelection() -> Bool {
     commitEditIfNeeded()
-    let rows = selectionRange.normalized.minRow + 1
+    let rows = freezeThroughRow + 1
     guard rows > 0 else { return false }
     return applyFreeze(rows: rows, cols: activeSheet.frozenColumns)
   }
@@ -1423,7 +1455,7 @@ final class SpreadsheetViewModel {
   @discardableResult
   func freezeColumnsAtSelection() -> Bool {
     commitEditIfNeeded()
-    let cols = selectionRange.normalized.minCol + 1
+    let cols = freezeThroughColumn + 1
     guard cols > 0 else { return false }
     return applyFreeze(rows: activeSheet.frozenRows, cols: cols)
   }
