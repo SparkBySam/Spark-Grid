@@ -5,6 +5,8 @@ import AppKit
 enum SpreadsheetClipboard {
   /// Custom pasteboard type for formula paste with relative adjustment.
   static let formulaGridType = NSPasteboard.PasteboardType("app.sparkgrid.formula-grid")
+  /// Conditional-format rules clipped to the copied bounds.
+  static let conditionalFormatType = NSPasteboard.PasteboardType("app.sparkgrid.conditional-formats")
 
   struct FormulaGridPayload: Codable, Equatable {
     var originRow: Int
@@ -12,40 +14,63 @@ enum SpreadsheetClipboard {
     var grid: [[String]]
   }
 
-  static func copyText(from sheet: Sheet, range: CellRange) -> String {
-    copyText(from: sheet, range: range, shrinkLargeSelection: true)
+  /// Rules clipped to the copied cell block. Formula predicates are relative to each rule's top-left.
+  struct ConditionalFormatClipboardPayload: Codable, Equatable {
+    var originRow: Int
+    var originCol: Int
+    var rules: [ConditionalFormatRule]
   }
 
-  private static func copyText(from sheet: Sheet, range: CellRange, shrinkLargeSelection: Bool) -> String {
+  struct CopyRegion: Equatable {
+    var text: String
+    /// Bounds actually written into `text`. Nil when a huge selection contains no cells.
+    var bounds: CellRange?
+  }
+
+  static func copyText(from sheet: Sheet, range: CellRange) -> String {
+    copyRegion(from: sheet, range: range).text
+  }
+
+  static func copyRegion(from sheet: Sheet, range: CellRange) -> CopyRegion {
+    guard let bounds = boundsForCopy(from: sheet, range: range) else {
+      return CopyRegion(text: "", bounds: nil)
+    }
+    return CopyRegion(text: gridText(from: sheet, bounds: bounds), bounds: bounds)
+  }
+
+  /// For huge selections (e.g. whole sheet), only the populated sub-range is copied.
+  private static func boundsForCopy(from sheet: Sheet, range: CellRange) -> CellRange? {
     let bounds = range.normalized
     let rowCount = bounds.maxRow - bounds.minRow + 1
     let colCount = bounds.maxCol - bounds.minCol + 1
-
-    // For huge selections (e.g. whole sheet), only emit the populated sub-range.
-    if shrinkLargeSelection, rowCount * colCount > 4_000, let used = sheet.populatedBounds {
+    if rowCount * colCount > 4_000, let used = sheet.populatedBounds {
       let usedNorm = used.normalized
       let minRow = max(bounds.minRow, usedNorm.minRow)
       let maxRow = min(bounds.maxRow, usedNorm.maxRow)
       let minCol = max(bounds.minCol, usedNorm.minCol)
       let maxCol = min(bounds.maxCol, usedNorm.maxCol)
-      guard minRow <= maxRow, minCol <= maxCol else { return "" }
-      return copyText(
-        from: sheet,
-        range: CellRange(
-          start: CellAddress(row: minRow, col: minCol),
-          end: CellAddress(row: maxRow, col: maxCol)
-        ),
-        shrinkLargeSelection: false
+      guard minRow <= maxRow, minCol <= maxCol else { return nil }
+      return CellRange(
+        start: CellAddress(row: minRow, col: minCol),
+        end: CellAddress(row: maxRow, col: maxCol)
       )
     }
+    return CellRange(
+      start: CellAddress(row: bounds.minRow, col: bounds.minCol),
+      end: CellAddress(row: bounds.maxRow, col: bounds.maxCol)
+    )
+  }
 
+  private static func gridText(from sheet: Sheet, bounds: CellRange) -> String {
+    let n = bounds.normalized
+    let rowCount = n.maxRow - n.minRow + 1
+    let colCount = n.maxCol - n.minCol + 1
     var rows: [String] = []
     rows.reserveCapacity(rowCount)
-
-    for row in bounds.minRow...bounds.maxRow {
+    for row in n.minRow...n.maxRow {
       var fields: [String] = []
       fields.reserveCapacity(colCount)
-      for col in bounds.minCol...bounds.maxCol {
+      for col in n.minCol...n.maxCol {
         fields.append(escapeField(sheet.cell(at: CellAddress(row: row, col: col)).raw))
       }
       rows.append(fields.joined(separator: "\t"))
@@ -134,17 +159,47 @@ enum SpreadsheetClipboard {
     NSPasteboard.general.string(forType: .string) != nil
   }
 
-  static func writeFormulaGrid(_ payload: FormulaGridPayload, tsv: String) {
+  static func writeText(
+    _ text: String,
+    conditionalFormats: ConditionalFormatClipboardPayload? = nil
+  ) {
+    let board = NSPasteboard.general
+    board.clearContents()
+    board.setString(text, forType: .string)
+    writeConditionalFormats(conditionalFormats, to: board)
+  }
+
+  static func writeFormulaGrid(
+    _ payload: FormulaGridPayload,
+    tsv: String,
+    conditionalFormats: ConditionalFormatClipboardPayload? = nil
+  ) {
     let board = NSPasteboard.general
     board.clearContents()
     board.setString(tsv, forType: .string)
     if let data = try? JSONEncoder().encode(payload) {
       board.setData(data, forType: formulaGridType)
     }
+    writeConditionalFormats(conditionalFormats, to: board)
   }
 
   static func readFormulaGrid() -> FormulaGridPayload? {
     guard let data = NSPasteboard.general.data(forType: formulaGridType) else { return nil }
     return try? JSONDecoder().decode(FormulaGridPayload.self, from: data)
+  }
+
+  static func readConditionalFormats() -> ConditionalFormatClipboardPayload? {
+    guard let data = NSPasteboard.general.data(forType: conditionalFormatType) else { return nil }
+    return try? JSONDecoder().decode(ConditionalFormatClipboardPayload.self, from: data)
+  }
+
+  private static func writeConditionalFormats(
+    _ payload: ConditionalFormatClipboardPayload?,
+    to board: NSPasteboard
+  ) {
+    guard let payload, !payload.rules.isEmpty,
+          let data = try? JSONEncoder().encode(payload)
+    else { return }
+    board.setData(data, forType: conditionalFormatType)
   }
 }

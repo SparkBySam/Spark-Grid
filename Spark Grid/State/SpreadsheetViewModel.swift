@@ -930,6 +930,10 @@ final class SpreadsheetViewModel {
     commitEditIfNeeded()
     guard index >= 0, index < workbook.sheets.count else { return }
     workbook.activeSheetIndex = index
+    // Member assignment on `workbook` does not always run didSet, which is what
+    // normally rebuilds the engine. Conditional formats on the new sheet must
+    // evaluate that sheet's cells, not the previous sheet's address cache.
+    formulaEngine.rebuild(workbook: workbook)
     restoreFilterFromActiveSheet()
     invalidateFindMatches()
     selection = .origin
@@ -1879,27 +1883,59 @@ final class SpreadsheetViewModel {
 
   // MARK: - Clipboard
 
-  func copySelection() -> String? {
-    guard selectionRanges.contains(where: { rangeHasContent($0) }) else { return nil }
+  private struct SelectionCopy {
+    var text: String
+    var conditionalFormats: SpreadsheetClipboard.ConditionalFormatClipboardPayload?
+  }
+
+  /// Copies cell text plus conditional-format rules that cover the selection.
+  @discardableResult
+  func copySelectionToPasteboard() -> Bool {
+    guard let copy = makeSelectionCopy() else { return false }
+    SpreadsheetClipboard.writeText(copy.text, conditionalFormats: copy.conditionalFormats)
+    return true
+  }
+
+  private func makeSelectionCopy() -> SelectionCopy? {
+    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) }) else {
+      return nil
+    }
     if selectionRanges.count == 1 {
-      return SpreadsheetClipboard.copyText(from: activeSheet, range: selectionRange)
+      let range = selectionRange
+      let region: SpreadsheetClipboard.CopyRegion
+      if rangeHasContent(range) {
+        region = SpreadsheetClipboard.copyRegion(from: activeSheet, range: range)
+      } else if let bounds = ConditionalFormatPaste.coveredBounds(on: activeSheet, intersecting: range) {
+        region = SpreadsheetClipboard.copyRegion(from: activeSheet, range: bounds)
+      } else {
+        return nil
+      }
+      let formats = region.bounds.flatMap {
+        ConditionalFormatPaste.capture(from: activeSheet, bounds: $0)
+      }
+      return SelectionCopy(text: region.text, conditionalFormats: formats)
     }
     let blocks = selectionRanges.map {
       SpreadsheetClipboard.copyText(from: activeSheet, range: $0)
     }
-    return blocks.joined(separator: "\n\n")
+    return SelectionCopy(text: blocks.joined(separator: "\n\n"), conditionalFormats: nil)
   }
 
   /// Copies cell raw values (including formulas) and records origin for relative paste.
   func copyFormulas() {
-    guard selectionRanges.contains(where: { rangeHasContent($0) }) else { return }
+    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) }) else { return }
     let range = selectionRange.normalized
-    let origin = CellAddress(row: range.minRow, col: range.minCol)
-    let grid = SpreadsheetClipboard.grid(from: activeSheet, range: selectionRange)
-    let tsv = SpreadsheetClipboard.copyText(from: activeSheet, range: selectionRange)
+    let bounds = CellRange(
+      start: CellAddress(row: range.minRow, col: range.minCol),
+      end: CellAddress(row: range.maxRow, col: range.maxCol)
+    )
+    let grid = SpreadsheetClipboard.grid(from: activeSheet, range: bounds)
+    let tsv = SpreadsheetClipboard.copyText(from: activeSheet, range: bounds)
+    let formats = ConditionalFormatPaste.capture(from: activeSheet, bounds: bounds)
     SpreadsheetClipboard.writeFormulaGrid(
-      .init(originRow: origin.row, originCol: origin.col, grid: grid),
-      tsv: tsv
+      .init(originRow: range.minRow, originCol: range.minCol, grid: grid),
+      tsv: tsv,
+      conditionalFormats: formats
     )
   }
 
@@ -1919,12 +1955,18 @@ final class SpreadsheetViewModel {
     return false
   }
 
+  private func rangeHasConditionalFormat(_ range: CellRange) -> Bool {
+    activeSheet.conditionalFormats.contains {
+      ConditionalFormatPaste.intersection($0.range, range) != nil
+    }
+  }
+
   func cutSelection() {
-    guard let text = copySelection() else { return }
+    guard let copy = makeSelectionCopy() else { return }
     for range in selectionRanges {
       clearRange(range, actionName: "Cut")
     }
-    writeToPasteboard(text)
+    SpreadsheetClipboard.writeText(copy.text, conditionalFormats: copy.conditionalFormats)
   }
 
   func pasteFromPasteboard() {
@@ -1933,17 +1975,20 @@ final class SpreadsheetViewModel {
       return
     }
     guard let text = NSPasteboard.general.string(forType: .string) else { return }
+    let formats = SpreadsheetClipboard.readConditionalFormats()
     let grid = SpreadsheetClipboard.parseGrid(text)
     if grid.isEmpty {
       setCellValue(text, at: selectionAnchor)
+      pasteCopiedConditionalFormats(formats, at: selectionAnchor)
     } else {
-      pasteGrid(grid, at: selectionAnchor, adjustFormulas: false)
+      pasteGrid(grid, at: selectionAnchor, adjustFormulas: false, conditionalFormats: formats)
     }
     syncEditTextFromSelection()
   }
 
   /// Pastes formulas with relative references adjusted from the copy origin.
   func pasteFormulasFromPasteboard() {
+    let formats = SpreadsheetClipboard.readConditionalFormats()
     if let payload = SpreadsheetClipboard.readFormulaGrid() {
       let origin = CellAddress(row: payload.originRow, col: payload.originCol)
       pasteGrid(
@@ -1951,7 +1996,8 @@ final class SpreadsheetViewModel {
         at: selectionAnchor,
         adjustFormulas: true,
         sourceOrigin: origin,
-        actionName: "Paste Formulas"
+        actionName: "Paste Formulas",
+        conditionalFormats: formats
       )
       syncEditTextFromSelection()
       return
@@ -1962,11 +2008,18 @@ final class SpreadsheetViewModel {
     if grid.isEmpty {
       let adjusted = FormulaRewriter.adjust(text, rowDelta: 0, colDelta: 0)
       setCellValue(adjusted, at: selectionAnchor)
+      pasteCopiedConditionalFormats(formats, at: selectionAnchor, actionName: "Paste Formulas")
     } else {
       // External paste: treat clipboard top-left as if it came from the destination (no shift),
       // but still rewrite if user copied via ⌘C then pastes with ⌘⇧V from same sheet — without
       // origin we paste verbatim like normal paste.
-      pasteGrid(grid, at: selectionAnchor, adjustFormulas: false, actionName: "Paste Formulas")
+      pasteGrid(
+        grid,
+        at: selectionAnchor,
+        adjustFormulas: false,
+        actionName: "Paste Formulas",
+        conditionalFormats: formats
+      )
     }
     syncEditTextFromSelection()
   }
@@ -1976,7 +2029,8 @@ final class SpreadsheetViewModel {
     at origin: CellAddress,
     adjustFormulas: Bool,
     sourceOrigin: CellAddress? = nil,
-    actionName: String = "Paste"
+    actionName: String = "Paste",
+    conditionalFormats: SpreadsheetClipboard.ConditionalFormatClipboardPayload? = nil
   ) {
     let rowDelta = adjustFormulas ? origin.row - (sourceOrigin?.row ?? origin.row) : 0
     let colDelta = adjustFormulas ? origin.col - (sourceOrigin?.col ?? origin.col) : 0
@@ -1992,6 +2046,7 @@ final class SpreadsheetViewModel {
         setCellValue(nextValue, at: address)
       }
     }
+    pasteCopiedConditionalFormats(conditionalFormats, at: origin, actionName: actionName)
     undoManager?.endUndoGrouping()
     undoManager?.setActionName(actionName)
 
@@ -2011,11 +2066,6 @@ final class SpreadsheetViewModel {
     }
     undoManager?.endUndoGrouping()
     undoManager?.setActionName(actionName)
-  }
-
-  private func writeToPasteboard(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
   }
 
   // MARK: - Undo

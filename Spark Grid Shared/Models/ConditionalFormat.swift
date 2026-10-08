@@ -314,7 +314,9 @@ enum ConditionalFormatEvaluator {
     var applied = false
     var paint = ConditionalPaint(format: base)
 
-    for rule in rules {
+    // `break` inside the switch only ends that case. stopIfTrue has to leave the rule list,
+    // or a later match (for example a formula that treats a blank neighbor as 0) repaints the cell.
+    ruleList: for rule in rules {
       guard rule.range.contains(address) else { continue }
       let origin = CellAddress(
         row: rule.range.normalized.minRow,
@@ -333,7 +335,7 @@ enum ConditionalFormatEvaluator {
         applyContrastingText(to: &result, fill: fill, ruleTextColor: rule.style.textColor)
         paint.format = result.isDefault ? nil : result
         applied = true
-        if rule.stopIfTrue { break }
+        if rule.stopIfTrue { break ruleList }
 
       case .dataBar(let style):
         guard let fraction = dataBarFraction(
@@ -345,7 +347,7 @@ enum ConditionalFormatEvaluator {
         paint.dataBarColor = style.color
         paint.dataBarShowValue = style.showValue
         applied = true
-        if rule.stopIfTrue { break }
+        if rule.stopIfTrue { break ruleList }
 
       case .iconSet(let style):
         guard let glyph = iconGlyph(
@@ -356,7 +358,7 @@ enum ConditionalFormatEvaluator {
         ) else { continue }
         paint.icon = glyph
         applied = true
-        if rule.stopIfTrue { break }
+        if rule.stopIfTrue { break ruleList }
 
       default:
         guard matches(
@@ -376,7 +378,7 @@ enum ConditionalFormatEvaluator {
         }
         paint.format = result.isDefault ? nil : result
         applied = true
-        if rule.stopIfTrue { break }
+        if rule.stopIfTrue { break ruleList }
       }
     }
 

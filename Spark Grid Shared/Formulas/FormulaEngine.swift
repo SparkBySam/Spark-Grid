@@ -21,11 +21,16 @@ final class FormulaEngine {
   var cacheRevision: Int { revision }
 
   func displayValue(at address: CellAddress, sheet: Sheet) -> CellValue {
+    // Literals always come from the sheet being painted. The address cache is not
+    // sheet-scoped, so a hit can still be another sheet's value, or a blank cached
+    // before a cross-sheet paste wrote this cell.
+    if let literal = literalOnSheet(at: address, sheet: sheet) {
+      return literal
+    }
     if let cached = valueCache[address] {
       return cached
     }
-    let raw = sheet.cell(at: address).raw
-    let value = literalOrEmpty(raw)
+    let value = literalOrEmpty(sheet.cell(at: address).raw)
     valueCache[address] = value
     return value
   }
@@ -167,6 +172,16 @@ final class FormulaEngine {
     CellValue.fromLiteralRaw(raw)
   }
 
+  /// Non-formula cells are read from `sheet` and refreshed in the cache.
+  /// Returns nil when the cell holds a formula and the caller should use the cache.
+  private func literalOnSheet(at address: CellAddress, sheet: Sheet) -> CellValue? {
+    let raw = sheet.cell(at: address).raw
+    guard !FormulaSyntax.isFormula(raw) else { return nil }
+    let value = literalOrEmpty(raw)
+    valueCache[address] = value
+    return value
+  }
+
   private func recalculateAll(sheet: Sheet) {
     recalculate(addresses: Set(formulaAST.keys), sheet: sheet)
   }
@@ -237,6 +252,9 @@ final class FormulaEngine {
     let sheetName = ref.sheet ?? activeSheetName
     if sheetName.caseInsensitiveCompare(activeSheetName) == .orderedSame {
       let address = ref.address
+      if let literal = literalOnSheet(at: address, sheet: activeSheet) {
+        return literal
+      }
       if formulaAST[address] != nil {
         localEval(address)
       }

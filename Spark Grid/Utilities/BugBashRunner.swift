@@ -84,6 +84,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { cellTextWrapLayout() })
     results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
     results.append(MainActor.assumeIsolated { unsavedPromptOnce() })
+    results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
     return results
   }
 
@@ -4037,6 +4038,175 @@ enum BugBashRunner {
     while !fired, Date() < deadline {
       RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
     }
+  }
+
+  /// Copy carries conditional formatting onto another sheet, and onto a new range on the same sheet.
+  @MainActor
+  private static func conditionalFormatPaste() -> Result {
+    let name = "conditional format paste"
+    func fail(_ detail: String) -> Result {
+      Result(name: name, passed: false, detail: detail)
+    }
+
+    var source = Sheet(name: "Source")
+    source.setCell(Cell(raw: "5"), at: CellAddress(row: 0, col: 0))
+    source.setCell(Cell(raw: "15"), at: CellAddress(row: 1, col: 0))
+    source.setCell(Cell(raw: "8"), at: CellAddress(row: 2, col: 0))
+    let block = CellRange(start: .origin, end: CellAddress(row: 2, col: 0))
+    source.conditionalFormats = [
+      ConditionalFormatRule(range: block, predicate: .greaterThan(10), style: .redFill),
+      ConditionalFormatRule(
+        range: block,
+        stopIfTrue: false,
+        predicate: .formula("=A1>B1"),
+        style: .greenFill
+      ),
+      ConditionalFormatRule(range: block, predicate: .formula("=$A$1>10"), style: .yellowFill),
+      ConditionalFormatRule(
+        range: CellRange(start: CellAddress(row: 0, col: 2), end: CellAddress(row: 0, col: 2)),
+        predicate: .greaterThan(99),
+        style: .blueFill
+      ),
+    ]
+    let testSheet = Sheet(name: "Test")
+    let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [source, testSheet]))
+    let originals = vm.activeSheet.conditionalFormats
+    guard originals.count == 4 else {
+      return fail("setup rules \(originals.count)")
+    }
+
+    vm.selectRange(from: .origin, to: CellAddress(row: 2, col: 0))
+    guard vm.copySelectionToPasteboard() else { return fail("copy failed") }
+
+    vm.selectSheet(at: 1)
+    vm.selectRange(from: CellAddress(row: 4, col: 2), to: CellAddress(row: 4, col: 2))
+    vm.pasteFromPasteboard()
+    guard vm.activeSheet.name == "Test" else { return fail("paste landed on \(vm.activeSheet.name)") }
+    guard vm.activeSheet.cell(at: CellAddress(row: 4, col: 2)).raw == "5",
+          vm.activeSheet.cell(at: CellAddress(row: 5, col: 2)).raw == "15",
+          vm.activeSheet.cell(at: CellAddress(row: 6, col: 2)).raw == "8"
+    else { return fail("cross-sheet values missing") }
+    guard vm.activeSheet.conditionalFormats.count == 3 else {
+      return fail("cross-sheet rules \(describe(vm.activeSheet.conditionalFormats))")
+    }
+    guard let highlight = rule(vm.activeSheet.conditionalFormats, range: "C5:C7", predicate: .greaterThan(10)),
+          highlight.style == .redFill
+    else { return fail("highlight not retargeted \(describe(vm.activeSheet.conditionalFormats))") }
+    guard let shifted = rule(vm.activeSheet.conditionalFormats, range: "C5:C7", predicate: .formula("=C5>D5")),
+          shifted.style == .greenFill,
+          shifted.stopIfTrue == false
+    else { return fail("relative formula \(describe(vm.activeSheet.conditionalFormats))") }
+    guard rule(vm.activeSheet.conditionalFormats, range: "C5:C7", predicate: .formula("=$A$1>10")) != nil else {
+      return fail("absolute formula \(describe(vm.activeSheet.conditionalFormats))")
+    }
+    guard vm.activeSheet.conditionalFormats.allSatisfy({ $0.predicate != .greaterThan(99) }) else {
+      return fail("copied a rule outside the selection")
+    }
+    let painted = vm.resolvedPaint(at: CellAddress(row: 5, col: 2))
+    guard painted.format?.fillColor == ConditionalFormatStyle.redFill.fillColor else {
+      return fail("pasted 15 did not pick up the highlight")
+    }
+
+    vm.selectSheet(at: 0)
+    guard sourceRulesIntact(vm.activeSheet.conditionalFormats, originals: originals) else {
+      return fail("source rules changed after cross-sheet paste \(describe(vm.activeSheet.conditionalFormats))")
+    }
+
+    vm.selectRange(from: CellAddress(row: 0, col: 6), to: CellAddress(row: 0, col: 6))
+    vm.pasteFromPasteboard()
+    guard vm.activeSheet.cell(at: CellAddress(row: 0, col: 6)).raw == "5",
+          vm.activeSheet.cell(at: CellAddress(row: 1, col: 6)).raw == "15",
+          vm.activeSheet.cell(at: CellAddress(row: 2, col: 6)).raw == "8",
+          vm.activeSheet.cell(at: .origin).raw == "5"
+    else { return fail("same-sheet values") }
+    guard rule(vm.activeSheet.conditionalFormats, range: "G1:G3", predicate: .formula("=G1>H1")) != nil,
+          rule(vm.activeSheet.conditionalFormats, range: "G1:G3", predicate: .formula("=$A$1>10")) != nil,
+          rule(vm.activeSheet.conditionalFormats, range: "G1:G3", predicate: .greaterThan(10)) != nil
+    else { return fail("same-sheet retarget \(describe(vm.activeSheet.conditionalFormats))") }
+    guard sourceRulesIntact(vm.activeSheet.conditionalFormats, originals: originals) else {
+      return fail("same-sheet paste moved the original rules")
+    }
+    guard vm.resolvedPaint(at: CellAddress(row: 1, col: 0)).format?.fillColor
+      == ConditionalFormatStyle.redFill.fillColor
+    else { return fail("original highlight stopped matching") }
+
+    vm.selectRange(from: CellAddress(row: 1, col: 0), to: CellAddress(row: 1, col: 0))
+    guard vm.copySelectionToPasteboard() else { return fail("partial copy failed") }
+    vm.selectRange(from: CellAddress(row: 0, col: 4), to: CellAddress(row: 0, col: 4))
+    vm.pasteFromPasteboard()
+    guard vm.activeSheet.cell(at: CellAddress(row: 0, col: 4)).raw == "15" else {
+      return fail("partial paste value")
+    }
+    guard rule(vm.activeSheet.conditionalFormats, range: "E1", predicate: .formula("=E1>F1")) != nil,
+          rule(vm.activeSheet.conditionalFormats, range: "E1", predicate: .formula("=$A$1>10")) != nil,
+          rule(vm.activeSheet.conditionalFormats, range: "E1", predicate: .greaterThan(10)) != nil
+    else { return fail("partial retarget \(describe(vm.activeSheet.conditionalFormats))") }
+    guard sourceRulesIntact(vm.activeSheet.conditionalFormats, originals: originals) else {
+      return fail("partial paste changed the original block")
+    }
+
+    vm.selectRange(from: .origin, to: CellAddress(row: 2, col: 0))
+    vm.copyFormulas()
+    vm.selectSheet(at: 1)
+    vm.selectRange(from: CellAddress(row: 10, col: 0), to: CellAddress(row: 10, col: 0))
+    vm.pasteFormulasFromPasteboard()
+    guard vm.activeSheet.cell(at: CellAddress(row: 10, col: 0)).raw == "5",
+          vm.activeSheet.cell(at: CellAddress(row: 12, col: 0)).raw == "8"
+    else { return fail("paste formulas values") }
+    guard rule(vm.activeSheet.conditionalFormats, range: "A11:A13", predicate: .formula("=A11>B11")) != nil,
+          rule(vm.activeSheet.conditionalFormats, range: "A11:A13", predicate: .formula("=$A$1>10")) != nil,
+          rule(vm.activeSheet.conditionalFormats, range: "C5:C7", predicate: .formula("=C5>D5")) != nil
+    else { return fail("paste formulas rules \(describe(vm.activeSheet.conditionalFormats))") }
+
+    vm.selectSheet(at: 0)
+    vm.setCellValue("=B1", at: CellAddress(row: 0, col: 3))
+    vm.selectRange(from: CellAddress(row: 0, col: 3), to: CellAddress(row: 0, col: 3))
+    guard vm.copySelectionToPasteboard() else { return fail("formula cell copy failed") }
+    vm.selectSheet(at: 1)
+    let rulesBeforePlainPaste = vm.activeSheet.conditionalFormats.count
+    vm.selectRange(from: CellAddress(row: 4, col: 5), to: CellAddress(row: 4, col: 5))
+    vm.pasteFromPasteboard()
+    guard vm.activeSheet.cell(at: CellAddress(row: 4, col: 5)).raw == "=B1" else {
+      return fail("cell formula changed to \(vm.activeSheet.cell(at: CellAddress(row: 4, col: 5)).raw)")
+    }
+    guard vm.activeSheet.conditionalFormats.count == rulesBeforePlainPaste else {
+      return fail("copy without rules still pasted conditional formatting")
+    }
+
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("99", forType: .string)
+    vm.selectRange(from: CellAddress(row: 0, col: 5), to: CellAddress(row: 0, col: 5))
+    vm.pasteFromPasteboard()
+    guard vm.activeSheet.cell(at: CellAddress(row: 0, col: 5)).raw == "99",
+          vm.activeSheet.conditionalFormats.count == rulesBeforePlainPaste
+    else { return fail("external paste changed conditional formatting") }
+
+    return Result(name: name, passed: true, detail: "cross-sheet, same-sheet, and formula shift")
+  }
+
+  private static func rule(
+    _ rules: [ConditionalFormatRule],
+    range: String,
+    predicate: ConditionalFormatPredicate
+  ) -> ConditionalFormatRule? {
+    rules.first { $0.range.a1Label == range && $0.predicate == predicate }
+  }
+
+  private static func sourceRulesIntact(
+    _ rules: [ConditionalFormatRule],
+    originals: [ConditionalFormatRule]
+  ) -> Bool {
+    originals.allSatisfy { original in
+      guard let match = rules.first(where: { $0.id == original.id }) else { return false }
+      return match.range.a1Label == original.range.a1Label
+        && match.predicate == original.predicate
+        && match.style == original.style
+        && match.stopIfTrue == original.stopIfTrue
+    }
+  }
+
+  private static func describe(_ rules: [ConditionalFormatRule]) -> String {
+    rules.map { "\($0.range.a1Label) \($0.predicate.title)" }.joined(separator: "; ")
   }
 
   private static func octoberEighth2026() -> Date? {
