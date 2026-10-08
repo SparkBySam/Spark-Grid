@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Chart embedded on a sheet (Spark-native; also stored in xlsx as a custom part).
@@ -51,6 +52,14 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
   var anchorCol: Int
   var rowSpan: Int
   var colSpan: Int
+  /// Points from the left edge of `anchorCol`. Zero keeps that edge on the cell border.
+  var originXOffset: CGFloat
+  /// Points from the top edge of `anchorRow`. Zero keeps that edge on the cell border.
+  var originYOffset: CGFloat
+  /// Points past the right edge of the spanned columns. Zero keeps that edge on a cell border.
+  var endXOffset: CGFloat
+  /// Points past the bottom edge of the spanned rows. Zero keeps that edge on a cell border.
+  var endYOffset: CGFloat
   /// Whole-series color. Nil uses `defaultSeriesColor(for:)`.
   var seriesColor: CodableColor?
   /// Plotted-point index → color. A missing index uses the series color.
@@ -66,6 +75,13 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
   /// Smallest on-sheet span, in rows or columns.
   static let minimumSpan = 4
 
+  /// A placement offset is a distance from a cell border. Missing, negative,
+  /// and non-finite values sit on the border.
+  static func clampedPlacementOffset(_ value: CGFloat) -> CGFloat {
+    guard value.isFinite, value > 0 else { return 0 }
+    return value
+  }
+
   init(
     id: UUID = UUID(),
     kind: Kind = .bar,
@@ -79,6 +95,10 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     anchorCol: Int,
     rowSpan: Int = 12,
     colSpan: Int = 8,
+    originXOffset: CGFloat = 0,
+    originYOffset: CGFloat = 0,
+    endXOffset: CGFloat = 0,
+    endYOffset: CGFloat = 0,
     seriesColor: CodableColor? = nil,
     pointColors: [Int: CodableColor] = [:],
     showsLegend: Bool = false,
@@ -99,6 +119,10 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     self.anchorCol = anchorCol
     self.rowSpan = max(Self.minimumSpan, rowSpan)
     self.colSpan = max(Self.minimumSpan, colSpan)
+    self.originXOffset = Self.clampedPlacementOffset(originXOffset)
+    self.originYOffset = Self.clampedPlacementOffset(originYOffset)
+    self.endXOffset = Self.clampedPlacementOffset(endXOffset)
+    self.endYOffset = Self.clampedPlacementOffset(endYOffset)
     self.seriesColor = seriesColor
     self.pointColors = pointColors
     self.showsLegend = showsLegend
@@ -112,6 +136,7 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     case id, kind, title, dataRange
     case categoryColumn, valueColumn, hasHeaderRow, valueMode
     case anchorRow, anchorCol, rowSpan, colSpan
+    case originXOffset, originYOffset, endXOffset, endYOffset
     case seriesColor, pointColors, showsLegend, showsGridlines
     case categoryAxisTitle, valueAxisTitle, frameIsCustom
   }
@@ -130,6 +155,10 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     anchorCol = try c.decodeIfPresent(Int.self, forKey: .anchorCol) ?? 0
     rowSpan = try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 12
     colSpan = try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 8
+    originXOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .originXOffset) ?? 0)
+    originYOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .originYOffset) ?? 0)
+    endXOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .endXOffset) ?? 0)
+    endYOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .endYOffset) ?? 0)
     seriesColor = try c.decodeIfPresent(CodableColor.self, forKey: .seriesColor)
     pointColors = try c.decodeIfPresent([Int: CodableColor].self, forKey: .pointColors) ?? [:]
     showsLegend = try c.decodeIfPresent(Bool.self, forKey: .showsLegend) ?? false
@@ -153,6 +182,10 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     try c.encode(anchorCol, forKey: .anchorCol)
     try c.encode(rowSpan, forKey: .rowSpan)
     try c.encode(colSpan, forKey: .colSpan)
+    try c.encode(originXOffset, forKey: .originXOffset)
+    try c.encode(originYOffset, forKey: .originYOffset)
+    try c.encode(endXOffset, forKey: .endXOffset)
+    try c.encode(endYOffset, forKey: .endYOffset)
     try c.encodeIfPresent(seriesColor, forKey: .seriesColor)
     try c.encode(pointColors, forKey: .pointColors)
     try c.encode(showsLegend, forKey: .showsLegend)
@@ -213,6 +246,10 @@ struct SheetChart: Identifiable, Codable, Equatable, Sendable {
     next.anchorCol = n.minCol
     next.rowSpan = max(12, rowSpan)
     next.colSpan = max(8, colSpan)
+    next.originXOffset = 0
+    next.originYOffset = 0
+    next.endXOffset = 0
+    next.endYOffset = 0
     return next
   }
 }

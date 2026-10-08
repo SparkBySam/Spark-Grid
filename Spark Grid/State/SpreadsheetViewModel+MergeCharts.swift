@@ -172,26 +172,45 @@ extension SpreadsheetViewModel {
     anchorCol: Int,
     rowSpan: Int,
     colSpan: Int,
+    originXOffset: CGFloat = 0,
+    originYOffset: CGFloat = 0,
+    endXOffset: CGFloat = 0,
+    endYOffset: CGFloat = 0,
     preservingCustomFrom start: SheetChart
   ) {
     guard let index = activeSheet.charts.firstIndex(where: { $0.id == id }) else { return }
     let row = max(0, anchorRow)
     let col = max(0, anchorCol)
-    let rows = max(SheetChart.minimumSpan, rowSpan)
-    let cols = max(SheetChart.minimumSpan, colSpan)
+    let originX = SheetChart.clampedPlacementOffset(originXOffset)
+    let originY = SheetChart.clampedPlacementOffset(originYOffset)
+    let endX = SheetChart.clampedPlacementOffset(endXOffset)
+    let endY = SheetChart.clampedPlacementOffset(endYOffset)
+    let snapped = originX == 0 && originY == 0 && endX == 0 && endY == 0
+    let rows = max(snapped ? SheetChart.minimumSpan : 1, rowSpan)
+    let cols = max(snapped ? SheetChart.minimumSpan : 1, colSpan)
     let changed = row != start.anchorRow || col != start.anchorCol
       || rows != start.rowSpan || cols != start.colSpan
+      || originX != start.originXOffset || originY != start.originYOffset
+      || endX != start.endXOffset || endY != start.endYOffset
     var sheet = activeSheet
     guard sheet.charts[index].anchorRow != row
       || sheet.charts[index].anchorCol != col
       || sheet.charts[index].rowSpan != rows
       || sheet.charts[index].colSpan != cols
+      || sheet.charts[index].originXOffset != originX
+      || sheet.charts[index].originYOffset != originY
+      || sheet.charts[index].endXOffset != endX
+      || sheet.charts[index].endYOffset != endY
       || sheet.charts[index].frameIsCustom != (start.frameIsCustom || changed)
     else { return }
     sheet.charts[index].anchorRow = row
     sheet.charts[index].anchorCol = col
     sheet.charts[index].rowSpan = rows
     sheet.charts[index].colSpan = cols
+    sheet.charts[index].originXOffset = originX
+    sheet.charts[index].originYOffset = originY
+    sheet.charts[index].endXOffset = endX
+    sheet.charts[index].endYOffset = endY
     sheet.charts[index].frameIsCustom = start.frameIsCustom || changed
     setActiveSheetPreservingFormulas(sheet)
     notifyGridRefresh()
@@ -207,6 +226,10 @@ extension SpreadsheetViewModel {
       || before.anchorCol != after.anchorCol
       || before.rowSpan != after.rowSpan
       || before.colSpan != after.colSpan
+      || before.originXOffset != after.originXOffset
+      || before.originYOffset != after.originYOffset
+      || before.endXOffset != after.endXOffset
+      || before.endYOffset != after.endYOffset
       || before.frameIsCustom != after.frameIsCustom
     else { return }
     let current = activeSheet.charts

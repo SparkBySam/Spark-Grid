@@ -38,6 +38,10 @@ struct InsertChartSheet: View {
     var col: Int
     var rowSpan: Int
     var colSpan: Int
+    var originXOffset: CGFloat
+    var originYOffset: CGFloat
+    var endXOffset: CGFloat
+    var endYOffset: CGFloat
   }
 
   private var isEditing: Bool { viewModel.editingChartID != nil }
@@ -73,6 +77,10 @@ struct InsertChartSheet: View {
       anchorCol: anchorCol,
       rowSpan: rowSpan,
       colSpan: colSpan,
+      originXOffset: keptAnchor?.originXOffset ?? 0,
+      originYOffset: keptAnchor?.originYOffset ?? 0,
+      endXOffset: keptAnchor?.endXOffset ?? 0,
+      endYOffset: keptAnchor?.endYOffset ?? 0,
       seriesColor: seriesColor,
       pointColors: pointColors,
       showsLegend: showsLegend,
@@ -363,7 +371,11 @@ struct InsertChartSheet: View {
       row: chart.anchorRow,
       col: chart.anchorCol,
       rowSpan: chart.rowSpan,
-      colSpan: chart.colSpan
+      colSpan: chart.colSpan,
+      originXOffset: chart.originXOffset,
+      originYOffset: chart.originYOffset,
+      endXOffset: chart.endXOffset,
+      endYOffset: chart.endYOffset
     )
     mustChooseRange = true
     let text = chart.dataRange.a1Description
