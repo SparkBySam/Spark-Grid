@@ -2031,11 +2031,15 @@ final class SpreadsheetGridNSView: NSView {
     cover.addClip()
 
     NSColor.windowBackgroundColor.setFill()
+    var paneDirty = dirtyRect
     for rect in panes where dirtyRect.intersects(rect) {
       rect.fill()
+      paneDirty = paneDirty.union(rect)
     }
+    // The background above covers the whole pane. A merge whose anchor is
+    // outside this dirty slice must be filled again or the pane stays blank.
     let skipGridlines = visibleRegionIsMostlyBordered()
-    drawFrozenCells(in: dirtyRect)
+    drawFrozenCells(in: paneDirty)
     if !skipGridlines {
       drawFrozenGridLines(in: dirtyRect)
     }
@@ -2292,6 +2296,77 @@ final class SpreadsheetGridNSView: NSView {
     activeImageDrag = nil
   }
 
+  /// Paints the anchor fill for the slice of each merge that this pane shows.
+  /// Covered cells are not drawn on their own, and the anchor's paint rect is
+  /// clipped to whichever pane contains the anchor. A frozen header, a frozen
+  /// column, or a scroll that moves the anchor off screen would otherwise leave
+  /// the rest of the merge on the sheet background. Indexes stay inside this
+  /// region so frozen and scrolled coordinates are not joined into one rect.
+  private func drawMergedCellFills(
+    in dirtyRect: NSRect,
+    region: GridLineRegion,
+    viewModel: SpreadsheetViewModel,
+    sheet: Sheet
+  ) {
+    guard !sheet.mergedRanges.isEmpty else { return }
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let rowLimit = rowCount()
+    let colLimit = columnCount()
+    let rowLower: Int
+    let rowUpper: Int
+    let colLower: Int
+    let colUpper: Int
+    switch region {
+    case .scrollable:
+      rowLower = frozenRows
+      rowUpper = rowLimit
+      colLower = frozenCols
+      colUpper = colLimit
+    case .frozenCorner:
+      rowLower = 0
+      rowUpper = frozenRows
+      colLower = 0
+      colUpper = frozenCols
+    case .frozenTop:
+      rowLower = 0
+      rowUpper = frozenRows
+      colLower = frozenCols
+      colUpper = colLimit
+    case .frozenLeft:
+      rowLower = frozenRows
+      rowUpper = rowLimit
+      colLower = 0
+      colUpper = frozenCols
+    }
+    guard rowUpper > rowLower, colUpper > colLower else { return }
+
+    for merge in sheet.mergedRanges {
+      let n = merge.normalized
+      guard n.maxRow > n.minRow || n.maxCol > n.minCol else { continue }
+      let row0 = max(n.minRow, rowLower)
+      let row1 = min(n.maxRow, rowUpper - 1)
+      let col0 = max(n.minCol, colLower)
+      let col1 = min(n.maxCol, colUpper - 1)
+      guard row0 <= row1, col0 <= col1 else { continue }
+      let anchor = CellAddress(row: n.minRow, col: n.minCol)
+      if viewModel.isEditing, isEditorActive, viewModel.selectionAnchor == anchor {
+        continue
+      }
+      let paint = viewModel.resolvedPaint(at: anchor)
+      guard let fill = CellFormatRenderer.fillColor(for: paint.format) else { continue }
+      let minX = xForColumn(col0)
+      let maxX = xForColumn(col1) + columnWidth(at: col1)
+      let minY = yForRow(row0)
+      let maxY = yForRow(row1) + rowHeight(at: row1)
+      guard maxX - minX > 0.5, maxY - minY > 0.5 else { continue }
+      let rect = NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+      guard dirtyRect.intersects(rect) else { continue }
+      fill.setFill()
+      rect.fill()
+    }
+  }
+
   private func drawCells(in dirtyRect: NSRect) {
     guard let viewModel else { return }
     let sheet = viewModel.activeSheet
@@ -2303,6 +2378,12 @@ final class SpreadsheetGridNSView: NSView {
 
     NSGraphicsContext.saveGraphicsState()
     NSBezierPath(rect: scrollableCellsClipRect()).addClip()
+    drawMergedCellFills(
+      in: dirtyRect,
+      region: .scrollable,
+      viewModel: viewModel,
+      sheet: sheet
+    )
     var borderItems: [(CellBorders, NSRect)] = []
     borderItems.reserveCapacity(256)
     for row in rowRange where row >= frozenRows {
@@ -2340,12 +2421,19 @@ final class SpreadsheetGridNSView: NSView {
     colRange: ClosedRange<Int>,
     clipRect: NSRect,
     viewModel: SpreadsheetViewModel,
-    sheet: Sheet
+    sheet: Sheet,
+    region: GridLineRegion,
+    paintCells: Bool = true
   ) {
-    guard !clipRect.isEmpty, !rowRange.isEmpty, !colRange.isEmpty else { return }
+    guard !clipRect.isEmpty else { return }
 
     NSGraphicsContext.saveGraphicsState()
     NSBezierPath(rect: clipRect).addClip()
+    drawMergedCellFills(in: dirtyRect, region: region, viewModel: viewModel, sheet: sheet)
+    guard paintCells, !rowRange.isEmpty, !colRange.isEmpty else {
+      NSGraphicsContext.restoreGraphicsState()
+      return
+    }
     var borderItems: [(CellBorders, NSRect)] = []
     borderItems.reserveCapacity(64)
     for row in rowRange {
@@ -2797,34 +2885,41 @@ final class SpreadsheetGridNSView: NSView {
         colRange: 0...(frozenCols - 1),
         clipRect: frozenCellsClipRect(),
         viewModel: viewModel,
-        sheet: sheet
+        sheet: sheet,
+        region: .frozenCorner
       )
     }
     if frozenRows > 0 {
       let colLower = max(visibleCols.lowerBound, frozenCols)
-      if colLower <= visibleCols.upperBound {
-        drawFrozenRegionCells(
-          in: dirtyRect,
-          rowRange: 0...(frozenRows - 1),
-          colRange: colLower...visibleCols.upperBound,
-          clipRect: frozenTopStripClipRect(),
-          viewModel: viewModel,
-          sheet: sheet
-        )
-      }
+      let colRange: ClosedRange<Int>? = colLower <= visibleCols.upperBound
+        ? colLower...visibleCols.upperBound
+        : nil
+      drawFrozenRegionCells(
+        in: dirtyRect,
+        rowRange: 0...(frozenRows - 1),
+        colRange: colRange ?? 0...0,
+        clipRect: frozenTopStripClipRect(),
+        viewModel: viewModel,
+        sheet: sheet,
+        region: .frozenTop,
+        paintCells: colRange != nil
+      )
     }
     if frozenCols > 0 {
       let rowLower = max(visibleRows.lowerBound, frozenRows)
-      if rowLower <= visibleRows.upperBound {
-        drawFrozenRegionCells(
-          in: dirtyRect,
-          rowRange: rowLower...visibleRows.upperBound,
-          colRange: 0...(frozenCols - 1),
-          clipRect: frozenLeftStripClipRect(),
-          viewModel: viewModel,
-          sheet: sheet
-        )
-      }
+      let rowRange: ClosedRange<Int>? = rowLower <= visibleRows.upperBound
+        ? rowLower...visibleRows.upperBound
+        : nil
+      drawFrozenRegionCells(
+        in: dirtyRect,
+        rowRange: rowRange ?? 0...0,
+        colRange: 0...(frozenCols - 1),
+        clipRect: frozenLeftStripClipRect(),
+        viewModel: viewModel,
+        sheet: sheet,
+        region: .frozenLeft,
+        paintCells: rowRange != nil
+      )
     }
   }
 

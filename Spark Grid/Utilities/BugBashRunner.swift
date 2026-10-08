@@ -2253,10 +2253,10 @@ enum BugBashRunner {
       return fail(String(format: "unmerge did not restore lines vertical %.3f horizontal %.3f", opened, openedRow))
     }
 
-    // Frozen band keeps its own red merge. A second, unfilled merge crosses the
-    // freeze into the body. A third sits below the fold so scrolling moves the holes
-    // with the cells. The cross-freeze merge is unfilled because each pane clips
-    // the anchor's paint; both sides are the sheet background.
+    // Frozen band keeps its own red merge. A second merge crosses the freeze into
+    // the body; its anchor has no fill, so both panes stay the sheet background.
+    // A third sits below the fold so scrolling moves the holes with the cells.
+    // The red merges have to keep that fill in the frozen header and after scroll.
     var frozenSheet = Sheet(name: "Frozen merge", frozenRows: 2, frozenColumns: 1)
     paintRed(sheet: &frozenSheet, rows: 0...1, cols: 3...7)
     paintRed(sheet: &frozenSheet, rows: 21...25, cols: 2...6)
@@ -2286,22 +2286,56 @@ enum BugBashRunner {
     }) else {
       return fail("frozen snapshot failed")
     }
-    guard let frozenTop = orientation(of: frozenSnap, redAt: frozenFill) else {
+    // Same bitmap axis as the unfrozen snapshot. Re-detecting it from the frozen
+    // header is ambiguous: the flipped pixel sits in the scrolled red merge.
+    guard isRed(frozenSnap.color(at: frozenFill, fromTop: fromTop)) else {
       return fail("frozen merge fill was not red")
     }
-    guard let frozenV = lineStrength(frozenSnap, at: frozenInteriorV, perpendicular: vertical, fromTop: frozenTop),
-          let frozenH = lineStrength(frozenSnap, at: frozenInteriorH, perpendicular: horizontal, fromTop: frozenTop),
-          let frozenEdge = lineStrength(frozenSnap, at: frozenOuter, perpendicular: vertical, fromTop: frozenTop),
-          let crossV = lineStrength(frozenSnap, at: crossFrozen, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
-          let crossH = lineStrength(frozenSnap, at: crossFrozenRow, perpendicular: horizontal, fromTop: frozenTop, wantsRed: false),
-          let crossLine = lineStrength(frozenSnap, at: crossControl, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
-          let crossScrolled = lineStrength(frozenSnap, at: crossBody, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
-          let crossScrolledLine = lineStrength(frozenSnap, at: crossBodyLine, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
-          let scrolledV = lineStrength(frozenSnap, at: scrolledInteriorV, perpendicular: vertical, fromTop: frozenTop),
-          let scrolledH = lineStrength(frozenSnap, at: scrolledInteriorH, perpendicular: horizontal, fromTop: frozenTop),
-          let scrolledLine = lineStrength(frozenSnap, at: scrolledOutside, perpendicular: vertical, fromTop: frozenTop)
+    var missedFill: [String] = []
+    func take(
+      _ name: String,
+      _ point: NSPoint,
+      _ perpendicular: CGPoint,
+      wantsRed: Bool = true
+    ) -> CGFloat? {
+      let strength = lineStrength(
+        frozenSnap,
+        at: point,
+        perpendicular: perpendicular,
+        fromTop: fromTop,
+        wantsRed: wantsRed
+      )
+      if strength == nil {
+        let fillPoint = NSPoint(
+          x: point.x + perpendicular.x * 8,
+          y: point.y + perpendicular.y * 8
+        )
+        let color = frozenSnap.color(at: fillPoint, fromTop: fromTop)
+        let rgb = color.usingColorSpace(.deviceRGB)
+        let detail = rgb.map {
+          String(format: "%.2f,%.2f,%.2f", $0.redComponent, $0.greenComponent, $0.blueComponent)
+        } ?? "nil"
+        missedFill.append("\(name) \(detail)")
+      }
+      return strength
+    }
+    let frozenV = take("frozen vertical", frozenInteriorV, vertical)
+    let frozenH = take("frozen horizontal", frozenInteriorH, horizontal)
+    let frozenEdge = take("frozen edge", frozenOuter, vertical)
+    let crossV = take("cross vertical", crossFrozen, vertical, wantsRed: false)
+    let crossH = take("cross horizontal", crossFrozenRow, horizontal, wantsRed: false)
+    let crossLine = take("cross line", crossControl, vertical, wantsRed: false)
+    let crossScrolled = take("cross scrolled", crossBody, vertical, wantsRed: false)
+    let crossScrolledLine = take("cross scrolled line", crossBodyLine, vertical, wantsRed: false)
+    let scrolledV = take("scrolled vertical", scrolledInteriorV, vertical)
+    let scrolledH = take("scrolled horizontal", scrolledInteriorH, horizontal)
+    let scrolledLine = take("scrolled line", scrolledOutside, vertical)
+    guard let frozenV, let frozenH, let frozenEdge,
+          let crossV, let crossH, let crossLine,
+          let crossScrolled, let crossScrolledLine,
+          let scrolledV, let scrolledH, let scrolledLine
     else {
-      return fail("frozen or scrolled sample missed its fill")
+      return fail("frozen or scrolled sample missed its fill (\(missedFill.joined(separator: "; ")))")
     }
     guard showsLine(crossLine, comparedTo: crossLine),
           showsLine(crossScrolledLine, comparedTo: crossScrolledLine),
