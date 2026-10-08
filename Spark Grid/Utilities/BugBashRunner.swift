@@ -80,6 +80,7 @@ enum BugBashRunner {
     results.append(cellTextOverflowAndClip())
     results.append(MainActor.assumeIsolated { cellTextWrapLayout() })
     results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
+    results.append(MainActor.assumeIsolated { unsavedPromptOnce() })
     return results
   }
 
@@ -3306,6 +3307,109 @@ enum BugBashRunner {
     if let failed = label(wrapTitle, detail: "merged wrap") { return failed }
 
     return Result(name: name, passed: true, detail: "label follows the selection; mixed does not name a mode")
+  }
+
+  /// Quit calls attemptClose from both the app and the window. That must show one prompt.
+  @MainActor
+  private static func unsavedPromptOnce() -> Result {
+    let name = "unsaved prompt once"
+
+    let cancelled = dirtyStore()
+    cancelled.unsavedPromptTestAnswer = .cancel
+    let delegate = SparkGridAppDelegate()
+    delegate.documentStore = cancelled
+    let reply = delegate.applicationShouldTerminate(NSApp)
+    let windowClosed = delegate.windowShouldClose(NSWindow(
+      contentRect: .zero,
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: true
+    ))
+    if reply != .terminateCancel || windowClosed || cancelled.unsavedPromptCount != 1 {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "cancel reply \(reply.rawValue) window \(windowClosed) prompts \(cancelled.unsavedPromptCount)"
+      )
+    }
+    drainMainQueue()
+    if cancelled.attemptClose() != false || cancelled.unsavedPromptCount != 2 {
+      return Result(name: name, passed: false, detail: "later quit prompts \(cancelled.unsavedPromptCount)")
+    }
+
+    let discarded = dirtyStore()
+    discarded.unsavedPromptTestAnswer = .discard
+    if discarded.attemptClose() != true || discarded.attemptClose() != true || discarded.unsavedPromptCount != 1 {
+      return Result(name: name, passed: false, detail: "don't save prompts \(discarded.unsavedPromptCount)")
+    }
+
+    let savedURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("spark-grid-close-\(UUID().uuidString).xlsx")
+    defer { try? FileManager.default.removeItem(at: savedURL) }
+    let saved = dirtyStore()
+    saved.fileURL = savedURL
+    saved.unsavedPromptTestAnswer = .save
+    if saved.attemptClose() != true {
+      return Result(name: name, passed: false, detail: "save did not close")
+    }
+    var sheet = saved.document.workbook.activeSheet
+    sheet.setCell(Cell(raw: "2"), at: CellAddress(row: 1, col: 0))
+    saved.document.workbook.activeSheet = sheet
+    saved.documentDidChange()
+    if saved.attemptClose() != true || saved.unsavedPromptCount != 1 {
+      return Result(name: name, passed: false, detail: "save prompts \(saved.unsavedPromptCount)")
+    }
+    do {
+      let written = try XLSXCodec.importWorkbook(from: savedURL)
+      if written.activeSheet.cell(at: .origin).raw != "1" {
+        return Result(name: name, passed: false, detail: "saved raw \(written.activeSheet.cell(at: .origin).raw)")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+
+    let replaced = dirtyStore()
+    replaced.unsavedPromptTestAnswer = .cancel
+    replaced.newDocument()
+    if replaced.unsavedPromptCount != 1 || replaced.document.workbook.activeSheet.cell(at: .origin).raw != "1" {
+      return Result(name: name, passed: false, detail: "new prompts \(replaced.unsavedPromptCount)")
+    }
+
+    let opened = dirtyStore()
+    opened.unsavedPromptTestAnswer = .cancel
+    let openURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("spark-grid-open-\(UUID().uuidString).xlsx")
+    defer { try? FileManager.default.removeItem(at: openURL) }
+    do {
+      try XLSXCodec.exportWorkbook(Workbook()).write(to: openURL)
+      try opened.load(from: openURL)
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    if opened.unsavedPromptCount != 1 || opened.fileURL != nil || opened.document.workbook.activeSheet.cell(at: .origin).raw != "1" {
+      return Result(name: name, passed: false, detail: "open prompts \(opened.unsavedPromptCount)")
+    }
+
+    return Result(name: name, passed: true, detail: "quit, New, and Open each ask once")
+  }
+
+  @MainActor
+  private static func dirtyStore() -> SpreadsheetDocumentStore {
+    let store = SpreadsheetDocumentStore()
+    var sheet = store.document.workbook.activeSheet
+    sheet.setCell(Cell(raw: "1"), at: .origin)
+    store.document.workbook.activeSheet = sheet
+    store.documentDidChange()
+    return store
+  }
+
+  private static func drainMainQueue() {
+    var fired = false
+    DispatchQueue.main.async { fired = true }
+    let deadline = Date().addingTimeInterval(1)
+    while !fired, Date() < deadline {
+      RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
   }
 
   private static func octoberEighth2026() -> Date? {

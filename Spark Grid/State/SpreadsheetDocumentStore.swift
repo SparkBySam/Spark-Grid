@@ -16,6 +16,18 @@ final class SpreadsheetDocumentStore {
   private var savedFingerprint: Data?
   private var autosaveTask: Task<Void, Never>?
   private var isForceClosing = false
+  /// Quit delivers `applicationShouldTerminate` and `windowShouldClose` for the same close.
+  /// The second call reuses this answer so the save prompt appears once.
+  private var answeredCloseAttempt: Bool?
+  #if DEBUG
+  /// BugBash sets this to count the save prompt without a modal alert.
+  var unsavedPromptTestAnswer: UnsavedPromptTestAnswer?
+  private(set) var unsavedPromptCount = 0
+
+  enum UnsavedPromptTestAnswer {
+    case save, discard, cancel
+  }
+  #endif
 
   init() {
     savedFingerprint = try? JSONEncoder().encode(SpreadsheetDocument().workbook)
@@ -110,20 +122,28 @@ final class SpreadsheetDocumentStore {
   }
 
   /// Prompts to save when closing with unsaved changes. Returns whether the app may close.
+  /// A second call in the same quit reuses the first answer instead of asking again.
   @discardableResult
   func attemptClose() -> Bool {
     if isForceClosing { return true }
+    if let answeredCloseAttempt { return answeredCloseAttempt }
+    let allowed: Bool
     switch askToSaveUnsavedChanges() {
     case nil:
-      return true
+      allowed = true
     case .save:
-      return saveInteractively()
+      allowed = saveInteractively()
     case .discard:
       isForceClosing = true
-      return true
+      allowed = true
     case .cancel:
-      return false
+      allowed = false
     }
+    answeredCloseAttempt = allowed
+    DispatchQueue.main.async { [weak self] in
+      self?.answeredCloseAttempt = nil
+    }
+    return allowed
   }
 
   @discardableResult
@@ -224,6 +244,16 @@ final class SpreadsheetDocumentStore {
   }
 
   private func promptForUnsavedChanges() -> UnsavedChangesChoice {
+    #if DEBUG
+    unsavedPromptCount += 1
+    if let unsavedPromptTestAnswer {
+      switch unsavedPromptTestAnswer {
+      case .save: return .save
+      case .discard: return .discard
+      case .cancel: return .cancel
+      }
+    }
+    #endif
     let alert = NSAlert()
     alert.messageText = "Do you want to save the changes you made?"
     let documentName = fileURL?.lastPathComponent ?? "Untitled"
