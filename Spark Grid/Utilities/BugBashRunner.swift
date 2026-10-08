@@ -65,6 +65,8 @@ enum BugBashRunner {
     results.append(weeklyCallsLastLabel())
     results.append(chartValueColors())
     results.append(chartFrameDrag())
+    results.append(chartSlidesUnderFrozenPanes())
+    results.append(MainActor.assumeIsolated { frozenPanesCoverChartPixels() })
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
@@ -1505,6 +1507,280 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "preview tall \(tall) wide \(wide)")
     }
     return Result(name: name, passed: true, detail: "move, resize, handles, preview size")
+  }
+
+  /// Weekly Calls: "Calls by Rep" scrolls with its anchor and slides under
+  /// the frozen header and frozen columns. Those panes cover the chart; the
+  /// chart frame itself is not clipped, so the scroll delta stays intact.
+  private static func chartSlidesUnderFrozenPanes() -> Result {
+    let name = "chart under frozen panes"
+    let header: CGFloat = 28
+    let rowH: CGFloat = 22
+    let colW: CGFloat = 80
+    let frozenRows = 7
+    let frozenCols = 2
+    let content = CGRect(x: header, y: header, width: 960, height: 640)
+    let boundaryX = header + CGFloat(frozenCols) * colW
+    let boundaryY = header + CGFloat(frozenRows) * rowH
+    func yForRow(_ row: Int, scrollY: CGFloat) -> CGFloat {
+      let model = CGFloat(row) * rowH
+      if row < frozenRows { return header + model }
+      return header + model - scrollY
+    }
+    func xForColumn(_ col: Int, scrollX: CGFloat) -> CGFloat {
+      let model = CGFloat(col) * colW
+      if col < frozenCols { return header + model }
+      return header + model - scrollX
+    }
+    func chart(scrollX: CGFloat, scrollY: CGFloat) -> CGRect {
+      OnSheetChartGeometry.frame(
+        anchorRow: 10,
+        anchorCol: 3,
+        rowSpan: 14,
+        colSpan: 8,
+        rowCount: 200,
+        columnCount: 26,
+        xForColumn: { xForColumn($0, scrollX: scrollX) },
+        yForRow: { yForRow($0, scrollY: scrollY) },
+        columnWidth: { _ in colW },
+        rowHeight: { _ in rowH }
+      )
+    }
+    func covers(_ point: CGPoint, columns: Int = frozenCols, rows: Int = frozenRows) -> Bool {
+      OnSheetChartGeometry.frozenPaneCovers(
+        point,
+        contentRect: content,
+        frozenColumnBoundaryX: columns > 0 ? boundaryX : content.minX,
+        frozenRowBoundaryY: rows > 0 ? boundaryY : content.minY,
+        frozenColumns: columns,
+        frozenRows: rows
+      )
+    }
+    let rested = chart(scrollX: 0, scrollY: 0)
+    guard rested.minY > boundaryY, rested.minX > boundaryX, rested.height == 14 * rowH else {
+      return Result(name: name, passed: false, detail: "rest frame \(rested)")
+    }
+    let scrolled = chart(scrollX: 0, scrollY: 120)
+    guard scrolled.minY < boundaryY, scrolled.height == rested.height else {
+      return Result(name: name, passed: false, detail: "scroll under header \(scrolled)")
+    }
+    let layer = content
+    let hostRest = OnSheetChartGeometry.hostFrame(chartRect: rested, layerFrame: layer)
+    let hostScroll = OnSheetChartGeometry.hostFrame(chartRect: scrolled, layerFrame: layer)
+    guard hostRest.minY - hostScroll.minY == 120, hostScroll.minX == hostRest.minX else {
+      return Result(name: name, passed: false, detail: "anchor scroll \(hostRest) \(hostScroll)")
+    }
+    let underHeader = CGPoint(x: scrolled.midX, y: boundaryY - 4)
+    let inBody = CGPoint(x: scrolled.midX, y: boundaryY + 8)
+    guard scrolled.contains(underHeader), covers(underHeader),
+          scrolled.contains(inBody), !covers(inBody)
+    else {
+      return Result(name: name, passed: false, detail: "header cover \(underHeader) \(inBody)")
+    }
+    let slidLeft = chart(scrollX: 200, scrollY: 0)
+    let underCols = CGPoint(x: boundaryX - 4, y: slidLeft.midY)
+    let rightOfCols = CGPoint(x: boundaryX + 8, y: slidLeft.midY)
+    guard slidLeft.minX < boundaryX, slidLeft.height == rested.height,
+          slidLeft.contains(underCols), covers(underCols),
+          slidLeft.contains(rightOfCols), !covers(rightOfCols)
+    else {
+      return Result(name: name, passed: false, detail: "column cover \(slidLeft)")
+    }
+    let onDivider = CGPoint(x: scrolled.midX, y: boundaryY)
+    guard covers(onDivider) else {
+      return Result(name: name, passed: false, detail: "divider was left to the chart")
+    }
+    let panes = OnSheetChartGeometry.frozenPaneCoverRects(
+      contentRect: content,
+      frozenColumnBoundaryX: boundaryX,
+      frozenRowBoundaryY: boundaryY,
+      frozenColumns: frozenCols,
+      frozenRows: frozenRows
+    )
+    guard panes.count == 2,
+          panes[0] == CGRect(x: header, y: header, width: 960, height: boundaryY - header),
+          panes[1] == CGRect(x: header, y: boundaryY, width: boundaryX - header, height: content.maxY - boundaryY)
+    else {
+      return Result(name: name, passed: false, detail: "cover rects \(panes)")
+    }
+    guard OnSheetChartGeometry.frozenPaneCoverRects(
+      contentRect: content,
+      frozenColumnBoundaryX: content.minX,
+      frozenRowBoundaryY: content.minY,
+      frozenColumns: 0,
+      frozenRows: 0
+    ).isEmpty, !covers(underHeader, columns: 0, rows: 0) else {
+      return Result(name: name, passed: false, detail: "unfrozen sheet still covered the chart")
+    }
+    return Result(name: name, passed: true, detail: "header and columns cover the scrolled chart")
+  }
+
+  /// Draws Weekly Calls with "Calls by Rep" sitting on top of the frozen header
+  /// and frozen columns. Those cells stay the fill color; the same cells without
+  /// a freeze are covered by the chart.
+  @MainActor
+  private static func frozenPanesCoverChartPixels() -> Result {
+    let name = "frozen panes cover chart"
+    let red = CodableColor(red: 1, green: 0, blue: 0, alpha: 1)
+    let green = CodableColor(red: 0, green: 1, blue: 0, alpha: 1)
+    let blue = CodableColor(red: 0, green: 0, blue: 1, alpha: 1)
+    func painted(_ color: CodableColor) -> Cell {
+      var format = CellFormat()
+      format.fillColor = color
+      return Cell(raw: "", format: format)
+    }
+    func makeSheet(frozen: Bool) -> Sheet {
+      var sheet = Sheet(
+        name: "Weekly Calls",
+        frozenRows: frozen ? 2 : 0,
+        frozenColumns: frozen ? 1 : 0
+      )
+      sheet.setCell(painted(red), at: CellAddress(row: 0, col: 2))
+      sheet.setCell(painted(green), at: CellAddress(row: 4, col: 0))
+      sheet.setCell(painted(blue), at: CellAddress(row: 4, col: 2))
+      sheet.charts = [
+        SheetChart(
+          kind: .bar,
+          title: "Calls by Rep",
+          dataRange: CellRange(start: .origin, end: CellAddress(row: 4, col: 1)),
+          anchorRow: 0,
+          anchorCol: 0,
+          rowSpan: 12,
+          colSpan: 8
+        )
+      ]
+      return sheet
+    }
+    let header: CGFloat = SpreadsheetGridNSView.baseHeaderSize
+    let rowH = Workbook.defaultRowHeight
+    let colW = Workbook.defaultColumnWidth
+    let redPoint = NSPoint(x: header + 2 * colW + colW / 2, y: header + rowH / 2)
+    let greenPoint = NSPoint(x: header + colW / 2, y: header + 4 * rowH + rowH / 2)
+    let bluePoint = NSPoint(x: header + 2 * colW + colW / 2, y: header + 4 * rowH + rowH / 2)
+
+    func isRed(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.redComponent > 0.85 && rgb.greenComponent < 0.2 && rgb.blueComponent < 0.2
+    }
+    func isGreen(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.greenComponent > 0.85 && rgb.redComponent < 0.2 && rgb.blueComponent < 0.2
+    }
+    func isBlue(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.blueComponent > 0.85 && rgb.redComponent < 0.2 && rgb.greenComponent < 0.2
+    }
+    func describe(_ color: NSColor?) -> String {
+      guard let rgb = color?.usingColorSpace(.deviceRGB) else { return "nil" }
+      return String(format: "%.2f,%.2f,%.2f", rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+    }
+
+    guard let open = snapshotGrid(sheet: makeSheet(frozen: false)),
+          let frozen = snapshotGrid(sheet: makeSheet(frozen: true))
+    else {
+      return Result(name: name, passed: false, detail: "grid snapshot failed")
+    }
+    let fromTop = [true, false].first { fromTop in
+      !isRed(open.color(at: redPoint, fromTop: fromTop))
+        && !isGreen(open.color(at: greenPoint, fromTop: fromTop))
+        && !isBlue(open.color(at: bluePoint, fromTop: fromTop))
+    }
+    guard let fromTop else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "chart did not cover the cells top \(describe(open.color(at: redPoint, fromTop: true))) \(describe(open.color(at: greenPoint, fromTop: true))) \(describe(open.color(at: bluePoint, fromTop: true))) bottom \(describe(open.color(at: redPoint, fromTop: false))) \(describe(open.color(at: greenPoint, fromTop: false))) \(describe(open.color(at: bluePoint, fromTop: false)))"
+      )
+    }
+    let frozenRed = frozen.color(at: redPoint, fromTop: fromTop)
+    let frozenGreen = frozen.color(at: greenPoint, fromTop: fromTop)
+    let frozenBlue = frozen.color(at: bluePoint, fromTop: fromTop)
+    guard isRed(frozenRed), isGreen(frozenGreen), !isBlue(frozenBlue) else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "panes red \(describe(frozenRed)) green \(describe(frozenGreen)) body \(describe(frozenBlue))"
+      )
+    }
+    let chartAboveOverlay = frozen.chartAboveFrozenPane
+    guard !chartAboveOverlay else {
+      return Result(name: name, passed: false, detail: "chart layer is above the frozen pane")
+    }
+    return Result(name: name, passed: true, detail: "frozen header and columns cover Calls by Rep")
+  }
+
+  private struct GridSnapshot {
+    var image: NSBitmapImageRep
+    var pointScale: CGFloat
+    var chartAboveFrozenPane: Bool
+
+    func color(at point: NSPoint, fromTop: Bool) -> NSColor {
+      let x = Int((point.x * pointScale).rounded(.down))
+      let yFromTop = Int((point.y * pointScale).rounded(.down))
+      let y = fromTop ? yFromTop : image.pixelsHigh - 1 - yFromTop
+      let px = min(image.pixelsWide - 1, max(0, x))
+      let py = min(image.pixelsHigh - 1, max(0, y))
+      return image.colorAt(x: px, y: py) ?? .clear
+    }
+  }
+
+  @MainActor
+  private static func snapshotGrid(sheet: Sheet) -> GridSnapshot? {
+    let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
+    let grid = SpreadsheetGridNSView(frame: frame)
+    let window = NSWindow(
+      contentRect: frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = grid
+    window.setFrameOrigin(NSPoint(x: -4000, y: -4000))
+    window.orderFrontRegardless()
+    grid.viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    grid.layoutSubtreeIfNeeded()
+    grid.needsDisplay = true
+    window.displayIfNeeded()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+    grid.layoutSubtreeIfNeeded()
+    grid.display()
+
+    let scale = max(1, window.backingScaleFactor)
+    let pixelsWide = Int((grid.bounds.width * scale).rounded())
+    let pixelsHigh = Int((grid.bounds.height * scale).rounded())
+    guard let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: pixelsWide,
+      pixelsHigh: pixelsHigh,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ), let gfx = NSGraphicsContext(bitmapImageRep: rep) else {
+      window.orderOut(nil)
+      window.close()
+      return nil
+    }
+    rep.size = grid.bounds.size
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = gfx
+    let cg = gfx.cgContext
+    cg.translateBy(x: 0, y: CGFloat(pixelsHigh))
+    cg.scaleBy(x: scale, y: -scale)
+    grid.layer?.render(in: cg)
+    NSGraphicsContext.restoreGraphicsState()
+
+    let chartLayer = grid.subviews.first { ($0.layer?.zPosition ?? -1) == 5 }
+    let pane = grid.subviews.first { ($0.layer?.zPosition ?? -1) == 6 }
+    let chartAbove = pane == nil || pane?.isHidden == true
+      || (chartLayer?.layer?.zPosition ?? 0) > (pane?.layer?.zPosition ?? 0)
+    window.orderOut(nil)
+    window.close()
+    return GridSnapshot(image: rep, pointScale: scale, chartAboveFrozenPane: chartAbove)
   }
 
   @MainActor
