@@ -70,6 +70,9 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
+    results.append(everydayFormulas())
+    results.append(excelFormatCodes())
+    results.append(definedNamesResolve())
     return results
   }
 
@@ -2223,6 +2226,321 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "rule text was replaced \(String(describing: keptPaint.format?.textColor))")
     }
     return Result(name: name, passed: true, detail: "dark on light scale, light on dark fill")
+  }
+
+  private static func everydayFormulas() -> Result {
+    let name = "everyday formulas"
+    let wanted = [
+      "SUMIF", "AVERAGEIF", "COUNTIF", "SUMIFS", "COUNTIFS", "AVERAGEIFS",
+      "COUNTBLANK", "SUMPRODUCT", "IFNA", "IFS", "NOT", "UPPER", "LOWER",
+      "MID", "SUBSTITUTE", "TEXTJOIN", "ROUNDUP", "ROUNDDOWN", "NOW",
+    ]
+    let missing = wanted.filter { !FormulaFunctions.all.contains($0) }
+    if !missing.isEmpty {
+      return Result(name: name, passed: false, detail: "catalog missing \(missing.joined(separator: ", "))")
+    }
+
+    let cells: [CellAddress: String] = [
+      CellAddress(row: 0, col: 0): "10",
+      CellAddress(row: 1, col: 0): "20",
+      CellAddress(row: 2, col: 0): "30",
+      CellAddress(row: 0, col: 1): "1",
+      CellAddress(row: 1, col: 1): "2",
+      CellAddress(row: 2, col: 1): "3",
+      CellAddress(row: 0, col: 2): "east",
+      CellAddress(row: 1, col: 2): "west",
+      CellAddress(row: 2, col: 2): "eastern",
+      CellAddress(row: 0, col: 3): "5",
+      CellAddress(row: 1, col: 3): "7",
+      CellAddress(row: 2, col: 3): "9",
+      CellAddress(row: 4, col: 0): "apple",
+      CellAddress(row: 6, col: 0): "Apple",
+      CellAddress(row: 0, col: 4): "FALSE",
+      CellAddress(row: 1, col: 4): "0",
+      CellAddress(row: 1, col: 5): "star*",
+      CellAddress(row: 2, col: 5): "starX",
+    ]
+    let cases: [(String, CellValue)] = [
+      ("=SUMIF(A1:A3,\">15\")", .number(50)),
+      ("=SUMIF(A1:A3,\">15\",B1:B3)", .number(5)),
+      ("=SUMIF(A1:A3,\">15\",B1)", .number(5)),
+      ("=SUMIF(C1:C3,\"*east*\",D1:D3)", .number(14)),
+      ("=COUNTIF(C1:C3,\"*east*\")", .number(2)),
+      ("=COUNTIF(C1:C3,\"?est\")", .number(1)),
+      ("=COUNTIF(A1:A3,\">=20\")", .number(2)),
+      ("=COUNTIF(A5:A7,\"apple\")", .number(2)),
+      ("=COUNTIF(F1:F3,\"star~*\")", .number(1)),
+      ("=COUNTIF(F1:F3,\"*\")", .number(2)),
+      ("=AVERAGEIF(A1:A3,\">15\")", .number(25)),
+      ("=AVERAGEIF(A1:A3,\">100\")", .error(.divZero)),
+      ("=SUMIFS(B1:B3,A1:A3,\">10\",A1:A3,\"<30\")", .number(2)),
+      ("=COUNTIFS(A1:A3,\">15\",B1:B3,\"<3\")", .number(1)),
+      ("=AVERAGEIFS(B1:B3,A1:A3,\">=20\")", .number(2.5)),
+      ("=AVERAGEIFS(B1:B3,A1:A3,\">100\")", .error(.divZero)),
+      ("=SUMIFS(B1:B2,A1:A3,\">0\")", .error(.value)),
+      ("=COUNTBLANK(A1:A4)", .number(1)),
+      ("=COUNTBLANK(E1:E3)", .number(1)),
+      ("=SUMPRODUCT(A1:A3,B1:B3)", .number(140)),
+      ("=SUMPRODUCT(A1:A3,B1:B2)", .error(.value)),
+      ("=SUMPRODUCT((A1:A3>15)*(B1:B3))", .number(5)),
+      ("=IFNA(1,2)", .number(1)),
+      ("=IFNA(VLOOKUP(\"z\",A1:B3,2,FALSE),9)", .number(9)),
+      ("=IFNA(1/0,9)", .error(.divZero)),
+      ("=IFS(FALSE,1,TRUE,2)", .number(2)),
+      ("=IFS(FALSE,1)", .error(.na)),
+      ("=IFS(1,\"yes\")", .string("yes")),
+      ("=NOT(FALSE)", .bool(true)),
+      ("=NOT(1)", .bool(false)),
+      ("=NOT(0)", .bool(true)),
+      ("=UPPER(\"Ab\")", .string("AB")),
+      ("=LOWER(\"Ab\")", .string("ab")),
+      ("=UPPER(12)", .string("12")),
+      ("=MID(\"spark\",2,3)", .string("par")),
+      ("=MID(\"spark\",0,1)", .error(.value)),
+      ("=SUBSTITUTE(\"a-a-a\",\"a\",\"b\")", .string("b-b-b")),
+      ("=SUBSTITUTE(\"a-a-a\",\"a\",\"b\",2)", .string("a-b-a")),
+      ("=SUBSTITUTE(\"Apple\",\"p\",\"X\")", .string("AXXle")),
+      ("=SUBSTITUTE(\"Apple\",\"P\",\"X\")", .string("Apple")),
+      ("=TEXTJOIN(\", \",TRUE,C1:C3)", .string("east, west, eastern")),
+      ("=TEXTJOIN(\",\",FALSE,C1,C4,C3)", .string("east,,eastern")),
+      ("=ROUNDUP(1.1,0)", .number(2)),
+      ("=ROUNDUP(-1.2,0)", .number(-2)),
+      ("=ROUNDDOWN(1.9,0)", .number(1)),
+      ("=ROUNDDOWN(-1.9,0)", .number(-1)),
+      ("=ROUNDUP(1.234,2)", .number(1.24)),
+      ("=ROUNDDOWN(1.239,2)", .number(1.23)),
+      ("=ROUNDUP(1234,-2)", .number(1300)),
+      ("=ROUNDDOWN(1234,-2)", .number(1200)),
+    ]
+    for (formula, expected) in cases {
+      let value = evalFormula(formula, cells: cells)
+      if !sameCellValue(value, expected) {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "\(formula) got \(value.displayString) expected \(expected.displayString)"
+        )
+      }
+    }
+
+    let before = ExcelDate.serialWithTime(from: Date())
+    let now = evalFormula("=NOW()", cells: [:])
+    let after = ExcelDate.serialWithTime(from: Date())
+    guard case .number(let serial) = now, serial >= before - 0.00001, serial <= after + 0.00001 else {
+      return Result(name: name, passed: false, detail: "NOW got \(now.displayString)")
+    }
+    return Result(name: name, passed: true, detail: "criteria, wildcards, text, and rounding")
+  }
+
+  private static func sameCellValue(_ lhs: CellValue, _ rhs: CellValue) -> Bool {
+    if case .number(let left) = lhs, case .number(let right) = rhs {
+      return abs(left - right) < 0.000_000_1
+    }
+    return lhs == rhs
+  }
+
+  private static func evalFormula(_ formula: String, cells: [CellAddress: String]) -> CellValue {
+    var sheet = Sheet(name: "Sheet1")
+    for (address, raw) in cells {
+      sheet.setCell(Cell(raw: raw), at: address)
+    }
+    let result = CellAddress(row: 40, col: 0)
+    sheet.setCell(Cell(raw: formula), at: result)
+    let engine = FormulaEngine()
+    let workbook = Workbook(sheets: [sheet])
+    engine.rebuild(workbook: workbook)
+    return engine.displayValue(at: result, sheet: workbook.activeSheet)
+  }
+
+  private static func excelFormatCodes() -> Result {
+    let name = "excel format codes"
+    func shown(_ number: Double, code: String, places: Int? = nil) -> String {
+      var format = CellFormat()
+      format.formatCode = code
+      format.decimalPlaces = places
+      return CellFormatRenderer.displayText(for: .number(number), format: format, fallbackRaw: "")
+    }
+
+    let checks: [(String, String)] = [
+      (shown(1234.5, code: "€#,##0.00"), "€1,234.50"),
+      (shown(-1234.5, code: "€#,##0.00"), "-€1,234.50"),
+      (shown(1234.5, code: "[$£-809]#,##0.00"), "£1,234.50"),
+      (shown(1234.5, code: "#,##0.00"), "1,234.50"),
+      (shown(1234.4, code: "#,##0"), "1,234"),
+      (shown(0.5, code: "0%"), "50%"),
+      (shown(0.256, code: "0.00%"), "25.60%"),
+      (shown(-1234.5, code: "$#,##0.00_);($#,##0.00)"), "($1,234.50)"),
+      (shown(1234, code: "0.00E+00"), "1.23E+03"),
+      (shown(1234.5, code: "#,##0.00", places: 0), "1,235"),
+    ]
+    for (actual, expected) in checks where actual != expected {
+      return Result(name: name, passed: false, detail: "\(actual) expected \(expected)")
+    }
+
+    var plainCurrency = CellFormat()
+    plainCurrency.numberFormat = .currency
+    let forced = CellFormatRenderer.displayText(for: .number(1234.5), format: plainCurrency, fallbackRaw: "1234.5")
+    if forced != "$1234.50" {
+      return Result(name: name, passed: false, detail: "toolbar currency \(forced)")
+    }
+
+    guard let noon = octoberEighth2026() else {
+      return Result(name: name, passed: false, detail: "date components")
+    }
+    let serial = ExcelDate.serial(from: noon)
+    let dates: [(String, String)] = [
+      (shown(serial, code: "dd/mm/yyyy"), "08/10/2026"),
+      (shown(serial, code: "d-mmm-yy"), "8-Oct-26"),
+      (shown(serial, code: "m/d/yyyy"), "10/8/2026"),
+      (shown(0.75, code: "h:mm"), "18:00"),
+      (shown(0.75, code: "h:mm AM/PM"), "6:00 PM"),
+      (shown(1.5, code: "[h]:mm:ss"), "36:00:00"),
+    ]
+    for (actual, expected) in dates where actual != expected {
+      return Result(name: name, passed: false, detail: "\(actual) expected \(expected)")
+    }
+
+    do {
+      var sheet = Sheet(name: "Formats")
+      var euro = CellFormat()
+      euro.numberFormat = .currency
+      euro.formatCode = "€#,##0.00"
+      sheet.setCell(Cell(raw: "1234.5", format: euro), at: CellAddress(row: 0, col: 0))
+      var toolbar = CellFormat()
+      toolbar.numberFormat = .currency
+      sheet.setCell(Cell(raw: "1234.5", format: toolbar), at: CellAddress(row: 1, col: 0))
+      var dated = CellFormat()
+      dated.numberFormat = .date
+      sheet.setCell(Cell(raw: String(serial), format: dated), at: CellAddress(row: 2, col: 0))
+
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let euroCell = imported.sheets[0].cell(at: CellAddress(row: 0, col: 0))
+      let euroShown = CellFormatRenderer.displayText(
+        for: .number(1234.5),
+        format: euroCell.format,
+        fallbackRaw: euroCell.raw
+      )
+      if euroCell.format?.formatCode != "€#,##0.00" || euroShown != "€1,234.50" {
+        return Result(name: name, passed: false, detail: "euro reimport \(euroCell.format?.formatCode ?? "") \(euroShown)")
+      }
+      let dollar = imported.sheets[0].cell(at: CellAddress(row: 1, col: 0))
+      let dollarShown = CellFormatRenderer.displayText(
+        for: .number(1234.5),
+        format: dollar.format,
+        fallbackRaw: dollar.raw
+      )
+      if dollar.format?.formatCode != "$#,##0.00" || dollarShown != "$1,234.50" {
+        return Result(name: name, passed: false, detail: "currency reimport \(dollar.format?.formatCode ?? "") \(dollarShown)")
+      }
+      if imported.sheets[0].cell(at: CellAddress(row: 2, col: 0)).format?.formatCode != "m/d/yyyy" {
+        return Result(name: name, passed: false, detail: "builtin 14 code missing")
+      }
+
+      guard var styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") else {
+        return Result(name: name, passed: false, detail: "styles.xml missing")
+      }
+      guard styles.contains("numFmtId=\"14\"") else {
+        return Result(name: name, passed: false, detail: "date did not export as builtin 14")
+      }
+      styles = styles.replacingOccurrences(of: "numFmtId=\"14\"", with: "numFmtId=\"15\"")
+      guard let patched = XLSXCodec.replacingZipEntries(data, entries: ["xl/styles.xml": Data(styles.utf8)]) else {
+        return Result(name: name, passed: false, detail: "could not patch styles")
+      }
+      let builtin = try XLSXCodec.importWorkbook(from: patched)
+      let dateCell = builtin.sheets[0].cell(at: CellAddress(row: 2, col: 0))
+      let dateShown = CellFormatRenderer.displayText(for: .number(serial), format: dateCell.format, fallbackRaw: dateCell.raw)
+      if dateCell.format?.formatCode != "d-mmm-yy" || dateShown != "8-Oct-26" {
+        return Result(name: name, passed: false, detail: "builtin 15 \(dateCell.format?.formatCode ?? "") \(dateShown)")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    return Result(name: name, passed: true, detail: "symbol, grouping, and date pattern")
+  }
+
+  private static func definedNamesResolve() -> Result {
+    let name = "defined names resolve"
+    var sheet = Sheet(name: "Q3 Sales")
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "20"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "4"), at: CellAddress(row: 0, col: 1))
+    sheet.setCell(Cell(raw: "=SUM(Sales)"), at: CellAddress(row: 0, col: 2))
+    sheet.setCell(Cell(raw: "=Rate"), at: CellAddress(row: 1, col: 2))
+    var workbook = Workbook(sheets: [sheet])
+    workbook.setNamedRange(
+      NamedRange(
+        name: "Sales",
+        sheetName: "Q3 Sales",
+        range: CellRange(start: CellAddress(row: 0, col: 0), end: CellAddress(row: 1, col: 0))
+      )
+    )
+    do {
+      let data = try XLSXCodec.exportWorkbook(workbook)
+      let roundTrip = try XLSXCodec.importWorkbook(from: data)
+      let engine = FormulaEngine()
+      engine.rebuild(workbook: roundTrip)
+      let summed = engine.displayValue(at: CellAddress(row: 0, col: 2), sheet: roundTrip.activeSheet)
+      if summed != .number(30) || roundTrip.namedRange(named: "Sales") == nil {
+        return Result(name: name, passed: false, detail: "exported Sales resolved to \(summed.displayString)")
+      }
+
+      guard var xml = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/workbook.xml"),
+            let start = xml.range(of: "<definedNames"),
+            let end = xml.range(of: "</definedNames>")
+      else {
+        return Result(name: name, passed: false, detail: "workbook.xml has no definedNames")
+      }
+      let excelNames = """
+      <definedNames>\
+      <definedName name="Sales">'Q3 Sales'!$A$1:$A$2</definedName>\
+      <definedName name="Rate">'q3 sales'!$B$1</definedName>\
+      <definedName name="Broken">OFFSET('Q3 Sales'!$A$1,0,0)</definedName>\
+      </definedNames>
+      """
+      xml.replaceSubrange(start.lowerBound..<end.upperBound, with: excelNames)
+      guard let patched = XLSXCodec.replacingZipEntries(data, entries: ["xl/workbook.xml": Data(xml.utf8)]) else {
+        return Result(name: name, passed: false, detail: "could not patch workbook.xml")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: patched)
+      if imported.namedRange(named: "Broken") != nil {
+        return Result(name: name, passed: false, detail: "OFFSET name was imported")
+      }
+      guard let sales = imported.namedRange(named: "Sales"),
+            sales.sheetName == "Q3 Sales",
+            sales.startRow == 0, sales.endRow == 1, sales.startCol == 0,
+            let rate = imported.namedRange(named: "Rate"),
+            rate.sheetName == "Q3 Sales",
+            rate.startRow == 0, rate.startCol == 1, rate.endRow == 0, rate.endCol == 1
+      else {
+        return Result(name: name, passed: false, detail: "Sales or Rate did not parse")
+      }
+      let patchedEngine = FormulaEngine()
+      patchedEngine.rebuild(workbook: imported)
+      let total = patchedEngine.displayValue(at: CellAddress(row: 0, col: 2), sheet: imported.activeSheet)
+      let rateValue = patchedEngine.displayValue(at: CellAddress(row: 1, col: 2), sheet: imported.activeSheet)
+      if total != .number(30) || rateValue != .number(4) {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "SUM(Sales)=\(total.displayString) Rate=\(rateValue.displayString)"
+        )
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    return Result(name: name, passed: true, detail: "Sales and Rate resolve; OFFSET skipped")
+  }
+
+  private static func octoberEighth2026() -> Date? {
+    var components = DateComponents()
+    components.calendar = Calendar(identifier: .gregorian)
+    components.timeZone = TimeZone(secondsFromGMT: 0)
+    components.year = 2026
+    components.month = 10
+    components.day = 8
+    components.hour = 12
+    return components.date
   }
 }
 #endif

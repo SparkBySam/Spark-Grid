@@ -11,6 +11,8 @@ struct CellFormat: Codable, Equatable, Sendable {
   var textColor: CodableColor?
   var fillColor: CodableColor?
   var numberFormat: NumberFormat = .general
+  /// Excel format code kept from the file (`€#,##0.00`, `dd/mm/yyyy`). Nil uses `numberFormat`.
+  var formatCode: String?
   var fontFamily: String?
   var fontSize: CGFloat?
   var decimalPlaces: Int?

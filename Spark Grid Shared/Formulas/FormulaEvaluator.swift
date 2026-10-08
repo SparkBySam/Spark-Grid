@@ -57,7 +57,7 @@ struct FormulaEvaluator {
     return .error(.arrayResult)
   }
 
-  private func applyUnary(_ op: UnaryOp, to value: CellValue) -> CellValue {
+  func applyUnary(_ op: UnaryOp, to value: CellValue) -> CellValue {
     if case .error = value { return value }
     guard let number = value.asNumber else { return .error(.value) }
     switch op {
@@ -66,7 +66,7 @@ struct FormulaEvaluator {
     }
   }
 
-  private func applyBinary(_ op: BinaryOp, lhs: CellValue, rhs: CellValue) -> CellValue {
+  func applyBinary(_ op: BinaryOp, lhs: CellValue, rhs: CellValue) -> CellValue {
     if case .error = lhs { return lhs }
     if case .error = rhs { return rhs }
 
@@ -129,7 +129,7 @@ struct FormulaEvaluator {
     return zip(lhs, rhs).map { applyBinary(op, lhs: $0, rhs: $1) }
   }
 
-  private func rangeCellValues(start: FormulaRef, end: FormulaRef) -> [CellValue] {
+  func rangeCellValues(start: FormulaRef, end: FormulaRef) -> [CellValue] {
     let n = normalizedBounds(start: start, end: end)
     var values: [CellValue] = []
     values.reserveCapacity((n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1))
@@ -288,6 +288,45 @@ struct FormulaEvaluator {
       return evalDatePart(args) { Calendar.current.component(.month, from: $0) }
     case "DAY":
       return evalDatePart(args) { Calendar.current.component(.day, from: $0) }
+    case "SUMIF":
+      return evalSUMIF(args)
+    case "AVERAGEIF":
+      return evalAVERAGEIF(args)
+    case "COUNTIF":
+      return evalCOUNTIF(args)
+    case "SUMIFS":
+      return evalSUMIFS(args)
+    case "COUNTIFS":
+      return evalCOUNTIFS(args)
+    case "AVERAGEIFS":
+      return evalAVERAGEIFS(args)
+    case "COUNTBLANK":
+      return evalCOUNTBLANK(args)
+    case "SUMPRODUCT":
+      return evalSUMPRODUCT(args)
+    case "IFNA":
+      return evalIFNA(args)
+    case "IFS":
+      return evalIFS(args)
+    case "NOT":
+      return evalNOT(args)
+    case "UPPER":
+      return evalTextCase(args, uppercased: true)
+    case "LOWER":
+      return evalTextCase(args, uppercased: false)
+    case "MID":
+      return evalMID(args)
+    case "SUBSTITUTE":
+      return evalSUBSTITUTE(args)
+    case "TEXTJOIN":
+      return evalTEXTJOIN(args)
+    case "ROUNDUP":
+      return evalDirectionalRound(args, mode: .up)
+    case "ROUNDDOWN":
+      return evalDirectionalRound(args, mode: .down)
+    case "NOW":
+      guard args.isEmpty else { return .error(.value) }
+      return .number(ExcelDate.serialWithTime(from: Date()))
     default:
       return .error(.name)
     }
@@ -593,7 +632,7 @@ struct FormulaEvaluator {
     }
   }
 
-  private func normalizedBounds(start: FormulaRef, end: FormulaRef) -> (
+  func normalizedBounds(start: FormulaRef, end: FormulaRef) -> (
     minRow: Int, maxRow: Int, minCol: Int, maxCol: Int
   ) {
     let sheet = start.sheet ?? end.sheet

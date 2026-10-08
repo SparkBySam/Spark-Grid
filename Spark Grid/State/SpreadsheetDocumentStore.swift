@@ -38,6 +38,7 @@ final class SpreadsheetDocumentStore {
   }
 
   func newDocument() {
+    guard confirmReplaceCurrentDocument() else { return }
     document = SpreadsheetDocument()
     fileURL = nil
     savedFingerprint = fingerprint(of: document.workbook)
@@ -47,6 +48,7 @@ final class SpreadsheetDocumentStore {
   }
 
   func load(from url: URL) throws {
+    guard confirmReplaceCurrentDocument() else { return }
     let accessing = url.startAccessingSecurityScopedResource()
     defer {
       if accessing {
@@ -111,25 +113,15 @@ final class SpreadsheetDocumentStore {
   @discardableResult
   func attemptClose() -> Bool {
     if isForceClosing { return true }
-    guard isDirty else { return true }
-
-    let alert = NSAlert()
-    alert.messageText = "Do you want to save the changes you made?"
-    let documentName = fileURL?.lastPathComponent ?? "Untitled"
-    alert.informativeText = "Your changes to \"\(documentName)\" will be lost if you don't save."
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: "Save")
-    alert.addButton(withTitle: "Don't Save")
-    alert.addButton(withTitle: "Cancel")
-
-    switch alert.runModal() {
-    case .alertFirstButtonReturn:
-      guard saveInteractively() else { return false }
+    switch askToSaveUnsavedChanges() {
+    case nil:
       return true
-    case .alertSecondButtonReturn:
+    case .save:
+      return saveInteractively()
+    case .discard:
       isForceClosing = true
       return true
-    default:
+    case .cancel:
       return false
     }
   }
@@ -198,6 +190,58 @@ final class SpreadsheetDocumentStore {
   }
 
   // MARK: - Private
+
+  private enum UnsavedChangesChoice {
+    case save
+    case discard
+    case cancel
+  }
+
+  /// Same dialog quit uses. Nil when there is nothing unsaved.
+  /// An in-progress cell edit is committed first so it counts as a change.
+  private func askToSaveUnsavedChanges() -> UnsavedChangesChoice? {
+    SpreadsheetEditorFlush.commitForSave()
+    if let viewModel = activeViewModel {
+      viewModel.syncAutoFilterToActiveSheet()
+      document.workbook = viewModel.workbook
+    }
+    documentDidChange()
+    guard isDirty else { return nil }
+    return promptForUnsavedChanges()
+  }
+
+  /// New, Open, and a Finder open. Cancel leaves the current workbook in place.
+  private func confirmReplaceCurrentDocument() -> Bool {
+    if isForceClosing { return true }
+    switch askToSaveUnsavedChanges() {
+    case nil, .discard:
+      return true
+    case .save:
+      return saveInteractively()
+    case .cancel:
+      return false
+    }
+  }
+
+  private func promptForUnsavedChanges() -> UnsavedChangesChoice {
+    let alert = NSAlert()
+    alert.messageText = "Do you want to save the changes you made?"
+    let documentName = fileURL?.lastPathComponent ?? "Untitled"
+    alert.informativeText = "Your changes to \"\(documentName)\" will be lost if you don't save."
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Save")
+    alert.addButton(withTitle: "Don't Save")
+    alert.addButton(withTitle: "Cancel")
+
+    switch alert.runModal() {
+    case .alertFirstButtonReturn:
+      return .save
+    case .alertSecondButtonReturn:
+      return .discard
+    default:
+      return .cancel
+    }
+  }
 
   private func performAutosave() {
     guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty else { return }

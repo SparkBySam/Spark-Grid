@@ -20,6 +20,9 @@ enum CellFormatRenderer {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let number = parseNumber(trimmed) else { return raw }
 
+    if let rendered = renderedFormat(number, format) {
+      return rendered
+    }
     let places = format.decimalPlaces ?? decimalPlaces(for: format.numberFormat)
     switch format.numberFormat {
     case .general:
@@ -61,6 +64,9 @@ enum CellFormatRenderer {
         return format
       }()
       guard let resolvedFormat else { return value.displayString }
+      if let rendered = renderedFormat(number, resolvedFormat) {
+        return rendered
+      }
       let places = resolvedFormat.decimalPlaces ?? decimalPlaces(for: resolvedFormat.numberFormat)
       switch resolvedFormat.numberFormat {
       case .general:
@@ -375,6 +381,11 @@ enum CellFormatRenderer {
   }
 
   // MARK: - Number helpers
+
+  private static func renderedFormat(_ number: Double, _ format: CellFormat) -> String? {
+    guard let code = format.formatCode else { return nil }
+    return ExcelFormatCode.formatted(number, code: code, fractionDigits: format.decimalPlaces)
+  }
 
   private static func parseNumber(_ text: String) -> Double? {
     let stripped = text

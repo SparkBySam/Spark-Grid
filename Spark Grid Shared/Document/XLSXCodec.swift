@@ -78,12 +78,145 @@ enum XLSXCodec {
     }
 
     guard !sheets.isEmpty else { throw CodecError.emptyWorkbook }
-    // Defined names are not exposed by CoreXLSX Workbook model — skip without failing.
     return Workbook(
       sheets: sheets,
       activeSheetIndex: 0,
+      namedRanges: importDefinedNames(archiveData: archiveData, sheets: sheets),
       xlsxThemeData: zipEntryData(archiveData: archiveData, entryPath: "xl/theme/theme1.xml")
     )
+  }
+
+  /// CoreXLSX does not expose `definedNames`. Read them from workbook XML the same way shared formulas are read from sheet XML.
+  private static func importDefinedNames(archiveData: Data, sheets: [Sheet]) -> [String: NamedRange] {
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/workbook.xml"),
+          let blockStart = xml.range(of: "<definedNames"),
+          let blockEnd = xml.range(of: "</definedNames>", range: blockStart.upperBound..<xml.endIndex)
+    else { return [:] }
+    let section = String(xml[blockStart.lowerBound..<blockEnd.upperBound])
+    guard let regex = try? NSRegularExpression(
+      pattern: #"<(?:[\w]+:)?definedName\b([^>]*)>([\s\S]*?)</(?:[\w]+:)?definedName>"#
+    ) else { return [:] }
+
+    struct RawName {
+      var name: String
+      var formula: String
+      var localSheet: String?
+    }
+
+    let nsSection = section as NSString
+    var globals: [RawName] = []
+    var locals: [RawName] = []
+    for match in regex.matches(in: section, range: NSRange(location: 0, length: nsSection.length)) {
+      guard match.numberOfRanges > 2 else { continue }
+      let attrs = nsSection.substring(with: match.range(at: 1))
+      let body = decodeXMLEntities(nsSection.substring(with: match.range(at: 2)))
+      guard let rawName = xmlAttribute(attrs, named: "name")?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawName.isEmpty
+      else { continue }
+      let localSheet: String?
+      if let local = xmlAttribute(attrs, named: "localSheetId"), let index = Int(local), sheets.indices.contains(index) {
+        localSheet = sheets[index].name
+      } else {
+        localSheet = nil
+      }
+      let raw = RawName(name: rawName, formula: body, localSheet: localSheet)
+      if localSheet == nil {
+        globals.append(raw)
+      } else {
+        locals.append(raw)
+      }
+    }
+
+    var named: [String: NamedRange] = [:]
+    for raw in globals + locals {
+      let key = raw.name.uppercased()
+      if raw.localSheet != nil, named[key] != nil { continue }
+      guard let range = namedRange(name: raw.name, formula: raw.formula, sheets: sheets, localSheet: raw.localSheet) else {
+        continue
+      }
+      named[key] = range
+    }
+    return named
+  }
+
+  private static func xmlAttribute(_ attributes: String, named name: String) -> String? {
+    let patterns = [
+      #"\#(name)="([^"]*)""#,
+      #"\#(name)='([^']*)'"#,
+    ]
+    for pattern in patterns {
+      guard let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(
+              in: attributes,
+              range: NSRange(location: 0, length: (attributes as NSString).length)
+            ),
+            match.numberOfRanges > 1
+      else { continue }
+      return decodeXMLEntities((attributes as NSString).substring(with: match.range(at: 1)))
+    }
+    return nil
+  }
+
+  private static func namedRange(name: String, formula: String, sheets: [Sheet], localSheet: String?) -> NamedRange? {
+    var text = formula.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.hasPrefix("=") {
+      text = String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    text = firstDefinedNameArea(text)
+    if text.hasPrefix("["), let close = text.firstIndex(of: "]") {
+      text = String(text[text.index(after: close)...])
+    }
+    guard !text.isEmpty else { return nil }
+
+    let start: FormulaRef
+    let end: FormulaRef
+    if let range = A1Reference.parseFormulaRange(text) {
+      start = range.0
+      end = range.1
+    } else if let cell = A1Reference.parseFormulaRef(text) {
+      start = cell
+      end = cell
+    } else {
+      return nil
+    }
+
+    var resolvedStart = start
+    var resolvedEnd = end
+    if resolvedStart.sheet == nil {
+      resolvedStart.sheet = localSheet ?? end.sheet ?? sheets.first?.name
+    }
+    if resolvedEnd.sheet == nil {
+      resolvedEnd.sheet = resolvedStart.sheet
+    }
+    guard let sheetName = resolvedStart.sheet ?? resolvedEnd.sheet,
+          let sheet = sheets.first(where: { $0.name.caseInsensitiveCompare(sheetName) == .orderedSame })
+    else { return nil }
+
+    let bounds = A1Reference.resolvedBounds(
+      start: resolvedStart,
+      end: resolvedEnd,
+      maxRow: max(0, sheet.effectiveRowCount - 1),
+      maxCol: max(0, sheet.effectiveColumnCount - 1)
+    )
+    return NamedRange(
+      name: name,
+      sheetName: sheet.name,
+      range: CellRange(
+        start: CellAddress(row: bounds.minRow, col: bounds.minCol),
+        end: CellAddress(row: bounds.maxRow, col: bounds.maxCol)
+      )
+    )
+  }
+
+  private static func firstDefinedNameArea(_ formula: String) -> String {
+    var quoted = false
+    for index in formula.indices {
+      if formula[index] == "'" { quoted.toggle() }
+      if formula[index] == ",", !quoted {
+        return String(formula[..<index]).trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+    }
+    return formula.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   /// CoreXLSX drops shared-formula followers (`<f t="shared" si="…"/>`). Expand them from sheet XML.
@@ -168,6 +301,27 @@ enum XLSXCodec {
   static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
     guard let data = zipEntryData(archiveData: archiveData, entryPath: entryPath) else { return nil }
     return String(data: data, encoding: .utf8)
+  }
+
+  /// Swap stored parts, then rebuild with the same stored-zip writer import already reads.
+  static func replacingZipEntries(_ archiveData: Data, entries: [String: Data]) -> Data? {
+    guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else { return nil }
+    var files: [String: Data] = [:]
+    for entry in archive {
+      let path = entry.path
+      if path.hasSuffix("/") { continue }
+      var data = Data()
+      do {
+        _ = try archive.extract(entry) { data.append($0) }
+      } catch {
+        return nil
+      }
+      files[path] = data
+    }
+    for (path, data) in entries {
+      files[path] = data
+    }
+    return MinimalZip.archive(files: files)
   }
 
   static func zipEntryData(archiveData: Data, entryPath: String) -> Data? {
@@ -348,9 +502,10 @@ enum XLSXCodec {
     }
 
     if let xf = cell.format(in: styles) {
-      if let mapped = numberFormat(for: xf.numberFormatId, styles: styles) {
+      if let mapped = importedNumberFormat(for: xf.numberFormatId, styles: styles) {
         // Prefer explicit number formats even when applyNumberFormat is omitted (common in Excel exports).
-        format.numberFormat = mapped
+        format.numberFormat = mapped.kind
+        format.formatCode = mapped.code
         changed = true
       }
 
@@ -448,31 +603,75 @@ enum XLSXCodec {
     }
   }
 
-  private static func numberFormat(for id: Int, styles: Styles) -> CellFormat.NumberFormat? {
-    if let custom = styles.numberFormats?.items.first(where: { $0.id == id })?.formatCode.lowercased() {
-      if custom.contains("%") { return .percent }
-      if custom.contains("$") || custom.contains("¥") || custom.contains("€") { return .currency }
-      if custom.contains("e+") || custom.contains("e-") { return .scientific }
-      // Avoid treating patterns like `#0` as dates just because of incidental letters.
-      let looksLikeDate = (custom.contains("y") || custom.contains("d"))
-        && (custom.contains("m") || custom.contains("yy") || custom.contains("dd"))
-      if looksLikeDate {
-        if custom.contains("h") || custom.contains("s") { return .time }
-        return .date
-      }
-      if custom.contains("h") && custom.contains(":") { return .time }
-      if custom.contains("0") || custom.contains("#") { return .number }
+  private struct ImportedNumberFormat {
+    var kind: CellFormat.NumberFormat
+    var code: String
+  }
+
+  /// Built-in ECMA-376 format ids. The code is what the cell actually displays.
+  private static let builtinNumberFormatCodes: [Int: String] = [
+    1: "0",
+    2: "0.00",
+    3: "#,##0",
+    4: "#,##0.00",
+    5: "$#,##0_);($#,##0)",
+    6: "$#,##0_);[Red]($#,##0)",
+    7: "$#,##0.00_);($#,##0.00)",
+    8: "$#,##0.00_);[Red]($#,##0.00)",
+    9: "0%",
+    10: "0.00%",
+    11: "0.00E+00",
+    14: "m/d/yyyy",
+    15: "d-mmm-yy",
+    16: "d-mmm",
+    17: "mmm-yy",
+    18: "h:mm AM/PM",
+    19: "h:mm:ss AM/PM",
+    20: "h:mm",
+    21: "h:mm:ss",
+    22: "m/d/yyyy h:mm",
+    37: "#,##0_);(#,##0)",
+    38: "#,##0_);[Red](#,##0)",
+    39: "#,##0.00_);(#,##0.00)",
+    40: "#,##0.00_);[Red](#,##0.00)",
+    45: "mm:ss",
+    46: "[h]:mm:ss",
+    48: "##0.0E+0",
+    49: "@",
+  ]
+
+  private static func builtinNumberFormatID(matching code: String) -> Int? {
+    let target = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    return builtinNumberFormatCodes.first { $0.value.caseInsensitiveCompare(target) == .orderedSame }?.key
+  }
+
+  private static func importedNumberFormat(for id: Int, styles: Styles) -> ImportedNumberFormat? {
+    if let raw = styles.numberFormats?.items.first(where: { $0.id == id })?.formatCode {
+      let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      if code.isEmpty || code.caseInsensitiveCompare("General") == .orderedSame { return nil }
+      return ImportedNumberFormat(kind: classifyNumberFormat(code), code: code)
     }
-    switch id {
-    case 1, 2, 3, 4: return .number
-    case 5, 6, 7, 8: return .currency
-    case 9, 10: return .percent
-    case 11: return .scientific
-    case 14, 15, 16, 17: return .date
-    case 18, 19, 20, 21: return .time
-    case 22: return .date // m/d/yy h:mm
-    default: return nil
+    guard let code = builtinNumberFormatCodes[id] else { return nil }
+    return ImportedNumberFormat(kind: classifyNumberFormat(code), code: code)
+  }
+
+  private static func classifyNumberFormat(_ code: String) -> CellFormat.NumberFormat {
+    let custom = code.lowercased()
+    if custom == "general" || custom == "@" { return .general }
+    if custom.contains("%") { return .percent }
+    if custom.contains("$") || custom.contains("¥") || custom.contains("€") || custom.contains("£")
+      || custom.contains("₩") || custom.contains("₹") || custom.contains("₽") || custom.contains("[$")
+    {
+      return .currency
     }
+    if custom.contains("e+") || custom.contains("e-") { return .scientific }
+    let looksLikeDate = (custom.contains("y") || custom.contains("d")) && custom.contains("m")
+    if looksLikeDate { return .date }
+    if custom.contains("h") && (custom.contains(":") || custom.contains("m") || custom.contains("s")) {
+      return .time
+    }
+    if custom.contains("0") || custom.contains("#") { return .number }
+    return .general
   }
 
   private static func codableColor(from color: Color?) -> CodableColor? {
@@ -811,6 +1010,8 @@ enum XLSXCodec {
   }
 
   private static func stylesXML(_ styles: [StyleKey], dxfs: [ConditionalFormatStyle] = []) -> Data {
+    var customFormats: [String: Int] = [:]
+    var nextCustomID = 164
     var fonts = ""
     var fills = #"<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>"#
     var bordersXML = #"<border><left/><right/><top/><bottom/><diagonal/></border>"#
@@ -846,16 +1047,7 @@ enum XLSXCodec {
         borderCount += 1
       }
 
-      let numFmtId: Int
-      switch style.numberFormat {
-      case .general: numFmtId = 0
-      case .number: numFmtId = 2
-      case .currency: numFmtId = 164
-      case .percent: numFmtId = 10
-      case .scientific: numFmtId = 11
-      case .date: numFmtId = 14
-      case .time: numFmtId = 21
-      }
+      let numFmtId = numberFormatID(for: style, customFormats: &customFormats, nextCustomID: &nextCustomID)
 
       let alignmentXML = style.alignmentXML
       let applyBorder = borderId == 0 ? "0" : "1"
@@ -863,10 +1055,14 @@ enum XLSXCodec {
       cellXfs += #"<xf numFmtId="\#(numFmtId)" fontId="\#(fontId)" fillId="\#(fillId)" borderId="\#(borderId)" xfId="0" applyFont="1" applyFill="1" applyBorder="\#(applyBorder)" applyAlignment="\#(applyAlignment)" applyNumberFormat="1">\#(alignmentXML)</xf>"#
     }
 
+    let numFmts = customFormats
+      .sorted { $0.value < $1.value }
+      .map { #" <numFmt numFmtId="\#($0.value)" formatCode="\#(escapeXML($0.key))"/>"# }
+      .joined()
     let xml = """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-    <numFmts count="1"><numFmt numFmtId="164" formatCode="$#,##0.00"/></numFmts>
+    <numFmts count="\(customFormats.count)">\(numFmts)</numFmts>
     <fonts count="\(styles.count)">\(fonts)</fonts>
     <fills count="\(fillCount)">\(fills)</fills>
     <borders count="\(borderCount)">\(bordersXML)</borders>
@@ -878,6 +1074,39 @@ enum XLSXCodec {
     </styleSheet>
     """
     return Data(xml.utf8)
+  }
+
+  private static func numberFormatID(
+    for style: StyleKey,
+    customFormats: inout [String: Int],
+    nextCustomID: inout Int
+  ) -> Int {
+    if let code = style.formatCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !code.isEmpty,
+       code.caseInsensitiveCompare("General") != .orderedSame
+    {
+      if let builtin = builtinNumberFormatID(matching: code) { return builtin }
+      if let existing = customFormats[code] { return existing }
+      let id = nextCustomID
+      nextCustomID += 1
+      customFormats[code] = id
+      return id
+    }
+    switch style.numberFormat {
+    case .general: return 0
+    case .number: return 2
+    case .currency:
+      let code = "$#,##0.00"
+      if let existing = customFormats[code] { return existing }
+      let id = nextCustomID
+      nextCustomID += 1
+      customFormats[code] = id
+      return id
+    case .percent: return 10
+    case .scientific: return 11
+    case .date: return 14
+    case .time: return 21
+    }
   }
 
   static func escapeXML(_ string: String) -> String {
@@ -940,6 +1169,7 @@ private struct StyleKey: Hashable {
   var textRGB: String?
   var fillRGB: String?
   var numberFormat: CellFormat.NumberFormat = .general
+  var formatCode: String?
   var borders = StyleBorderKey.none
   var horizontalAlign: CellFormat.HorizontalAlign = .general
   var verticalAlign: CellFormat.VerticalAlign = .bottom
@@ -959,6 +1189,7 @@ private struct StyleKey: Hashable {
     textRGB = format.textColor.map(Self.rgbHex)
     fillRGB = format.fillColor.map(Self.rgbHex)
     numberFormat = format.numberFormat
+    formatCode = format.formatCode
     borders = StyleBorderKey(format.borders)
     horizontalAlign = format.horizontalAlign
     verticalAlign = format.verticalAlign

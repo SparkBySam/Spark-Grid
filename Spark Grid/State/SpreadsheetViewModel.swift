@@ -1016,6 +1016,7 @@ final class SpreadsheetViewModel {
   func setNumberFormat(_ numberFormat: CellFormat.NumberFormat) {
     updateSelectedFormat { format in
       format.numberFormat = numberFormat
+      format.formatCode = nil
       if format.decimalPlaces == nil {
         format.decimalPlaces = defaultDecimalPlaces(for: numberFormat)
       }
@@ -1145,7 +1146,7 @@ final class SpreadsheetViewModel {
 
   func increaseDecimalPlaces() {
     updateSelectedFormat { format in
-      let current = format.decimalPlaces ?? defaultDecimalPlaces(for: format.numberFormat)
+      let current = displayedDecimalPlaces(for: format)
       format.decimalPlaces = min(current + 1, 10)
       format.numberFormat = format.numberFormat == .general ? .number : format.numberFormat
     }
@@ -1153,9 +1154,17 @@ final class SpreadsheetViewModel {
 
   func decreaseDecimalPlaces() {
     updateSelectedFormat { format in
-      let current = format.decimalPlaces ?? defaultDecimalPlaces(for: format.numberFormat)
+      let current = displayedDecimalPlaces(for: format)
       format.decimalPlaces = max(current - 1, 0)
     }
+  }
+
+  private func displayedDecimalPlaces(for format: CellFormat) -> Int {
+    if let explicit = format.decimalPlaces { return explicit }
+    if let code = format.formatCode, let digits = ExcelFormatCode.fractionDigits(in: code) {
+      return digits
+    }
+    return defaultDecimalPlaces(for: format.numberFormat)
   }
 
   private func defaultDecimalPlaces(for format: CellFormat.NumberFormat) -> Int {

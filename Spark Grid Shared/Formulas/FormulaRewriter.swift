@@ -4,11 +4,14 @@ import Foundation
 enum FormulaFunctions {
   static let all: [String] = [
     "SUM", "AVERAGE", "COUNT", "COUNTA", "MIN", "MAX",
-    "IF", "IFERROR", "AND", "OR",
-    "ABS", "ROUND",
-    "LEN", "LEFT", "RIGHT", "TRIM", "CONCAT", "CONCATENATE", "TEXT",
+    "SUMIF", "AVERAGEIF", "COUNTIF", "SUMIFS", "COUNTIFS", "AVERAGEIFS",
+    "COUNTBLANK", "SUMPRODUCT",
+    "IF", "IFERROR", "IFNA", "IFS", "AND", "OR", "NOT",
+    "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN",
+    "LEN", "LEFT", "RIGHT", "MID", "TRIM", "UPPER", "LOWER",
+    "SUBSTITUTE", "TEXTJOIN", "CONCAT", "CONCATENATE", "TEXT",
     "XLOOKUP", "VLOOKUP", "INDEX", "MATCH",
-    "TODAY", "DATE", "YEAR", "MONTH", "DAY",
+    "TODAY", "NOW", "DATE", "YEAR", "MONTH", "DAY",
   ].sorted()
 
   static func suggestions(matching prefix: String) -> [String] {
