@@ -32,6 +32,13 @@ struct SpreadsheetFormatCommands: Commands {
       }
       .disabled(viewModel == nil)
 
+      Menu("Text") {
+        Button("Overflow") { viewModel?.setTextDisplay(.overflow) }
+        Button("Wrap") { viewModel?.setTextDisplay(.wrap) }
+        Button("Clip") { viewModel?.setTextDisplay(.clip) }
+      }
+      .disabled(viewModel == nil)
+
       Menu("Number") {
         Button("General") { viewModel?.setNumberFormat(.general) }
         Button("Number") { viewModel?.setNumberFormat(.number) }
