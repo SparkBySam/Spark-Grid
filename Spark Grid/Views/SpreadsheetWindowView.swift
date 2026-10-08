@@ -8,6 +8,7 @@ enum SpreadsheetChrome {
   static let formulaBarMaxLines = 4
   static let findBarHeight: CGFloat = 36
   static let formulaErrorBannerHeight: CGFloat = 40
+  static let formulaArgumentHintHeight: CGFloat = 22
   static let dividerHeight: CGFloat = 1
   /// Slightly stronger than default `Divider()` / toolbar borders (~+2% contrast).
   static let chromeDividerOpacity: CGFloat = 0.72
@@ -54,12 +55,16 @@ enum SpreadsheetChrome {
     showLabels: Bool,
     showingFormulaError: Bool,
     showingFindBar: Bool,
-    formulaBarLineCount: Int = 1
+    formulaBarLineCount: Int = 1,
+    showingFormulaArgumentHint: Bool = false
   ) -> CGFloat {
     var height = toolbarHeight(showLabels: showLabels)
       + dividerHeight
       + formulaBarHeight(lineCount: formulaBarLineCount)
       + dividerHeight
+    if showingFormulaArgumentHint {
+      height += formulaArgumentHintHeight
+    }
     if showingFindBar {
       height += findBarHeight + dividerHeight
     }
@@ -120,7 +125,8 @@ struct SpreadsheetWindowView: View {
             showLabels: settings.showToolbarLabels,
             showingFormulaError: showingFormulaError,
             showingFindBar: viewModel.isFindBarVisible,
-            formulaBarLineCount: formulaViewportLines
+            formulaBarLineCount: formulaViewportLines,
+            showingFormulaArgumentHint: viewModel.showsFormulaArgumentHint
           )
         )
         HStack(spacing: 0) {

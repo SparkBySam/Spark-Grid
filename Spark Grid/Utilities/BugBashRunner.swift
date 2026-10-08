@@ -72,6 +72,7 @@ enum BugBashRunner {
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
     results.append(everydayFormulas())
+    results.append(formulaFunctionPicker())
     results.append(excelFormatCodes())
     results.append(definedNamesResolve())
     results.append(MainActor.assumeIsolated { nameManagerEditsSheet() })
@@ -2347,6 +2348,122 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "rule text was replaced \(String(describing: keptPaint.format?.textColor))")
     }
     return Result(name: name, passed: true, detail: "dark on light scale, light on dark fill")
+  }
+
+  private static func formulaFunctionPicker() -> Result {
+    let name = "formula function picker"
+    let groups = FormulaFunctionCatalog.groups(matching: "")
+    let listed = groups.flatMap { $0.entries.map(\.name) }
+    let implemented = Set(FormulaFunctions.all)
+    let listedSet = Set(listed)
+    if listedSet != implemented || listed.count != implemented.count {
+      let missing = implemented.subtracting(listedSet).sorted()
+      let extra = listedSet.subtracting(implemented).sorted()
+      return Result(
+        name: name,
+        passed: false,
+        detail: "catalog missing \(missing.joined(separator: ", ")) extra \(extra.joined(separator: ", "))"
+      )
+    }
+    let titles = groups.map(\.kind.title)
+    if titles != ["Math", "Statistical", "Logical", "Text", "Lookup", "Date & Time"] {
+      return Result(name: name, passed: false, detail: "groups \(titles.joined(separator: ", "))")
+    }
+
+    for group in groups {
+      for entry in group.entries {
+        if entry.kind != group.kind {
+          return Result(name: name, passed: false, detail: "\(entry.name) kind")
+        }
+        guard let insertion = FormulaFunctionCatalog.insertion(for: entry.name) else {
+          return Result(name: name, passed: false, detail: "no insertion for \(entry.name)")
+        }
+        if insertion.text != "=\(entry.name)()" || insertion.signatureLine != entry.signatureLine {
+          return Result(name: name, passed: false, detail: "\(entry.name) insertion \(insertion.text)")
+        }
+        if insertion.signatureLine.isEmpty || insertion.signatureLine.contains("\n") {
+          return Result(name: name, passed: false, detail: "\(entry.name) argument line")
+        }
+        let ns = insertion.text as NSString
+        let caret = insertion.caretUTF16
+        if caret <= 0 || caret >= ns.length
+          || ns.character(at: caret - 1) != UInt16(UnicodeScalar("(").value)
+          || ns.character(at: caret) != UInt16(UnicodeScalar(")").value)
+        {
+          return Result(name: name, passed: false, detail: "\(entry.name) caret \(caret) in \(insertion.text)")
+        }
+        let value = evalFormula(insertion.text, cells: [:])
+        if case .error(.name) = value {
+          return Result(name: name, passed: false, detail: "\(entry.name) does not calculate")
+        }
+        if case .error(.error) = value {
+          return Result(name: name, passed: false, detail: "\(entry.name) did not parse")
+        }
+      }
+    }
+
+    let sumNames = Set(FormulaFunctionCatalog.groups(matching: "sum").flatMap { $0.entries.map(\.name) })
+    if sumNames != ["SUM", "SUMIF", "SUMIFS", "SUMPRODUCT"] {
+      return Result(name: name, passed: false, detail: "sum search \(sumNames.sorted())")
+    }
+    let lookup = Set(FormulaFunctionCatalog.groups(matching: "xLoOkUp").flatMap { $0.entries.map(\.name) })
+    if lookup != ["XLOOKUP"] {
+      return Result(name: name, passed: false, detail: "lookup search \(lookup.sorted())")
+    }
+    if !FormulaFunctionCatalog.groups(matching: "notafunction").isEmpty {
+      return Result(name: name, passed: false, detail: "unknown query returned functions")
+    }
+    if FormulaFunctionCatalog.insertion(for: "SUMIFZ") != nil {
+      return Result(name: name, passed: false, detail: "inserted an unknown function")
+    }
+    if !FormulaFunctionListKeys.shouldClose(keyCode: FormulaFunctionListKeys.escapeKeyCode, modifierFlags: [])
+      || FormulaFunctionListKeys.shouldClose(keyCode: 36, modifierFlags: [])
+      || FormulaFunctionListKeys.shouldClose(keyCode: FormulaFunctionListKeys.escapeKeyCode, modifierFlags: .command)
+    {
+      return Result(name: name, passed: false, detail: "escape check failed")
+    }
+
+    let placed = MainActor.assumeIsolated { () -> String in
+      let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [Sheet(name: "Sheet1")]))
+      viewModel.setCellValue("12", at: .origin)
+      viewModel.insertFormulaFunction("ROUND")
+      guard viewModel.isEditing, viewModel.formulaBarText == "=ROUND()", viewModel.editText == "=ROUND()" else {
+        return "bar \(viewModel.formulaBarText) editing \(viewModel.isEditing)"
+      }
+      guard viewModel.formulaCaretUTF16 == 7, viewModel.formulaCaretToken == 1 else {
+        return "caret \(viewModel.formulaCaretUTF16) token \(viewModel.formulaCaretToken)"
+      }
+      guard viewModel.formulaArgumentHint == "ROUND(number, [num_digits])" else {
+        return "hint \(viewModel.formulaArgumentHint ?? "")"
+      }
+      viewModel.insertFormulaFunction("NOPE")
+      guard viewModel.formulaBarText == "=ROUND()", viewModel.formulaCaretToken == 1 else {
+        return "unknown function changed the bar"
+      }
+      viewModel.commitEdit()
+      guard !viewModel.isEditing,
+            viewModel.formulaArgumentHint == nil,
+            viewModel.activeSheet.cell(at: .origin).raw == "=ROUND()"
+      else {
+        return "commit \(viewModel.activeSheet.cell(at: .origin).raw)"
+      }
+      viewModel.insertFormulaFunction("abs")
+      guard viewModel.formulaBarText == "=ABS()",
+            viewModel.formulaCaretUTF16 == 5,
+            viewModel.formulaArgumentHint == "ABS(number)"
+      else {
+        return "abs \(viewModel.formulaBarText) \(viewModel.formulaArgumentHint ?? "")"
+      }
+      return ""
+    }
+    if !placed.isEmpty {
+      return Result(name: name, passed: false, detail: placed)
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: "\(listed.count) functions, grouped, caret inside parentheses"
+    )
   }
 
   private static func everydayFormulas() -> Result {

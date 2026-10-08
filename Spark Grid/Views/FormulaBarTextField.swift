@@ -6,6 +6,9 @@ struct FormulaBarTextField: NSViewRepresentable {
   @Binding var text: String
   /// Observed copy of the formula bar contents so in-cell typing mirrors here live.
   var liveText: String
+  /// Bumped by Insert Function. Zero means no pending caret placement.
+  var caretToken: Int = 0
+  var caretUTF16: Int = 0
   var namedRanges: [String]
   var highlights: [FormulaRefHighlight]
   var focusedHighlightIndex: Int?
@@ -37,8 +40,10 @@ struct FormulaBarTextField: NSViewRepresentable {
     let textView = nsView.textView
     let isFocused = textView.window?.firstResponder === textView
 
-    // Mirror selection / in-cell typing whenever the bar isn't focused.
-    if !isFocused, textView.string != liveText {
+    if caretToken != 0, caretToken != context.coordinator.appliedCaretToken {
+      context.coordinator.applyCaretRequest(token: caretToken, utf16: caretUTF16)
+    } else if !isFocused, textView.string != liveText {
+      // Mirror selection / in-cell typing whenever the bar isn't focused.
       textView.string = liveText
       context.coordinator.lastAppliedKey = ""
     }
@@ -52,6 +57,7 @@ struct FormulaBarTextField: NSViewRepresentable {
     private var isApplyingAttributes = false
     private var isSubmitting = false
     var lastAppliedKey = ""
+    var appliedCaretToken = 0
     private var didBeginEditing = false
 
     init(_ parent: FormulaBarTextField) {
@@ -190,6 +196,35 @@ struct FormulaBarTextField: NSViewRepresentable {
     private func emitCaret() {
       guard let textView else { return }
       parent.onCaretMoved(textView.selectedRange.location)
+    }
+
+    func applyCaretRequest(token: Int, utf16: Int) {
+      guard let textView else { return }
+      appliedCaretToken = token
+      let text = parent.liveText
+      if textView.string != text {
+        isApplyingAttributes = true
+        textView.string = text
+        isApplyingAttributes = false
+        lastAppliedKey = ""
+      }
+      applyAttributes(force: true)
+      placeCaret(in: textView, utf16: utf16)
+      DispatchQueue.main.async { [weak self] in
+        guard let self, let textView = self.textView else { return }
+        guard self.appliedCaretToken == token else { return }
+        guard textView.string == self.parent.liveText else { return }
+        textView.window?.makeFirstResponder(textView)
+        self.placeCaret(in: textView, utf16: utf16)
+        self.parent.onCaretMoved(min(max(0, utf16), (textView.string as NSString).length))
+      }
+    }
+
+    private func placeCaret(in textView: FormulaBarNSTextView, utf16: Int) {
+      let length = (textView.string as NSString).length
+      let location = min(max(0, utf16), length)
+      textView.setSelectedRange(NSRange(location: location, length: 0))
+      textView.scrollRangeToVisible(NSRange(location: location, length: 0))
     }
 
     private func submit() {
