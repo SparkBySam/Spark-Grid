@@ -76,6 +76,8 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { nameManagerEditsSheet() })
     results.append(MainActor.assumeIsolated { cellFormatCodeEditsSheet() })
     results.append(MainActor.assumeIsolated { conditionalFormatRuleEdit() })
+    results.append(cellTextOverflowAndClip())
+    results.append(MainActor.assumeIsolated { cellTextWrapLayout() })
     return results
   }
 
@@ -2810,6 +2812,297 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "color scale range edit changed the rule")
     }
     return Result(name: name, passed: true, detail: "stored rule range and value")
+  }
+
+  private static func cellTextOverflowAndClip() -> Result {
+    let name = "cell text overflow"
+    if CellFormat().textDisplay != .overflow || CellFormatRenderer.showsEllipsis(CellFormat()) {
+      return Result(name: name, passed: false, detail: "default should overflow without ellipsis")
+    }
+    var clipFormat = CellFormat()
+    clipFormat.textDisplay = .clip
+    var wrapFormat = CellFormat()
+    wrapFormat.textDisplay = .wrap
+    if !CellFormatRenderer.showsEllipsis(clipFormat)
+      || CellFormatRenderer.showsEllipsis(wrapFormat)
+      || CellFormatRenderer.lineBreakMode(for: CellFormat()) != .byClipping
+      || CellFormatRenderer.lineBreakMode(for: wrapFormat) != .byWordWrapping
+      || CellFormatRenderer.lineBreakMode(for: clipFormat) != .byWordWrapping
+    {
+      return Result(name: name, passed: false, detail: "clip/wrap/overflow drawing modes diverged")
+    }
+
+    let origin: (Int) -> CGFloat = { CGFloat($0) * 80 }
+    let width: (Int) -> CGFloat = { _ in 80 }
+    let spill = CellTextLayout.overflowClip(
+      cellMinX: 0,
+      cellMaxX: 80,
+      textWidth: 200,
+      alignment: .left,
+      insetX: 4,
+      sourceColumns: 0...0,
+      paneColumns: 0...5,
+      columnOrigin: origin,
+      columnWidth: width,
+      blocks: { $0 == 2 }
+    )
+    if spill.maxX != 160 || spill.minX != 0 || spill.maxX <= 80 {
+      return Result(name: name, passed: false, detail: "left overflow clip \(spill)")
+    }
+
+    let open = CellTextLayout.overflowClip(
+      cellMinX: 0,
+      cellMaxX: 80,
+      textWidth: 200,
+      alignment: .general,
+      insetX: 4,
+      sourceColumns: 0...0,
+      paneColumns: 0...5,
+      columnOrigin: origin,
+      columnWidth: width,
+      blocks: { _ in false }
+    )
+    if open.maxX <= 80 || open.maxX != 204 {
+      return Result(name: name, passed: false, detail: "open overflow clip \(open)")
+    }
+
+    let blocked = CellTextLayout.overflowClip(
+      cellMinX: 0,
+      cellMaxX: 80,
+      textWidth: 200,
+      alignment: .left,
+      insetX: 4,
+      sourceColumns: 0...0,
+      paneColumns: 0...5,
+      columnOrigin: origin,
+      columnWidth: width,
+      blocks: { $0 == 1 }
+    )
+    if blocked.maxX != 80 {
+      return Result(name: name, passed: false, detail: "adjacent content should stop at the border, got \(blocked)")
+    }
+
+    let right = CellTextLayout.overflowClip(
+      cellMinX: 160,
+      cellMaxX: 240,
+      textWidth: 200,
+      alignment: .right,
+      insetX: 4,
+      sourceColumns: 2...2,
+      paneColumns: 0...5,
+      columnOrigin: origin,
+      columnWidth: width,
+      blocks: { $0 == 0 }
+    )
+    if right.minX != 80 || right.maxX != 240 {
+      return Result(name: name, passed: false, detail: "right overflow clip \(right)")
+    }
+
+    let center = CellTextLayout.overflowClip(
+      cellMinX: 80,
+      cellMaxX: 160,
+      textWidth: 200,
+      alignment: .center,
+      insetX: 4,
+      sourceColumns: 1...1,
+      paneColumns: 0...5,
+      columnOrigin: origin,
+      columnWidth: width,
+      blocks: { $0 == 0 }
+    )
+    if center.minX != 80 || center.maxX <= 160 {
+      return Result(name: name, passed: false, detail: "center overflow clip \(center)")
+    }
+
+    var sheet = Sheet(name: "Spill")
+    var fill = Cell(raw: "")
+    var fillFormat = CellFormat()
+    fillFormat.fillColor = CodableColor(red: 1, green: 0.2, blue: 0.2, alpha: 1)
+    fill.format = fillFormat
+    sheet.setCell(fill, at: CellAddress(row: 0, col: 1))
+    sheet.setCell(Cell(raw: "busy"), at: CellAddress(row: 0, col: 2))
+    let display: (CellAddress) -> String = { address in
+      address.col == 2 ? "busy" : ""
+    }
+    if CellTextLayout.blocksOverflow(sheet: sheet, row: 0, column: 1, displayText: display) {
+      return Result(name: name, passed: false, detail: "fill without text blocked overflow")
+    }
+    if !CellTextLayout.blocksOverflow(sheet: sheet, row: 0, column: 2, displayText: display) {
+      return Result(name: name, passed: false, detail: "text neighbor did not block overflow")
+    }
+
+    let long = String(repeating: "alpha ", count: 30)
+    var clipCell = Cell(raw: long)
+    clipCell.format = clipFormat
+    var overflowCell = Cell(raw: long)
+    var bold = CellFormat()
+    bold.bold = true
+    overflowCell.format = bold
+    var plain = Sheet(name: "Modes")
+    plain.setCell(clipCell, at: CellAddress(row: 0, col: 0))
+    plain.setCell(overflowCell, at: CellAddress(row: 1, col: 0))
+    let idle: (CellAddress) -> String = { $0.row == 0 || $0.row == 1 ? long : "" }
+    let columnWidth: (Int) -> CGFloat = { _ in 60 }
+    let wrappedOnly = CellTextLayout.wrappedRowHeights(
+      sheet: plain,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      defaultColumnWidth: Workbook.defaultColumnWidth,
+      columnWidth: columnWidth,
+      displayText: idle
+    )
+    if wrappedOnly[0] != nil || wrappedOnly[1] != nil {
+      return Result(name: name, passed: false, detail: "clip/overflow changed row height \(wrappedOnly)")
+    }
+
+    var wrapShort = CellFormat()
+    wrapShort.textDisplay = .wrap
+    var wrapLong = CellFormat()
+    wrapLong.textDisplay = .wrap
+    let shortText = "Hello"
+    let shortHeight = CellTextLayout.preferredWrappedRowHeight(
+      text: shortText,
+      format: wrapShort,
+      columnWidth: 60
+    )
+    let longHeight = CellTextLayout.preferredWrappedRowHeight(
+      text: long,
+      format: wrapLong,
+      columnWidth: 60
+    )
+    if longHeight <= shortHeight || longHeight <= Workbook.defaultRowHeight {
+      return Result(name: name, passed: false, detail: "wrap height short=\(shortHeight) long=\(longHeight)")
+    }
+    var wrapSheet = Sheet(name: "Wrap")
+    var shortCell = Cell(raw: shortText)
+    shortCell.format = wrapShort
+    var longCell = Cell(raw: long)
+    longCell.format = wrapLong
+    wrapSheet.setCell(shortCell, at: CellAddress(row: 0, col: 0))
+    wrapSheet.setCell(longCell, at: CellAddress(row: 0, col: 1))
+    wrapSheet.columnWidths[0] = 60
+    wrapSheet.columnWidths[1] = 60
+    let heights = CellTextLayout.wrappedRowHeights(
+      sheet: wrapSheet,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      defaultColumnWidth: Workbook.defaultColumnWidth,
+      columnWidth: { wrapSheet.columnWidth(for: $0, default: Workbook.defaultColumnWidth) },
+      displayText: { address in wrapSheet.cell(at: address).raw }
+    )
+    let rowHeight = CellTextLayout.displayRowHeight(
+      row: 0,
+      sheet: wrapSheet,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      wrapped: heights
+    )
+    if abs(rowHeight - longHeight) > 0.6 {
+      return Result(name: name, passed: false, detail: "row used \(rowHeight), tallest is \(longHeight)")
+    }
+
+    var saved = wrapSheet
+    var clipSaved = Cell(raw: "clip me")
+    var clipSavedFormat = CellFormat()
+    clipSavedFormat.italic = true
+    clipSavedFormat.textDisplay = .clip
+    clipSaved.format = clipSavedFormat
+    saved.setCell(clipSaved, at: CellAddress(row: 2, col: 0))
+    var overflowSaved = Cell(raw: "spill me")
+    var overflowSavedFormat = CellFormat()
+    overflowSavedFormat.bold = true
+    overflowSaved.format = overflowSavedFormat
+    saved.setCell(overflowSaved, at: CellAddress(row: 3, col: 0))
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [saved]))
+      let styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") ?? ""
+      if !styles.contains("wrapText=\"1\"") || !styles.contains("sparkTextDisplay=\"clip\"") {
+        return Result(name: name, passed: false, detail: "styles missing wrap or clip marker")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let sheet = imported.activeSheet
+      let wrapCell = sheet.cell(at: CellAddress(row: 0, col: 0))
+      let tallCell = sheet.cell(at: CellAddress(row: 0, col: 1))
+      let clipRoundTrip = sheet.cell(at: CellAddress(row: 2, col: 0))
+      let overflowRoundTrip = sheet.cell(at: CellAddress(row: 3, col: 0))
+      guard wrapCell.format?.textDisplay == .wrap,
+            tallCell.format?.textDisplay == .wrap,
+            clipRoundTrip.format?.textDisplay == .clip,
+            clipRoundTrip.format?.italic == true,
+            overflowRoundTrip.format?.textDisplay == .overflow,
+            overflowRoundTrip.format?.bold == true
+      else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "round-trip wrap=\(wrapCell.format?.textDisplay == .wrap) clip=\(clipRoundTrip.format?.textDisplay == .clip) overflow=\(overflowRoundTrip.format?.textDisplay == .overflow) italic=\(clipRoundTrip.format?.italic == true) bold=\(overflowRoundTrip.format?.bold == true)"
+        )
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    return Result(name: name, passed: true, detail: "overflow stops at content; wrap is tallest; clip keeps ellipsis")
+  }
+
+  @MainActor
+  private static func cellTextWrapLayout() -> Result {
+    let name = "cell text wrap layout"
+    let long = String(repeating: "alpha ", count: 30)
+    var sheet = Sheet(name: "Layout")
+    sheet.frozenRows = 1
+    sheet.columnWidths[0] = 60
+    sheet.columnWidths[1] = 60
+    var wrap = CellFormat()
+    wrap.textDisplay = .wrap
+    var tall = Cell(raw: long)
+    tall.format = wrap
+    var shorter = Cell(raw: "Hello")
+    shorter.format = wrap
+    sheet.setCell(tall, at: CellAddress(row: 0, col: 0))
+    sheet.setCell(shorter, at: CellAddress(row: 0, col: 1))
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    let grid = SpreadsheetGridNSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 900))
+    grid.viewModel = viewModel
+
+    let heights = CellTextLayout.wrappedRowHeights(
+      sheet: viewModel.activeSheet,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      defaultColumnWidth: Workbook.defaultColumnWidth,
+      columnWidth: { viewModel.activeSheet.columnWidth(for: $0, default: Workbook.defaultColumnWidth) },
+      displayText: { viewModel.displayString(at: $0) }
+    )
+    let expected = CellTextLayout.displayRowHeight(
+      row: 0,
+      sheet: viewModel.activeSheet,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      wrapped: heights
+    )
+    let rowHeight = grid.rowHeight(at: 0)
+    if expected <= Workbook.defaultRowHeight + 4 || abs(rowHeight - expected) > 0.6 {
+      return Result(name: name, passed: false, detail: "grid row \(rowHeight) layout \(expected)")
+    }
+
+    let header = SpreadsheetGridNSView.baseHeaderSize
+    let inside = header + Workbook.defaultRowHeight + 4
+    if grid.rowAtContent(y: inside) != 0 {
+      return Result(name: name, passed: false, detail: "hit test in the grown row returned \(grid.rowAtContent(y: inside))")
+    }
+    let below = header + rowHeight + 1
+    if grid.rowAtContent(y: below) != 1 {
+      return Result(name: name, passed: false, detail: "hit test below the grown row returned \(grid.rowAtContent(y: below))")
+    }
+
+    let selected = grid.rectForCell(row: 0, col: 0)
+    let next = grid.rectForCell(row: 1, col: 0)
+    if abs(selected.height - rowHeight) > 0.6 || abs(next.minY - selected.maxY) > 0.6 {
+      return Result(name: name, passed: false, detail: "selection rects \(selected) \(next)")
+    }
+    if abs(grid.frozenRowBoundaryY() - (header + rowHeight)) > 0.6 {
+      return Result(name: name, passed: false, detail: "frozen boundary \(grid.frozenRowBoundaryY()) expected \(header + rowHeight)")
+    }
+
+    grid.showEditor()
+    if abs(grid.editorFrame.height - (rowHeight - 2)) > 1 {
+      return Result(name: name, passed: false, detail: "editor height \(grid.editorFrame.height) row \(rowHeight)")
+    }
+    return Result(name: name, passed: true, detail: "hit testing, selection, freeze, and editor share \(Int(rowHeight))pt")
   }
 
   private static func octoberEighth2026() -> Date? {

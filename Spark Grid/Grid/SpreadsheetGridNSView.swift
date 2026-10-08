@@ -33,9 +33,14 @@ final class SpreadsheetGridNSView: NSView {
   private var cachedRowOffsets: [CGFloat]?
   private var cachedColumnCount = 0
   private var cachedRowCount = 0
+  private var cachedRowLayoutKey = ""
+  private var cachedWrappedRowHeights: [Int: CGFloat] = [:]
+  private var cachedWrappedRowKey = ""
   /// Previous selection dirty region — avoids full-grid redraws on click/drag.
   private var lastSelectionDirtyRect: NSRect = .null
   private let editor = CellEditorTextField()
+  /// In-cell editor frame. It uses the same row height as selection and hit testing.
+  var editorFrame: NSRect { editor.frame }
   private var isEditorActive = false
   /// Tab / Shift-Tab already moved the cell for this key event. The grid must
   /// not handle that same key again and grow the selection.
@@ -322,10 +327,44 @@ final class SpreadsheetGridNSView: NSView {
     return sheet.columnWidth(for: col, default: Self.defaultColumnWidth) * zoomScale
   }
 
-  private func rowHeight(at row: Int) -> CGFloat {
+  func rowHeight(at row: Int) -> CGFloat {
     if viewModel?.isRowHiddenByFilter(row) == true { return 0 }
-    guard let sheet = viewModel?.activeSheet else { return Self.defaultRowHeight * zoomScale }
-    return sheet.rowHeight(for: row, default: Self.defaultRowHeight) * zoomScale
+    guard let viewModel else { return Self.defaultRowHeight * zoomScale }
+    let sheet = viewModel.activeSheet
+    return CellTextLayout.displayRowHeight(
+      row: row,
+      sheet: sheet,
+      defaultRowHeight: Self.defaultRowHeight,
+      wrapped: wrappedRowHeights(viewModel: viewModel, sheet: sheet),
+      zoom: zoomScale
+    )
+  }
+
+  private func wrappedRowHeights(viewModel: SpreadsheetViewModel, sheet: Sheet) -> [Int: CGFloat] {
+    let key = "\(viewModel.contentRevision)|\(zoomScale)"
+    if key == cachedWrappedRowKey { return cachedWrappedRowHeights }
+    let zoom = zoomScale
+    let heights = CellTextLayout.wrappedRowHeights(
+      sheet: sheet,
+      defaultRowHeight: Self.defaultRowHeight,
+      defaultColumnWidth: Self.defaultColumnWidth,
+      zoom: zoom,
+      columnWidth: { sheet.columnWidth(for: $0, default: Self.defaultColumnWidth) },
+      displayText: { viewModel.displayString(at: $0) },
+      extraWidthInset: { address in
+        var extra: CGFloat = 0
+        if viewModel.resolvedPaint(at: address).icon != nil {
+          extra += 14 * zoom
+        }
+        if viewModel.isFilterHeaderCell(row: address.row, col: address.col) {
+          extra += 14 * zoom
+        }
+        return extra
+      }
+    )
+    cachedWrappedRowHeights = heights
+    cachedWrappedRowKey = key
+    return heights
   }
 
   private func frozenColumnCount() -> Int {
@@ -342,7 +381,7 @@ final class SpreadsheetGridNSView: NSView {
     return headerSize + columnOffsets()[frozen]
   }
 
-  private func frozenRowBoundaryY() -> CGFloat {
+  func frozenRowBoundaryY() -> CGFloat {
     let frozen = frozenRowCount()
     guard frozen > 0 else { return headerSize }
     return headerSize + rowOffsets()[frozen]
@@ -381,6 +420,8 @@ final class SpreadsheetGridNSView: NSView {
     cachedRowOffsets = nil
     cachedColumnCount = 0
     cachedRowCount = 0
+    cachedRowLayoutKey = ""
+    cachedWrappedRowKey = ""
   }
 
   private func columnOffsets() -> [CGFloat] {
@@ -399,7 +440,8 @@ final class SpreadsheetGridNSView: NSView {
 
   private func rowOffsets() -> [CGFloat] {
     let count = rowCount()
-    if let cached = cachedRowOffsets, cachedRowCount == count {
+    let key = "\(count)|\(viewModel?.contentRevision ?? -1)|\(zoomScale)"
+    if let cached = cachedRowOffsets, cachedRowCount == count, cachedRowLayoutKey == key {
       return cached
     }
     var offsets = [CGFloat](repeating: 0, count: count + 1)
@@ -408,6 +450,7 @@ final class SpreadsheetGridNSView: NSView {
     }
     cachedRowOffsets = offsets
     cachedRowCount = count
+    cachedRowLayoutKey = key
     return offsets
   }
 
@@ -479,7 +522,7 @@ final class SpreadsheetGridNSView: NSView {
     return indexAtOffset(offsets, position: position, lowerBound: frozen, upperBound: count)
   }
 
-  private func rowAtContent(y: CGFloat) -> Int {
+  func rowAtContent(y: CGFloat) -> Int {
     let count = rowCount()
     let offsets = rowOffsets()
     let frozen = frozenRowCount()
@@ -546,7 +589,7 @@ final class SpreadsheetGridNSView: NSView {
     return headerSize + total - scrollOrigin.y
   }
 
-  private func rectForCell(row: Int, col: Int) -> NSRect {
+  func rectForCell(row: Int, col: Int) -> NSRect {
     NSRect(
       x: xForColumn(col),
       y: yForRow(row),
@@ -1006,6 +1049,7 @@ final class SpreadsheetGridNSView: NSView {
       if !skipGridlines {
         drawGridLines(in: dirtyRect)
       }
+      drawScrollableOverflowText(in: dirtyRect)
       drawSelection(in: dirtyRect)
       drawFormulaReferenceHighlights(in: dirtyRect)
       ctx.restoreGraphicsState()
@@ -1022,6 +1066,7 @@ final class SpreadsheetGridNSView: NSView {
         if !skipGridlines {
           drawFrozenGridLines(in: dirtyRect)
         }
+        drawFrozenOverflowText(in: dirtyRect)
         ctx.restoreGraphicsState()
       }
     }
@@ -1796,6 +1841,7 @@ final class SpreadsheetGridNSView: NSView {
     if !skipGridlines {
       drawFrozenGridLines(in: dirtyRect)
     }
+    drawFrozenOverflowText(in: dirtyRect)
     // Pictures stay above frozen cells, including the strip that covers a chart.
     drawImages(in: dirtyRect)
     ctx.restoreGraphicsState()
@@ -2180,44 +2226,246 @@ final class SpreadsheetGridNSView: NSView {
 
     let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
     let hideValue = paint.dataBarFraction != nil && paint.dataBarShowValue == false
-    if !hideValue, !cell.raw.isEmpty {
+    let drawFormat = paintFormat ?? cell.format ?? CellFormat()
+    if !hideValue, !cell.raw.isEmpty, !drawFormat.overflowsUnclipped {
       let value = viewModel.displayValue(at: address)
       let text = viewModel.displayString(at: address)
       if !text.isEmpty {
-        let insetX = 4 * zoomScale
-        let insetY = 2 * zoomScale
-        var textRect = rect.insetBy(dx: insetX, dy: insetY)
-        if paint.icon != nil {
-          textRect.origin.x += 14 * zoomScale
-          textRect.size.width = max(0, textRect.width - 14 * zoomScale)
-        }
-        if isFilterHeader {
-          // Keep wrapped text clear of the bottom-right filter chip.
-          textRect.size.width = max(0, textRect.width - 14 * zoomScale)
-          textRect.size.height = max(0, textRect.height - 14 * zoomScale)
-        }
-        if textRect.width > 1, textRect.height > 1 {
-          NSGraphicsContext.saveGraphicsState()
-          NSBezierPath(rect: rect).addClip()
-          var drawFormat = paintFormat ?? CellFormat()
-          let baseSize = drawFormat.fontSize ?? CellFormatRenderer.defaultFontSize
-          drawFormat.fontSize = baseSize * zoomScale
-          if value.isError {
-            drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
-          } else if isSelected {
-            drawFormat.textColor = CellFormatRenderer.codableColor(
-              from: Self.selectedCellTextColor(over: fillColor, isDarkMode: isDarkMode)
-            )
-          }
-          CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
-          NSGraphicsContext.restoreGraphicsState()
-        }
+        let textRect = textDrawingRect(in: rect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
+        drawPreparedText(
+          text,
+          value: value,
+          format: drawFormat,
+          textRect: textRect,
+          clipRect: rect,
+          fillColor: fillColor,
+          isSelected: isSelected,
+          isDarkMode: isDarkMode
+        )
       }
     }
 
     if isFilterHeader {
       drawFilterAffordance(in: rect, over: fillColor)
     }
+  }
+
+  private func textDrawingRect(in cellRect: NSRect, hasIcon: Bool, isFilterHeader: Bool) -> NSRect {
+    let insetX = 4 * zoomScale
+    let insetY = 2 * zoomScale
+    var textRect = cellRect.insetBy(dx: insetX, dy: insetY)
+    if hasIcon {
+      textRect.origin.x += 14 * zoomScale
+      textRect.size.width = max(0, textRect.width - 14 * zoomScale)
+    }
+    if isFilterHeader {
+      // Keep wrapped text clear of the bottom-right filter chip.
+      textRect.size.width = max(0, textRect.width - 14 * zoomScale)
+      textRect.size.height = max(0, textRect.height - 14 * zoomScale)
+    }
+    return textRect
+  }
+
+  private func drawPreparedText(
+    _ text: String,
+    value: CellValue,
+    format: CellFormat,
+    textRect: NSRect,
+    clipRect: NSRect,
+    fillColor: NSColor?,
+    isSelected: Bool,
+    isDarkMode: Bool
+  ) {
+    guard !text.isEmpty, textRect.width > 1, textRect.height > 1, clipRect.width > 0.5, clipRect.height > 0.5 else {
+      return
+    }
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(rect: clipRect).addClip()
+    var drawFormat = format
+    let baseSize = drawFormat.fontSize ?? CellFormatRenderer.defaultFontSize
+    drawFormat.fontSize = baseSize * zoomScale
+    if value.isError {
+      drawFormat.textColor = CellFormatRenderer.codableColor(from: .systemRed)
+    } else if isSelected {
+      drawFormat.textColor = CellFormatRenderer.codableColor(
+        from: Self.selectedCellTextColor(over: fillColor, isDarkMode: isDarkMode)
+      )
+    }
+    CellFormatRenderer.drawText(text, in: textRect, format: drawFormat)
+    NSGraphicsContext.restoreGraphicsState()
+  }
+
+  private func drawScrollableOverflowText(in dirtyRect: NSRect) {
+    guard let viewModel else { return }
+    let sheet = viewModel.activeSheet
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let rows = visibleRowRange()
+    let cols = visibleColumnRange()
+    let rowLower = max(rows.lowerBound, frozenRows)
+    let colLower = max(cols.lowerBound, frozenCols)
+    let lastColumn = columnCount() - 1
+    guard rowLower <= rows.upperBound, colLower <= cols.upperBound, frozenCols <= lastColumn else { return }
+    drawOverflowText(
+      in: dirtyRect,
+      rowRange: rowLower...rows.upperBound,
+      visibleColumns: colLower...cols.upperBound,
+      paneColumns: frozenCols...lastColumn,
+      clipRect: scrollableCellsClipRect(),
+      viewModel: viewModel,
+      sheet: sheet
+    )
+  }
+
+  private func drawFrozenOverflowText(in dirtyRect: NSRect) {
+    guard let viewModel else { return }
+    let sheet = viewModel.activeSheet
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let visibleRows = visibleRowRange()
+    let visibleCols = visibleColumnRange()
+    let lastColumn = columnCount() - 1
+
+    if frozenRows > 0 && frozenCols > 0 {
+      drawOverflowText(
+        in: dirtyRect,
+        rowRange: 0...(frozenRows - 1),
+        visibleColumns: 0...(frozenCols - 1),
+        paneColumns: 0...(frozenCols - 1),
+        clipRect: frozenCellsClipRect(),
+        viewModel: viewModel,
+        sheet: sheet
+      )
+    }
+    if frozenRows > 0 {
+      let colLower = max(visibleCols.lowerBound, frozenCols)
+      if frozenCols <= lastColumn, colLower <= visibleCols.upperBound {
+        drawOverflowText(
+          in: dirtyRect,
+          rowRange: 0...(frozenRows - 1),
+          visibleColumns: colLower...visibleCols.upperBound,
+          paneColumns: frozenCols...lastColumn,
+          clipRect: frozenTopStripClipRect(),
+          viewModel: viewModel,
+          sheet: sheet
+        )
+      }
+    }
+    if frozenCols > 0 {
+      let rowLower = max(visibleRows.lowerBound, frozenRows)
+      if rowLower <= visibleRows.upperBound {
+        drawOverflowText(
+          in: dirtyRect,
+          rowRange: rowLower...visibleRows.upperBound,
+          visibleColumns: 0...(frozenCols - 1),
+          paneColumns: 0...(frozenCols - 1),
+          clipRect: frozenLeftStripClipRect(),
+          viewModel: viewModel,
+          sheet: sheet
+        )
+      }
+    }
+  }
+
+  private func drawOverflowText(
+    in dirtyRect: NSRect,
+    rowRange: ClosedRange<Int>,
+    visibleColumns: ClosedRange<Int>,
+    paneColumns: ClosedRange<Int>,
+    clipRect: NSRect,
+    viewModel: SpreadsheetViewModel,
+    sheet: Sheet
+  ) {
+    guard !clipRect.isEmpty, !rowRange.isEmpty, !visibleColumns.isEmpty, !paneColumns.isEmpty else { return }
+    let columns = extendedColumnRange(around: visibleColumns, within: paneColumns)
+    let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(rect: clipRect).addClip()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+
+    for row in rowRange {
+      for col in columns {
+        let address = CellAddress(row: row, col: col)
+        if sheet.isCoveredByMerge(address) { continue }
+        let cell = sheet.cell(at: address)
+        guard !cell.raw.isEmpty else { continue }
+        if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
+        let paint = viewModel.resolvedPaint(at: address)
+        let format = paint.format ?? cell.format ?? CellFormat()
+        guard format.overflowsUnclipped else { continue }
+        if paint.dataBarFraction != nil && paint.dataBarShowValue == false { continue }
+        let text = viewModel.displayString(at: address)
+        guard !text.isEmpty else { continue }
+        guard let cellRect = paintRect(for: address, sheet: sheet) else { continue }
+        let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
+        let textRect = textDrawingRect(in: cellRect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
+        guard textRect.width > 1, textRect.height > 1 else { continue }
+
+        var measureFormat = format
+        let baseSize = measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize
+        measureFormat.fontSize = baseSize * zoomScale
+        let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
+        let sourceColumns: ClosedRange<Int>
+        if let merge = sheet.mergeContaining(address) {
+          let span = merge.normalized
+          sourceColumns = span.minCol...span.maxCol
+        } else {
+          sourceColumns = col...col
+        }
+        let horizontal = CellTextLayout.overflowClip(
+          cellMinX: textRect.minX,
+          cellMaxX: textRect.maxX,
+          textWidth: textWidth,
+          alignment: format.horizontalAlign,
+          insetX: 4,
+          sourceColumns: sourceColumns,
+          paneColumns: paneColumns,
+          columnOrigin: { self.xForColumn($0) },
+          columnWidth: { self.columnWidth(at: $0) },
+          blocks: { column in
+            CellTextLayout.blocksOverflow(sheet: sheet, row: row, column: column) {
+              viewModel.displayString(at: $0)
+            }
+          }
+        )
+        let spill = NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
+        guard spill.width > 0.5, dirtyRect.intersects(spill) else { continue }
+        let value = viewModel.displayValue(at: address)
+        let isSelected = viewModel.isAddressSelected(address)
+        let fillColor = CellFormatRenderer.fillColor(for: paint.format)
+        drawPreparedText(
+          text,
+          value: value,
+          format: format,
+          textRect: textRect,
+          clipRect: spill,
+          fillColor: fillColor,
+          isSelected: isSelected,
+          isDarkMode: isDarkMode
+        )
+        if isFilterHeader {
+          drawFilterAffordance(in: cellRect, over: fillColor)
+        }
+      }
+    }
+  }
+
+  /// Include columns just outside the viewport so spill from an off-screen cell can still paint.
+  private func extendedColumnRange(around visible: ClosedRange<Int>, within pane: ClosedRange<Int>, pad: CGFloat = 4000) -> ClosedRange<Int> {
+    var lower = max(pane.lowerBound, visible.lowerBound)
+    var width: CGFloat = 0
+    while lower > pane.lowerBound && width < pad {
+      lower -= 1
+      width += columnWidth(at: lower)
+    }
+    var upper = min(pane.upperBound, visible.upperBound)
+    width = 0
+    while upper < pane.upperBound && width < pad {
+      upper += 1
+      width += columnWidth(at: upper)
+    }
+    return lower...upper
   }
 
   private func drawDataBar(fraction: Double, color: CodableColor, in rect: NSRect) {
@@ -2522,6 +2770,13 @@ final class SpreadsheetGridNSView: NSView {
     editor.font = CellFormatRenderer.font(for: scaledFormat)
     let colors = editorColors(for: format)
     editor.textColor = colors.foreground
+    let wraps = format?.textDisplay == .wrap
+    editor.cell?.wraps = wraps
+    editor.cell?.isScrollable = !wraps
+    editor.lineBreakMode = wraps ? .byWordWrapping : .byClipping
+    if let cell = editor.cell as? NSTextFieldCell {
+      cell.usesSingleLineMode = !wraps
+    }
     styleFieldEditor(for: format)
   }
 

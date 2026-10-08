@@ -38,6 +38,7 @@ enum XLSXCodec {
     let dxfs = importDifferentialFormats(archiveData: archiveData, themeScheme: themeScheme)
     let underlinedFonts = underlinedFontIndices(archiveData: archiveData)
     let textRotationsByStyleIndex = importTextRotationsByStyleIndex(archiveData: archiveData)
+    let clipTextStyleIndexes = importClipTextStyleIndexes(archiveData: archiveData)
     var sheets: [Sheet] = []
 
     for wbk in try file.parseWorkbooks() {
@@ -51,7 +52,8 @@ enum XLSXCodec {
           styles: styles,
           underlinedFontIds: underlinedFonts,
           themeStyleColors: themeStyleColors,
-          textRotationsByStyleIndex: textRotationsByStyleIndex
+          textRotationsByStyleIndex: textRotationsByStyleIndex,
+          clipTextStyleIndexes: clipTextStyleIndexes
         )
         expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
         importColumnWidths(from: worksheet, into: &sheet)
@@ -307,7 +309,8 @@ enum XLSXCodec {
     styles: Styles?,
     underlinedFontIds: Set<Int>,
     themeStyleColors: ThemeResolvedStyleColors,
-    textRotationsByStyleIndex: [Int: Int]
+    textRotationsByStyleIndex: [Int: Int],
+    clipTextStyleIndexes: Set<Int>
   ) {
     for row in worksheet.data?.rows ?? [] {
       for cell in row.cells {
@@ -320,7 +323,8 @@ enum XLSXCodec {
           styles: styles,
           underlinedFontIds: underlinedFontIds,
           themeStyleColors: themeStyleColors,
-          textRotationsByStyleIndex: textRotationsByStyleIndex
+          textRotationsByStyleIndex: textRotationsByStyleIndex,
+          clipTextStyleIndexes: clipTextStyleIndexes
         ) {
           model.format = format
         }
@@ -365,6 +369,41 @@ enum XLSXCodec {
     return rotations
   }
 
+  /// Clip is not an OOXML alignment flag. Spark Grid stores it beside wrapText so a round trip keeps it.
+  static func importClipTextStyleIndexes(archiveData: Data) -> Set<Int> {
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else { return [] }
+    guard let start = xml.range(of: "<cellXfs"),
+          let end = xml.range(of: "</cellXfs>", range: start.upperBound..<xml.endIndex)
+    else { return [] }
+
+    let section = String(xml[start.lowerBound..<end.upperBound])
+    guard let xfRegex = try? NSRegularExpression(
+      pattern: #"<xf\b[^>]*>(.*?)</xf>|<xf\b[^>]*/>"#,
+      options: [.dotMatchesLineSeparators]
+    ),
+      let clipRegex = try? NSRegularExpression(pattern: #"sparkTextDisplay="clip""#)
+    else { return [] }
+
+    let nsSection = section as NSString
+    var indexes = Set<Int>()
+    for (index, match) in xfRegex.matches(
+      in: section,
+      options: [],
+      range: NSRange(location: 0, length: nsSection.length)
+    ).enumerated() {
+      let chunk = nsSection.substring(with: match.range)
+      let nsChunk = chunk as NSString
+      if clipRegex.firstMatch(
+        in: chunk,
+        options: [],
+        range: NSRange(location: 0, length: nsChunk.length)
+      ) != nil {
+        indexes.insert(index)
+      }
+    }
+    return indexes
+  }
+
   private static func cellRawValue(_ cell: CoreXLSX.Cell, sharedStrings: SharedStrings?) -> String {
     if let formula = cell.formula?.value, !formula.isEmpty {
       return formula.hasPrefix("=") ? formula : "=\(formula)"
@@ -383,7 +422,8 @@ enum XLSXCodec {
     styles: Styles,
     underlinedFontIds: Set<Int>,
     themeStyleColors: ThemeResolvedStyleColors,
-    textRotationsByStyleIndex: [Int: Int]
+    textRotationsByStyleIndex: [Int: Int],
+    clipTextStyleIndexes: Set<Int>
   ) -> CellFormat? {
     var format = CellFormat()
     var changed = false
@@ -490,6 +530,10 @@ enum XLSXCodec {
       }
       if let rotation = textRotationsByStyleIndex[styleIndex] {
         format.textRotation = rotation
+        changed = true
+      }
+      if clipTextStyleIndexes.contains(styleIndex), !format.wrapText {
+        format.textDisplay = .clip
         changed = true
       }
     }
@@ -1098,6 +1142,7 @@ private struct StyleKey: Hashable {
   var horizontalAlign: CellFormat.HorizontalAlign = .general
   var verticalAlign: CellFormat.VerticalAlign = .bottom
   var wrapText = false
+  var clipText = false
   var textRotation = 0
 
   static let `default` = StyleKey()
@@ -1118,6 +1163,7 @@ private struct StyleKey: Hashable {
     horizontalAlign = format.horizontalAlign
     verticalAlign = format.verticalAlign
     wrapText = format.wrapText
+    clipText = format.textDisplay == .clip
     textRotation = format.textRotation
   }
 
@@ -1135,6 +1181,7 @@ private struct StyleKey: Hashable {
     case .middle: attrs.append(#"vertical="center""#)
     }
     if wrapText { attrs.append(#"wrapText="1""#) }
+    if clipText { attrs.append(#"sparkTextDisplay="clip""#) }
     if textRotation != 0 { attrs.append(#"textRotation="\#(textRotation)""#) }
     guard !attrs.isEmpty else { return "" }
     return "<alignment \(attrs.joined(separator: " "))/>"

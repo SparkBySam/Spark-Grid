@@ -97,6 +97,20 @@ enum CellFormatRenderer {
     }
   }
 
+  static func lineBreakMode(for format: CellFormat?) -> NSLineBreakMode {
+    switch (format ?? CellFormat()).textDisplay {
+    case .overflow:
+      return .byClipping
+    case .wrap, .clip:
+      return .byWordWrapping
+    }
+  }
+
+  /// Clip keeps the previous ellipsis. Overflow and wrap do not.
+  static func showsEllipsis(_ format: CellFormat?) -> Bool {
+    (format ?? CellFormat()).textDisplay == .clip
+  }
+
   static func attributes(for format: CellFormat?, onLightBackground: Bool = false) -> [NSAttributedString.Key: Any] {
     let resolved = format ?? CellFormat()
     let defaultTextColor = onLightBackground ? NSColor.black : NSColor.labelColor
@@ -119,7 +133,7 @@ enum CellFormatRenderer {
     case .center: paragraph.alignment = .center
     case .right: paragraph.alignment = .right
     }
-    paragraph.lineBreakMode = resolved.wrapText ? .byWordWrapping : .byTruncatingTail
+    paragraph.lineBreakMode = lineBreakMode(for: resolved)
     attrs[.paragraphStyle] = paragraph
 
     return attrs
@@ -187,7 +201,16 @@ enum CellFormatRenderer {
     let inset = cellRect.insetBy(dx: 4, dy: 2)
     guard inset.width > 1, inset.height > 1 else { return }
 
-    if resolved.wrapText {
+    if resolved.textDisplay == .wrap {
+      (text as NSString).draw(
+        with: inset,
+        options: [.usesLineFragmentOrigin, .usesFontLeading],
+        attributes: attrs
+      )
+      return
+    }
+
+    if Self.showsEllipsis(resolved) {
       (text as NSString).draw(
         with: inset,
         options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],

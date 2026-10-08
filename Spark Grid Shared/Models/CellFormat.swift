@@ -16,10 +16,46 @@ struct CellFormat: Codable, Equatable, Sendable {
   var fontFamily: String?
   var fontSize: CGFloat?
   var decimalPlaces: Int?
+  /// Excel wrap. Prefer `textDisplay` — wrap is one of overflow, wrap, and clip.
   var wrapText = false
+  /// Ellipsis clipping. Nil with wrap off is overflow, the default.
+  var clipText: Bool?
   /// Degrees for tilt/rotate, or `stackedTextRotation` (255) for one character per line (Excel OOXML).
   var textRotation: Int = 0
   var borders: CellBorders = .none
+
+  /// How text that does not fit the cell is drawn.
+  enum TextDisplay: String, Codable, Sendable {
+    case overflow
+    case wrap
+    case clip
+  }
+
+  var textDisplay: TextDisplay {
+    get {
+      if wrapText { return .wrap }
+      if clipText == true { return .clip }
+      return .overflow
+    }
+    set {
+      switch newValue {
+      case .overflow:
+        wrapText = false
+        clipText = nil
+      case .wrap:
+        wrapText = true
+        clipText = nil
+      case .clip:
+        wrapText = false
+        clipText = true
+      }
+    }
+  }
+
+  /// Single-line text that may paint through empty neighbors. Rotation stays inside the cell.
+  var overflowsUnclipped: Bool {
+    textDisplay == .overflow && textRotation == 0 && !isStackedVertically
+  }
 
   /// Excel OOXML `textRotation="255"` — upright characters stacked top-to-bottom.
   static let stackedTextRotation = 255

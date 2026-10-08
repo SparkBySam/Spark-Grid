@@ -340,9 +340,7 @@ struct FormattingToolbar: View {
           .font(.system(size: 13))
       }
 
-      ToolbarIconButton(systemName: "text.word.spacing", title: "Wrap", showLabel: showLabels, active: viewModel.selectedFormat.wrapText) {
-        viewModel.toggleWrapText()
-      }
+      TextDisplayToolbarMenu(viewModel: viewModel, showLabel: showLabels)
 
       RotateToolbarMenu(
         viewModel: viewModel,
@@ -1001,6 +999,44 @@ private struct BorderStylePreview: View {
         bottom.addLine(to: CGPoint(x: size.width, y: y + 1.5))
         context.stroke(top, with: .color(stroke), lineWidth: 1)
         context.stroke(bottom, with: .color(stroke), lineWidth: 1)
+      }
+    }
+  }
+}
+
+private struct TextDisplayToolbarMenu: View {
+  @Bindable var viewModel: SpreadsheetViewModel
+  var showLabel: Bool
+
+  private var mode: CellFormat.TextDisplay { viewModel.selectedFormat.textDisplay }
+  private var isActive: Bool { mode != .overflow }
+
+  var body: some View {
+    ToolbarMenuButton(title: "Wrap", showLabel: showLabel, width: 32) {
+      textItem(.overflow, title: "Overflow")
+      textItem(.wrap, title: "Wrap")
+      textItem(.clip, title: "Clip")
+    } label: {
+      Image(systemName: "text.word.spacing")
+        .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+          isActive ? Color.accentColor.opacity(0.22) : Color.clear,
+          in: RoundedRectangle(cornerRadius: 4)
+        )
+    }
+    .help("Overflow, wrap, or clip text")
+  }
+
+  @ViewBuilder
+  private func textItem(_ display: CellFormat.TextDisplay, title: String) -> some View {
+    Button {
+      viewModel.setTextDisplay(display)
+    } label: {
+      if mode == display {
+        Label(title, systemImage: "checkmark")
+      } else {
+        Text(title)
       }
     }
   }

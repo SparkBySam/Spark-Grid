@@ -62,13 +62,28 @@ final class SpreadsheetPrintNSView: NSView {
     self.columnXs = columnXs
     self.columnWidths = columnWidths
 
+    let wrappedHeights = CellTextLayout.wrappedRowHeights(
+      sheet: sheet,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      defaultColumnWidth: Workbook.defaultColumnWidth,
+      zoom: 1,
+      columnWidth: { sheet.columnWidth(for: $0, default: Workbook.defaultColumnWidth) },
+      displayText: { address in
+        engine.displayString(at: address, sheet: sheet, format: sheet.cell(at: address).format)
+      }
+    )
     var rowHeights: [CGFloat] = []
     var rowYs: [CGFloat] = []
     var y = Self.headerHeight
     for row in normalized.minRow...maxRow {
       let height = hiddenRows.contains(row)
         ? 0
-        : sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
+        : CellTextLayout.displayRowHeight(
+          row: row,
+          sheet: sheet,
+          defaultRowHeight: Workbook.defaultRowHeight,
+          wrapped: wrappedHeights
+        )
       rowYs.append(y)
       rowHeights.append(height)
       y += height
@@ -111,25 +126,9 @@ final class SpreadsheetPrintNSView: NSView {
       drawGridLines(gridLine: gridLine)
     }
 
-    // Only paint populated / formatted cells.
-    for (address, cell) in sheet.cells {
-      guard
-        address.row >= normalized.minRow,
-        address.row <= maxRow,
-        address.col >= normalized.minCol,
-        address.col <= normalized.maxCol
-      else { continue }
-      let rowIndex = address.row - normalized.minRow
-      guard rowHeights[rowIndex] > 0 else { continue }
-      let colIndex = address.col - normalized.minCol
-      let rect = NSRect(
-        x: columnXs[colIndex],
-        y: rowYs[rowIndex],
-        width: columnWidths[colIndex],
-        height: rowHeights[rowIndex]
-      )
-      drawCellContent(cell, at: address, in: rect)
-    }
+    // Fills and in-cell text first, then overflow so a later fill cannot cover spilled text.
+    drawSheetCells(overflowPass: false)
+    drawSheetCells(overflowPass: true)
 
     let corner = NSRect(x: 0, y: 0, width: Self.headerWidth, height: Self.headerHeight)
     headerFill.setFill()
@@ -230,20 +229,43 @@ final class SpreadsheetPrintNSView: NSView {
     path.stroke()
   }
 
-  private func drawCellContent(_ cell: Cell, at address: CellAddress, in rect: NSRect) {
+  private func drawSheetCells(overflowPass: Bool) {
+    for (address, cell) in sheet.cells {
+      guard
+        address.row >= normalized.minRow,
+        address.row <= maxRow,
+        address.col >= normalized.minCol,
+        address.col <= normalized.maxCol
+      else { continue }
+      let rowIndex = address.row - normalized.minRow
+      guard rowHeights[rowIndex] > 0 else { continue }
+      let colIndex = address.col - normalized.minCol
+      let rect = NSRect(
+        x: columnXs[colIndex],
+        y: rowYs[rowIndex],
+        width: columnWidths[colIndex],
+        height: rowHeights[rowIndex]
+      )
+      drawCellContent(cell, at: address, in: rect, overflowPass: overflowPass)
+    }
+  }
+
+  private func drawCellContent(_ cell: Cell, at address: CellAddress, in rect: NSRect, overflowPass: Bool) {
     let paintFormat = resolvedFormat(at: address, cell: cell)
-    if let fill = CellFormatRenderer.fillColor(for: paintFormat) {
+    let format = paintFormat ?? CellFormat()
+    if !overflowPass, let fill = CellFormatRenderer.fillColor(for: paintFormat) {
       fill.setFill()
       rect.fill()
     }
 
-    if !cell.raw.isEmpty {
+    if !cell.raw.isEmpty, format.overflowsUnclipped == overflowPass {
       let text = formulaEngine.displayString(at: address, sheet: sheet, format: cell.format)
       let textRect = rect.insetBy(dx: 4, dy: 2)
-      if textRect.width > 1, textRect.height > 1 {
+      if textRect.width > 1, textRect.height > 1, !text.isEmpty {
+        let clip = overflowPass ? overflowClipRect(for: address, text: text, format: format, textRect: textRect, cellRect: rect) : rect
         NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: rect).addClip()
-        CellFormatRenderer.drawSingleLineText(
+        NSBezierPath(rect: clip).addClip()
+        CellFormatRenderer.drawText(
           text,
           in: textRect,
           format: paintFormat,
@@ -253,9 +275,60 @@ final class SpreadsheetPrintNSView: NSView {
       }
     }
 
-    if let borders = paintFormat?.borders, borders.hasAny {
+    if !overflowPass, let borders = paintFormat?.borders, borders.hasAny {
       CellFormatRenderer.drawBorders(borders, in: rect)
     }
+  }
+
+  private func overflowClipRect(
+    for address: CellAddress,
+    text: String,
+    format: CellFormat,
+    textRect: NSRect,
+    cellRect: NSRect
+  ) -> NSRect {
+    let textWidth = CellFormatRenderer.measuredWidth(for: text, format: format)
+    let sourceColumns: ClosedRange<Int>
+    if let merge = sheet.mergeContaining(address) {
+      let span = merge.normalized
+      sourceColumns = span.minCol...span.maxCol
+    } else {
+      sourceColumns = address.col...address.col
+    }
+    let pane = normalized.minCol...normalized.maxCol
+    let horizontal = CellTextLayout.overflowClip(
+      cellMinX: textRect.minX,
+      cellMaxX: textRect.maxX,
+      textWidth: textWidth,
+      alignment: format.horizontalAlign,
+      insetX: 4,
+      sourceColumns: sourceColumns,
+      paneColumns: pane,
+      columnOrigin: { self.columnOrigin($0) },
+      columnWidth: { self.printedColumnWidth($0) },
+      blocks: { column in
+        CellTextLayout.blocksOverflow(sheet: self.sheet, row: address.row, column: column) { neighbor in
+          let neighborCell = self.sheet.cell(at: neighbor)
+          return self.formulaEngine.displayString(at: neighbor, sheet: self.sheet, format: neighborCell.format)
+        }
+      }
+    )
+    return NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
+  }
+
+  private func columnOrigin(_ col: Int) -> CGFloat {
+    let index = col - normalized.minCol
+    if columnXs.indices.contains(index) { return columnXs[index] }
+    if col < normalized.minCol { return columnXs.first ?? Self.headerWidth }
+    let lastX = columnXs.last ?? Self.headerWidth
+    let lastWidth = columnWidths.last ?? Workbook.defaultColumnWidth
+    return lastX + lastWidth
+  }
+
+  private func printedColumnWidth(_ col: Int) -> CGFloat {
+    let index = col - normalized.minCol
+    guard columnWidths.indices.contains(index) else { return Workbook.defaultColumnWidth }
+    return columnWidths[index]
   }
 
   private func resolvedFormat(at address: CellAddress, cell: Cell) -> CellFormat? {
@@ -293,7 +366,8 @@ final class SpreadsheetPrintNSView: NSView {
 
   private func drawCell(_ cell: Cell, at address: CellAddress, in rect: NSRect, gridLine: NSColor) {
     let paintFormat = resolvedFormat(at: address, cell: cell)
-    drawCellContent(cell, at: address, in: rect)
+    drawCellContent(cell, at: address, in: rect, overflowPass: false)
+    drawCellContent(cell, at: address, in: rect, overflowPass: true)
     if showGridlines || !cell.raw.isEmpty || paintFormat?.fillColor != nil {
       gridLine.setStroke()
       NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5)).stroke()
@@ -309,10 +383,27 @@ final class SpreadsheetPrintNSView: NSView {
     for col in range.minCol...range.maxCol {
       width += sheet.columnWidth(for: col, default: Workbook.defaultColumnWidth)
     }
+    let engine = FormulaEngine()
+    engine.rebuild(sheet: sheet)
+    let wrappedHeights = CellTextLayout.wrappedRowHeights(
+      sheet: sheet,
+      defaultRowHeight: Workbook.defaultRowHeight,
+      defaultColumnWidth: Workbook.defaultColumnWidth,
+      zoom: 1,
+      columnWidth: { sheet.columnWidth(for: $0, default: Workbook.defaultColumnWidth) },
+      displayText: { address in
+        engine.displayString(at: address, sheet: sheet, format: sheet.cell(at: address).format)
+      }
+    )
     var height = headerHeight
     for row in range.minRow...range.maxRow {
       if hiddenRows.contains(row) { continue }
-      height += sheet.rowHeight(for: row, default: Workbook.defaultRowHeight)
+      height += CellTextLayout.displayRowHeight(
+        row: row,
+        sheet: sheet,
+        defaultRowHeight: Workbook.defaultRowHeight,
+        wrapped: wrappedHeights
+      )
     }
     return NSSize(
       width: max(width, Self.headerWidth + Workbook.defaultColumnWidth),

@@ -715,7 +715,16 @@ final class SpreadsheetViewModel {
       let cell = sheet.cell(at: address)
       let text = displayString(at: address)
       guard !text.isEmpty else { continue }
-      let height = CellFormatRenderer.measuredHeight(for: text, format: cell.format) + 8
+      let height: CGFloat
+      if cell.format?.textDisplay == .wrap {
+        height = CellTextLayout.preferredWrappedRowHeight(
+          text: text,
+          format: cell.format ?? CellFormat(),
+          columnWidth: sheet.columnWidth(for: col, default: Workbook.defaultColumnWidth)
+        )
+      } else {
+        height = CellFormatRenderer.measuredHeight(for: text, format: cell.format) + 8
+      }
       maxHeight = max(maxHeight, height)
     }
     let newHeight = min(max(maxHeight, 22), 200)
@@ -944,7 +953,9 @@ final class SpreadsheetViewModel {
   func toggleItalic() { updateSelectedFormat { $0.italic.toggle() } }
   func toggleUnderline() { updateSelectedFormat { $0.underline.toggle() } }
   func toggleStrikethrough() { updateSelectedFormat { $0.strikethrough.toggle() } }
-  func toggleWrapText() { updateSelectedFormat { $0.wrapText.toggle() } }
+  func setTextDisplay(_ display: CellFormat.TextDisplay) {
+    updateSelectedFormat { $0.textDisplay = display }
+  }
 
   func setFontFamily(_ family: String) {
     updateSelectedFormat { $0.fontFamily = family }
