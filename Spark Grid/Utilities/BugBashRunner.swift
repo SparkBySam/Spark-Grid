@@ -4763,14 +4763,29 @@ enum BugBashRunner {
 
   private static func spellingMarkLength(_ textView: NSTextView) -> Int {
     guard let layout = textView.layoutManager else { return 0 }
-    let full = NSRange(location: 0, length: (textView.string as NSString).length)
-    guard full.length > 0 else { return 0 }
+    let length = (textView.string as NSString).length
+    guard length > 0 else { return 0 }
     var marked = 0
-    layout.enumerateTemporaryAttribute(.spellingState, in: full, options: []) { value, range, _ in
+    var index = 0
+    while index < length {
+      var range = NSRange(location: NSNotFound, length: 0)
+      let value = layout.temporaryAttribute(
+        .spellingState,
+        atCharacterIndex: index,
+        effectiveRange: &range
+      )
       let state = (value as? NSNumber)?.intValue ?? (value as? Int) ?? 0
-      if state != 0 {
-        marked += range.length
+      let runEnd: Int
+      if range.location != NSNotFound, range.length > 0 {
+        runEnd = min(length, range.location + range.length)
+      } else {
+        runEnd = index + 1
       }
+      if state != 0 {
+        let runStart = range.location == NSNotFound ? index : max(index, range.location)
+        marked += max(0, runEnd - runStart)
+      }
+      index = runEnd > index ? runEnd : index + 1
     }
     return marked
   }
