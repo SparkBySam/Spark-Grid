@@ -65,6 +65,7 @@ enum BugBashRunner {
     results.append(weeklyCallsLastLabel())
     results.append(chartValueColors())
     results.append(chartFrameDrag())
+    results.append(chartCommandFreePlacement())
     results.append(chartSlidesUnderFrozenPanes())
     results.append(MainActor.assumeIsolated { frozenPanesCoverChartPixels() })
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
@@ -1515,6 +1516,366 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "preview tall \(tall) wide \(wide)")
     }
     return Result(name: name, passed: true, detail: "move, resize, handles, preview size")
+  }
+
+  /// Command during a drag or resize leaves the edge on the pointer. Without
+  /// it, the same gesture snaps to the cell border. The chart still scrolls
+  /// with its anchor, and dragging down still moves it down.
+  private static func chartCommandFreePlacement() -> Result {
+    let name = "chart command free placement"
+    guard SpreadsheetGridNSView.chartDragUsesFreePlacement(modifierFlags: .command),
+          SpreadsheetGridNSView.chartDragUsesFreePlacement(modifierFlags: [.command, .shift]),
+          !SpreadsheetGridNSView.chartDragUsesFreePlacement(modifierFlags: []),
+          !SpreadsheetGridNSView.chartDragUsesFreePlacement(modifierFlags: .shift),
+          !SpreadsheetGridNSView.chartDragUsesFreePlacement(modifierFlags: .option),
+          !SpreadsheetGridNSView.chartDragUsesFreePlacement(modifierFlags: .control)
+    else {
+      return Result(name: name, passed: false, detail: "modifier was not command")
+    }
+    func columnAt(_ x: CGFloat) -> Int { min(25, max(0, Int(floor(x / 80)))) }
+    func rowAt(_ y: CGFloat) -> Int { min(99, max(0, Int(floor(y / 22)))) }
+    func xForColumn(_ col: Int) -> CGFloat { CGFloat(col) * 80 }
+    func yForRow(_ row: Int) -> CGFloat { CGFloat(row) * 22 }
+    let start = OnSheetChartGeometry.ChartFrameAnchor(anchorRow: 4, anchorCol: 0, rowSpan: 12, colSpan: 8)
+    let rect = CGRect(x: 0, y: 88, width: 640, height: 264)
+    func drag(
+      _ handle: OnSheetChartGeometry.ChartFrameHandle,
+      _ translation: CGSize,
+      free: Bool
+    ) -> OnSheetChartGeometry.ChartFrameAnchor {
+      OnSheetChartGeometry.anchorAfterDrag(
+        start: start,
+        handle: handle,
+        startRect: rect,
+        translation: translation,
+        minimumSpan: SheetChart.minimumSpan,
+        rowLimit: 100,
+        columnLimit: 26,
+        columnAt: columnAt,
+        rowAt: rowAt,
+        freePlacement: free,
+        xForColumn: xForColumn,
+        yForRow: yForRow,
+        columnWidth: { _ in 80 },
+        rowHeight: { _ in 22 }
+      )
+    }
+    func placed(_ anchor: OnSheetChartGeometry.ChartFrameAnchor) -> CGRect {
+      OnSheetChartGeometry.frame(
+        anchorRow: anchor.anchorRow,
+        anchorCol: anchor.anchorCol,
+        rowSpan: anchor.rowSpan,
+        colSpan: anchor.colSpan,
+        rowCount: 100,
+        columnCount: 26,
+        originXOffset: anchor.originXOffset,
+        originYOffset: anchor.originYOffset,
+        endXOffset: anchor.endXOffset,
+        endYOffset: anchor.endYOffset,
+        xForColumn: xForColumn,
+        yForRow: yForRow,
+        columnWidth: { _ in 80 },
+        rowHeight: { _ in 22 }
+      )
+    }
+    let nudge = CGSize(width: 40, height: 10)
+    let snappedNudge = drag(.body, nudge, free: false)
+    let freedNudge = drag(.body, nudge, free: true)
+    guard snappedNudge == start, placed(snappedNudge).minX == 0, placed(snappedNudge).minY == 88 else {
+      return Result(name: name, passed: false, detail: "sub-cell snap \(snappedNudge) \(placed(snappedNudge))")
+    }
+    let freedRect = placed(freedNudge)
+    guard freedNudge.anchorCol == 0, freedNudge.anchorRow == 4,
+          freedNudge.colSpan == 8, freedNudge.rowSpan == 12,
+          freedNudge.originXOffset == 40, freedNudge.originYOffset == 10,
+          freedNudge.endXOffset == 40, freedNudge.endYOffset == 10,
+          freedRect.minX == 40, freedRect.minY == 98,
+          freedRect.width == 640, freedRect.height == 264
+    else {
+      return Result(name: name, passed: false, detail: "free nudge \(freedNudge) \(freedRect)")
+    }
+    let downward = SpreadsheetGridNSView.chartDragTranslation(dx: 100, dy: 30)
+    guard downward.height > 0 else {
+      return Result(name: name, passed: false, detail: "downward sign \(downward)")
+    }
+    let snappedMove = drag(.body, downward, free: false)
+    let freedMove = drag(.body, downward, free: true)
+    guard snappedMove.anchorCol == 1, snappedMove.anchorRow == 5,
+          snappedMove.originXOffset == 0, snappedMove.originYOffset == 0,
+          placed(snappedMove).minX == 80, placed(snappedMove).minY == 110
+    else {
+      return Result(name: name, passed: false, detail: "snap move \(snappedMove) \(placed(snappedMove))")
+    }
+    let freedMoveRect = placed(freedMove)
+    guard freedMove.anchorCol == 1, freedMove.anchorRow == 5,
+          freedMove.originXOffset == 20, freedMove.originYOffset == 8,
+          freedMoveRect.minX == 100, freedMoveRect.minY == 118,
+          freedMoveRect.width == 640, freedMoveRect.height == 264
+    else {
+      return Result(name: name, passed: false, detail: "free move \(freedMove) \(freedMoveRect)")
+    }
+    let snapRight = drag(.right, CGSize(width: 30, height: 0), free: false)
+    let freeRight = drag(.right, CGSize(width: 30, height: 0), free: true)
+    guard snapRight.colSpan == 9, snapRight.endXOffset == 0, placed(snapRight).width == 720 else {
+      return Result(name: name, passed: false, detail: "snap resize \(snapRight) \(placed(snapRight))")
+    }
+    guard freeRight.anchorCol == 0, freeRight.colSpan == 8, freeRight.endXOffset == 30,
+          freeRight.rowSpan == 12, placed(freeRight).width == 670, placed(freeRight).minX == 0
+    else {
+      return Result(name: name, passed: false, detail: "free resize \(freeRight) \(placed(freeRight))")
+    }
+    let downEdge = SpreadsheetGridNSView.chartDragTranslation(dx: 0, dy: 10)
+    let freeBottom = drag(.bottom, downEdge, free: true)
+    guard freeBottom.anchorRow == 4, freeBottom.rowSpan == 12, freeBottom.endYOffset == 10,
+          placed(freeBottom).minY == 88, placed(freeBottom).height == 274
+    else {
+      return Result(name: name, passed: false, detail: "bottom down \(freeBottom) \(placed(freeBottom))")
+    }
+    let freeCorner = drag(.topLeft, CGSize(width: 50, height: 10), free: true)
+    guard freeCorner.originXOffset == 50, freeCorner.originYOffset == 10,
+          freeCorner.colSpan == 8, freeCorner.rowSpan == 12,
+          placed(freeCorner).minX == 50, placed(freeCorner).minY == 98
+    else {
+      return Result(name: name, passed: false, detail: "corner \(freeCorner) \(placed(freeCorner))")
+    }
+    func widthAt(_ col: Int) -> CGFloat { col == 0 ? 50 : (col == 1 ? 100 : 80) }
+    func xOf(_ col: Int) -> CGFloat {
+      var x: CGFloat = 0
+      for index in 0..<max(0, col) { x += widthAt(index) }
+      return x
+    }
+    func colAt(_ x: CGFloat) -> Int {
+      var index = 0
+      var cursor: CGFloat = 0
+      while index < 25 {
+        let width = widthAt(index)
+        if x < cursor + width { return index }
+        cursor += width
+        index += 1
+      }
+      return 25
+    }
+    let variableRect = CGRect(x: 0, y: 88, width: xOf(8), height: 264)
+    let variableFree = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .body,
+      startRect: variableRect,
+      translation: CGSize(width: 60, height: 0),
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: colAt,
+      rowAt: rowAt,
+      freePlacement: true,
+      xForColumn: xOf,
+      yForRow: yForRow,
+      columnWidth: widthAt,
+      rowHeight: { _ in 22 }
+    )
+    let variableSnap = OnSheetChartGeometry.anchorAfterDrag(
+      start: start,
+      handle: .body,
+      startRect: variableRect,
+      translation: CGSize(width: 60, height: 0),
+      minimumSpan: SheetChart.minimumSpan,
+      rowLimit: 100,
+      columnLimit: 26,
+      columnAt: colAt,
+      rowAt: rowAt,
+      freePlacement: false,
+      xForColumn: xOf,
+      yForRow: yForRow,
+      columnWidth: widthAt,
+      rowHeight: { _ in 22 }
+    )
+    let variablePlaced = OnSheetChartGeometry.frame(
+      anchorRow: variableFree.anchorRow,
+      anchorCol: variableFree.anchorCol,
+      rowSpan: variableFree.rowSpan,
+      colSpan: variableFree.colSpan,
+      rowCount: 100,
+      columnCount: 26,
+      originXOffset: variableFree.originXOffset,
+      originYOffset: variableFree.originYOffset,
+      endXOffset: variableFree.endXOffset,
+      endYOffset: variableFree.endYOffset,
+      xForColumn: xOf,
+      yForRow: yForRow,
+      columnWidth: widthAt,
+      rowHeight: { _ in 22 }
+    )
+    guard variableFree.anchorCol == 1, variableFree.originXOffset == 10,
+          variablePlaced.minX == 60, variablePlaced.width == variableRect.width,
+          variableSnap.anchorCol == 1, variableSnap.originXOffset == 0
+    else {
+      return Result(name: name, passed: false, detail: "variable \(variableFree) snap \(variableSnap) \(variablePlaced)")
+    }
+
+    let header: CGFloat = 28
+    let rowH: CGFloat = 22
+    let colW: CGFloat = 80
+    let frozenRows = 7
+    let frozenCols = 2
+    let content = CGRect(x: header, y: header, width: 960, height: 640)
+    let boundaryX = header + CGFloat(frozenCols) * colW
+    let boundaryY = header + CGFloat(frozenRows) * rowH
+    func scrolledY(_ row: Int, scrollY: CGFloat) -> CGFloat {
+      let model = CGFloat(row) * rowH
+      if row < frozenRows { return header + model }
+      return header + model - scrollY
+    }
+    func scrolledX(_ col: Int, scrollX: CGFloat) -> CGFloat {
+      let model = CGFloat(col) * colW
+      if col < frozenCols { return header + model }
+      return header + model - scrollX
+    }
+    func offsetChart(scrollX: CGFloat, scrollY: CGFloat) -> CGRect {
+      OnSheetChartGeometry.frame(
+        anchorRow: 10,
+        anchorCol: 3,
+        rowSpan: 14,
+        colSpan: 8,
+        rowCount: 200,
+        columnCount: 26,
+        originXOffset: 5,
+        originYOffset: 6,
+        endXOffset: 5,
+        endYOffset: 6,
+        xForColumn: { scrolledX($0, scrollX: scrollX) },
+        yForRow: { scrolledY($0, scrollY: scrollY) },
+        columnWidth: { _ in colW },
+        rowHeight: { _ in rowH }
+      )
+    }
+    let rested = offsetChart(scrollX: 0, scrollY: 0)
+    let scrolled = offsetChart(scrollX: 200, scrollY: 120)
+    guard rested.minY == header + 10 * rowH + 6, rested.minX == header + 3 * colW + 5,
+          rested.height == 14 * rowH, rested.width == 8 * colW,
+          rested.minY - scrolled.minY == 120, rested.minX - scrolled.minX == 200
+    else {
+      return Result(name: name, passed: false, detail: "offset scroll \(rested) \(scrolled)")
+    }
+    let hostRest = OnSheetChartGeometry.hostFrame(chartRect: rested, layerFrame: content)
+    let hostScroll = OnSheetChartGeometry.hostFrame(chartRect: scrolled, layerFrame: content)
+    guard hostRest.minY - hostScroll.minY == 120, hostRest.minX - hostScroll.minX == 200 else {
+      return Result(name: name, passed: false, detail: "host scroll \(hostRest) \(hostScroll)")
+    }
+    let underHeader = CGPoint(x: scrolled.midX, y: boundaryY - 4)
+    guard scrolled.minY < boundaryY, scrolled.contains(underHeader),
+          OnSheetChartGeometry.frozenPaneCovers(
+            underHeader,
+            contentRect: content,
+            frozenColumnBoundaryX: boundaryX,
+            frozenRowBoundaryY: boundaryY,
+            frozenColumns: frozenCols,
+            frozenRows: frozenRows
+          )
+    else {
+      return Result(name: name, passed: false, detail: "frozen cover \(scrolled)")
+    }
+
+    var sheet = Sheet(name: "Weekly Calls")
+    sheet.setCell(Cell(raw: "Week"), at: .origin)
+    sheet.setCell(Cell(raw: "Calls"), at: CellAddress(row: 0, col: 1))
+    var chart = SheetChart(
+      kind: .bar,
+      title: "Calls by Week",
+      dataRange: CellRange(start: .origin, end: CellAddress(row: 4, col: 1)),
+      anchorRow: 7,
+      anchorCol: 0
+    )
+    chart.originXOffset = 12
+    chart.originYOffset = 6
+    chart.endXOffset = 3
+    chart.endYOffset = 9
+    sheet.charts = [chart]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let drawing = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/drawings/drawing1.xml") ?? ""
+      func emu(_ points: CGFloat) -> String { "\(SheetImage.emu(fromPoints: points))" }
+      guard drawing.contains("<xdr:colOff>\(emu(12))</xdr:colOff>"),
+            drawing.contains("<xdr:rowOff>\(emu(6))</xdr:rowOff>"),
+            drawing.contains("<xdr:colOff>\(emu(3))</xdr:colOff>"),
+            drawing.contains("<xdr:rowOff>\(emu(9))</xdr:rowOff>")
+      else {
+        return Result(name: name, passed: false, detail: "drawing offsets missing")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let saved = imported.sheets[0].charts.first
+      guard saved?.originXOffset == 12, saved?.originYOffset == 6,
+            saved?.endXOffset == 3, saved?.endYOffset == 9,
+            saved?.anchorRow == 7, saved?.colSpan == 8
+      else {
+        return Result(name: name, passed: false, detail: "reopen offsets \(String(describing: saved?.originXOffset))")
+      }
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    let legacyJSON = """
+    {"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","kind":"bar","title":"Old","dataRange":{"start":{"row":0,"col":0},"end":{"row":3,"col":1}},"anchorRow":1,"anchorCol":2,"rowSpan":10,"colSpan":6}
+    """
+    guard let legacy = try? JSONDecoder().decode(SheetChart.self, from: Data(legacyJSON.utf8)),
+          legacy.originXOffset == 0, legacy.originYOffset == 0,
+          legacy.endXOffset == 0, legacy.endYOffset == 0
+    else {
+      return Result(name: name, passed: false, detail: "legacy chart kept a free offset")
+    }
+
+    let placedSheet = sheet
+    let model = MainActor.assumeIsolated { () -> Result? in
+      let vm = SpreadsheetViewModel(workbook: Workbook(sheets: [placedSheet]))
+      guard let original = vm.activeSheet.charts.first else {
+        return Result(name: name, passed: false, detail: "chart missing on the sheet")
+      }
+      let undo = UndoManager()
+      vm.undoManager = undo
+      vm.setChartFrame(
+        id: original.id,
+        anchorRow: 5,
+        anchorCol: 1,
+        rowSpan: 12,
+        colSpan: 8,
+        originXOffset: 20,
+        originYOffset: 8,
+        endXOffset: 20,
+        endYOffset: 8,
+        preservingCustomFrom: original
+      )
+      guard let live = vm.chart(with: original.id),
+            live.anchorRow == 5, live.anchorCol == 1,
+            live.originXOffset == 20, live.originYOffset == 8,
+            live.endXOffset == 20, live.endYOffset == 8,
+            live.frameIsCustom
+      else {
+        return Result(name: name, passed: false, detail: "live frame dropped the offset")
+      }
+      vm.commitChartFrame(id: original.id, before: original, actionName: "Move Chart")
+      guard undo.canUndo else {
+        return Result(name: name, passed: false, detail: "free move was not undoable")
+      }
+      undo.undo()
+      guard vm.chart(with: original.id)?.originXOffset == 12 else {
+        return Result(name: name, passed: false, detail: "undo did not restore the offset")
+      }
+      undo.redo()
+      vm.setChartFrame(
+        id: original.id,
+        anchorRow: 5,
+        anchorCol: 1,
+        rowSpan: 12,
+        colSpan: 8,
+        preservingCustomFrom: original
+      )
+      guard let snapped = vm.chart(with: original.id),
+            snapped.originXOffset == 0, snapped.endXOffset == 0,
+            snapped.endYOffset == 0, snapped.anchorCol == 1
+      else {
+        return Result(name: name, passed: false, detail: "releasing the offset did not snap")
+      }
+      return nil
+    }
+    if let model { return model }
+    return Result(name: name, passed: true, detail: "command frees move and resize; release snaps")
   }
 
   /// Weekly Calls: "Calls by Rep" scrolls with its anchor and slides under

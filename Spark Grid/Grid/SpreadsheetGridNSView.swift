@@ -66,6 +66,7 @@ final class SpreadsheetGridNSView: NSView {
     let startPoint: NSPoint
     let startChart: SheetChart
     let startRect: NSRect
+    var hasMoved = false
   }
   private var activeChartDrag: ChartDragState?
   private let chartHandleThickness: CGFloat = 8
@@ -1749,13 +1750,18 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func chartRect(for chart: SheetChart) -> NSRect {
-    OnSheetChartGeometry.frame(
+    let scale = zoomScale
+    return OnSheetChartGeometry.frame(
       anchorRow: chart.anchorRow,
       anchorCol: chart.anchorCol,
       rowSpan: chart.rowSpan,
       colSpan: chart.colSpan,
       rowCount: rowCount(),
       columnCount: columnCount(),
+      originXOffset: chart.originXOffset * scale,
+      originYOffset: chart.originYOffset * scale,
+      endXOffset: chart.endXOffset * scale,
+      endYOffset: chart.endYOffset * scale,
       xForColumn: { self.xForColumn($0) },
       yForRow: { self.yForRow($0) },
       columnWidth: { self.columnWidth(at: $0) },
@@ -2022,7 +2028,12 @@ final class SpreadsheetGridNSView: NSView {
     CGSize(width: dx, height: dy)
   }
 
-  private func applyChartDrag(to point: NSPoint) {
+  /// Command keeps the dragged edge on the pointer. Releasing it snaps to cell borders.
+  static func chartDragUsesFreePlacement(modifierFlags: NSEvent.ModifierFlags) -> Bool {
+    modifierFlags.contains(.command)
+  }
+
+  private func applyChartDrag(to point: NSPoint, freePlacement: Bool) {
     guard let drag = activeChartDrag, let viewModel else { return }
     let translation = Self.chartDragTranslation(
       dx: point.x - drag.startPoint.x,
@@ -2034,6 +2045,9 @@ final class SpreadsheetGridNSView: NSView {
       rowSpan: drag.startChart.rowSpan,
       colSpan: drag.startChart.colSpan
     )
+    // Column positions are viewport points, zoom included. Stored offsets are
+    // sheet points so they still line up with the cell after the zoom changes.
+    let scale = zoomScale
     let next = OnSheetChartGeometry.anchorAfterDrag(
       start: start,
       handle: drag.handle,
@@ -2043,7 +2057,12 @@ final class SpreadsheetGridNSView: NSView {
       rowLimit: rowCount(),
       columnLimit: columnCount(),
       columnAt: { self.columnAtContent(x: $0) },
-      rowAt: { self.rowAtContent(y: $0) }
+      rowAt: { self.rowAtContent(y: $0) },
+      freePlacement: freePlacement,
+      xForColumn: { self.xForColumn($0) },
+      yForRow: { self.yForRow($0) },
+      columnWidth: { self.columnWidth(at: $0) },
+      rowHeight: { self.rowHeight(at: $0) }
     )
     viewModel.setChartFrame(
       id: drag.chartID,
@@ -2051,6 +2070,10 @@ final class SpreadsheetGridNSView: NSView {
       anchorCol: next.anchorCol,
       rowSpan: next.rowSpan,
       colSpan: next.colSpan,
+      originXOffset: next.originXOffset / scale,
+      originYOffset: next.originYOffset / scale,
+      endXOffset: next.endXOffset / scale,
+      endYOffset: next.endYOffset / scale,
       preservingCustomFrom: drag.startChart
     )
     layoutOnSheetCharts()
@@ -3136,7 +3159,8 @@ final class SpreadsheetGridNSView: NSView {
         handle: handle,
         startPoint: point,
         startChart: chart,
-        startRect: rect
+        startRect: rect,
+        hasMoved: false
       )
       isDraggingSelection = false
       needsDisplay = true
@@ -3289,6 +3313,16 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
+  override func flagsChanged(with event: NSEvent) {
+    super.flagsChanged(with: event)
+    guard let drag = activeChartDrag, drag.hasMoved else { return }
+    let point = convert(event.locationInWindow, from: nil)
+    applyChartDrag(
+      to: point,
+      freePlacement: Self.chartDragUsesFreePlacement(modifierFlags: event.modifierFlags)
+    )
+  }
+
   override func mouseDragged(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
 
@@ -3309,8 +3343,16 @@ final class SpreadsheetGridNSView: NSView {
       return
     }
 
-    if activeChartDrag != nil {
-      applyChartDrag(to: point)
+    if let drag = activeChartDrag {
+      if point != drag.startPoint {
+        activeChartDrag?.hasMoved = true
+      }
+      if activeChartDrag?.hasMoved == true {
+        applyChartDrag(
+          to: point,
+          freePlacement: Self.chartDragUsesFreePlacement(modifierFlags: event.modifierFlags)
+        )
+      }
       updateCursor(for: point)
       return
     }
@@ -3358,7 +3400,14 @@ final class SpreadsheetGridNSView: NSView {
   override func mouseUp(with event: NSEvent) {
     stopAutoscrollTimer()
 
-    if activeChartDrag != nil {
+    if let drag = activeChartDrag {
+      if drag.hasMoved {
+        let point = convert(event.locationInWindow, from: nil)
+        applyChartDrag(
+          to: point,
+          freePlacement: Self.chartDragUsesFreePlacement(modifierFlags: event.modifierFlags)
+        )
+      }
       finishChartDragIfNeeded()
       needsDisplay = true
     }

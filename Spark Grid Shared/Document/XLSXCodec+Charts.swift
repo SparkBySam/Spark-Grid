@@ -97,10 +97,14 @@ extension XLSXCodec {
   private static func twoCellAnchorXML(chart: SheetChart, chartRelId: String) -> String {
     let endRow = chart.anchorRow + chart.rowSpan
     let endCol = chart.anchorCol + chart.colSpan
+    let fromCol = SheetImage.emu(fromPoints: chart.originXOffset)
+    let fromRow = SheetImage.emu(fromPoints: chart.originYOffset)
+    let toCol = SheetImage.emu(fromPoints: chart.endXOffset)
+    let toRow = SheetImage.emu(fromPoints: chart.endYOffset)
     return """
     <xdr:twoCellAnchor>
-      <xdr:from><xdr:col>\(chart.anchorCol)</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(chart.anchorRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-      <xdr:to><xdr:col>\(endCol)</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+      <xdr:from><xdr:col>\(chart.anchorCol)</xdr:col><xdr:colOff>\(fromCol)</xdr:colOff><xdr:row>\(chart.anchorRow)</xdr:row><xdr:rowOff>\(fromRow)</xdr:rowOff></xdr:from>
+      <xdr:to><xdr:col>\(endCol)</xdr:col><xdr:colOff>\(toCol)</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>\(toRow)</xdr:rowOff></xdr:to>
       <xdr:graphicFrame macro="">
         <xdr:nvGraphicFramePr>
           <xdr:cNvPr id="2" name="\(escapeXML(chart.title))"/>
