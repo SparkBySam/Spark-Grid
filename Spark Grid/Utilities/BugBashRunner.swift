@@ -2386,6 +2386,8 @@ enum BugBashRunner {
     window.contentView = grid
     window.setFrameOrigin(NSPoint(x: -4000, y: -4000))
     window.orderFrontRegardless()
+    window.setContentSize(frame.size)
+    grid.frame = frame
     grid.viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
     grid.layoutSubtreeIfNeeded()
     prepare?(grid)
@@ -2393,6 +2395,9 @@ enum BugBashRunner {
     window.displayIfNeeded()
     RunLoop.current.run(until: Date().addingTimeInterval(0.15))
     grid.layoutSubtreeIfNeeded()
+    // A focus update during the run above can redraw a slice of a frozen pane.
+    // Capture a full draw so that slice is not the bitmap we score.
+    grid.needsDisplay = true
     grid.display()
 
     let scale = max(1, window.backingScaleFactor)

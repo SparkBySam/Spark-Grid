@@ -2030,16 +2030,17 @@ final class SpreadsheetGridNSView: NSView {
     }
     cover.addClip()
 
+    // Only the invalid slice. Filling the whole pane here blanks a merged fill
+    // whose anchor sits outside this dirty rect, and the cell pass will not
+    // paint it again.
     NSColor.windowBackgroundColor.setFill()
-    var paneDirty = dirtyRect
-    for rect in panes where dirtyRect.intersects(rect) {
-      rect.fill()
-      paneDirty = paneDirty.union(rect)
+    for rect in panes {
+      let hit = rect.intersection(dirtyRect)
+      guard !hit.isNull, hit.width > 0.5, hit.height > 0.5 else { continue }
+      hit.fill()
     }
-    // The background above covers the whole pane. A merge whose anchor is
-    // outside this dirty slice must be filled again or the pane stays blank.
     let skipGridlines = visibleRegionIsMostlyBordered()
-    drawFrozenCells(in: paneDirty)
+    drawFrozenCells(in: dirtyRect)
     if !skipGridlines {
       drawFrozenGridLines(in: dirtyRect)
     }
