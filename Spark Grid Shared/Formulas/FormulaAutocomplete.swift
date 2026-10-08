@@ -15,8 +15,13 @@ enum FormulaAutocomplete {
     // Digits in the token mean it's an A1-style ref fragment (A1, B12), not a function.
     if partial.contains(where: \.isNumber) { return [] }
 
-    var items = FormulaFunctions.suggestions(matching: partial)
     let upper = partial.uppercased()
+    // An exact function (`SUM`) is finished. Offering SUMIF here would swallow Return.
+    if FormulaFunctions.all.contains(upper) {
+      return [upper]
+    }
+
+    var items = FormulaFunctions.suggestions(matching: partial)
     let names = namedRanges
       .filter { $0.uppercased().hasPrefix(upper) }
       .sorted()

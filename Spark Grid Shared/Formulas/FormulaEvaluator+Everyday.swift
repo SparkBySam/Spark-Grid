@@ -633,10 +633,15 @@ extension FormulaEvaluator {
   }
 
   private func excelRound(_ value: Double, places: Int, mode: NSDecimalNumber.RoundingMode) -> Double {
-    let source = Decimal(string: String(value)) ?? Decimal(value)
+    // Foundation rounds toward ±infinity. Excel ROUNDUP is away from zero and ROUNDDOWN is toward zero,
+    // so the sign is applied after rounding the magnitude.
+    let negative = value < 0
+    let magnitude = abs(value)
+    let source = Decimal(string: String(magnitude)) ?? Decimal(magnitude)
     var input = source
     var output = Decimal()
     NSDecimalRound(&output, &input, places, mode)
-    return NSDecimalNumber(decimal: output).doubleValue
+    let rounded = NSDecimalNumber(decimal: output).doubleValue
+    return negative ? -rounded : rounded
   }
 }
