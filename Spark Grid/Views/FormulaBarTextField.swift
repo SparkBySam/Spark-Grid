@@ -59,6 +59,8 @@ struct FormulaBarTextField: NSViewRepresentable {
     var lastAppliedKey = ""
     var appliedCaretToken = 0
     private var didBeginEditing = false
+    /// True after formula reference colors were written, so leaving a formula can restore plain text once.
+    private var showingFormulaAttributes = false
 
     init(_ parent: FormulaBarTextField) {
       self.parent = parent
@@ -74,6 +76,32 @@ struct FormulaBarTextField: NSViewRepresentable {
     func applyAttributes(force: Bool) {
       guard let textView, let storage = textView.textStorage else { return }
       let raw = textView.string
+
+      // Prose keeps the text storage stable so the system spelling underline can stick.
+      // Leaving a formula restores plain typing attributes once.
+      if EditorSpellCheck.shouldCheck(raw) {
+        let leftFormula = showingFormulaAttributes
+        if leftFormula {
+          applyPlainTypingAttributes(textView: textView, storage: storage)
+          showingFormulaAttributes = false
+        }
+        EditorSpellCheck.apply(to: textView, text: raw, refresh: leftFormula)
+        lastAppliedKey = highlightKey(for: raw)
+        return
+      }
+
+      EditorSpellCheck.apply(to: textView, text: raw, refresh: false)
+
+      // Numbers are not formulas. Leave the text alone so formula colors are not applied.
+      guard FormulaSyntax.isFormula(raw) else {
+        if showingFormulaAttributes {
+          applyPlainTypingAttributes(textView: textView, storage: storage)
+          showingFormulaAttributes = false
+        }
+        lastAppliedKey = highlightKey(for: raw)
+        return
+      }
+
       let key = highlightKey(for: raw)
       if !force, key == lastAppliedKey { return }
       guard !isApplyingAttributes else { return }
@@ -109,7 +137,42 @@ struct FormulaBarTextField: NSViewRepresentable {
       if textView.selectedRange != next {
         textView.setSelectedRange(next)
       }
+      showingFormulaAttributes = true
       lastAppliedKey = key
+    }
+
+    private func applyPlainTypingAttributes(textView: FormulaBarNSTextView, storage: NSTextStorage) {
+      guard !isApplyingAttributes else { return }
+      isApplyingAttributes = true
+      defer { isApplyingAttributes = false }
+
+      let font = textView.font
+        ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+      let color = NSColor.labelColor
+      let selected = textView.selectedRange
+      let plain = NSAttributedString(
+        string: textView.string,
+        attributes: [
+          .font: font,
+          .foregroundColor: color,
+          .backgroundColor: NSColor.clear,
+        ]
+      )
+      storage.beginEditing()
+      storage.setAttributedString(plain)
+      storage.endEditing()
+      textView.typingAttributes = [
+        .font: font,
+        .foregroundColor: color,
+        .backgroundColor: NSColor.clear,
+      ]
+      let maxLen = storage.length
+      let loc = min(selected.location, maxLen)
+      let len = min(selected.length, max(0, maxLen - loc))
+      let next = NSRange(location: loc, length: len)
+      if textView.selectedRange != next {
+        textView.setSelectedRange(next)
+      }
     }
 
     func textDidBeginEditing(_ notification: Notification) {
@@ -399,7 +462,20 @@ final class FormulaBarContainerView: NSView {
 }
 
 final class FormulaBarNSTextView: NSTextView {
+  private var isSyncingSpellCheck = false
+
   override var acceptsFirstResponder: Bool { true }
+
+  override func didChangeText() {
+    if isSyncingSpellCheck {
+      super.didChangeText()
+      return
+    }
+    isSyncingSpellCheck = true
+    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    super.didChangeText()
+    isSyncingSpellCheck = false
+  }
 
   override func becomeFirstResponder() -> Bool {
     let ok = super.becomeFirstResponder()

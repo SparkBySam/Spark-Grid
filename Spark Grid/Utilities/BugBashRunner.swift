@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 #if DEBUG
 enum BugBashRunner {
@@ -86,6 +87,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
     results.append(MainActor.assumeIsolated { unsavedPromptOnce() })
     results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
+    results.append(editorSpellChecking())
     return results
   }
 
@@ -4487,6 +4489,325 @@ enum BugBashRunner {
 
   private static func describe(_ rules: [ConditionalFormatRule]) -> String {
     rules.map { "\($0.range.a1Label) \($0.predicate.title)" }.joined(separator: "; ")
+  }
+
+  /// Prose in the cell editor and formula bar uses the Mac spell checker.
+  /// A formula (`=`) and a number are not checked. A formula result is not the edit text.
+  private static func editorSpellChecking() -> Result {
+    let name = "editor spell check"
+    let decisions: [(String, Bool)] = [
+      ("recieve", true),
+      ("Hello", true),
+      ("", true),
+      ("Hello 2", true),
+      ("=SUM(A1)", false),
+      ("=sum(A1)", false),
+      ("  =A1", false),
+      ("42", false),
+      ("1,234.50", false),
+      ("50%", false),
+      ("$12", false),
+      ("1e2", false),
+    ]
+    for (text, expected) in decisions where EditorSpellCheck.shouldCheck(text) != expected {
+      return Result(name: name, passed: false, detail: "decision \(text.debugDescription) != \(expected)")
+    }
+
+    let word = "recieve"
+    let wordRange = NSRange(location: 0, length: (word as NSString).length)
+    let miss = NSSpellChecker.shared.checkSpelling(
+      of: word,
+      startingAt: 0,
+      language: "en",
+      wrap: false,
+      inSpellDocumentWithTag: 0,
+      wordCount: nil
+    )
+    let guesses = NSSpellChecker.shared.guesses(
+      forWordRange: wordRange,
+      in: word,
+      language: "en",
+      inSpellDocumentWithTag: 0
+    ) ?? []
+    let suggested = guesses.contains { $0.caseInsensitiveCompare("receive") == .orderedSame }
+    guard miss.length > 0, suggested else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "system guesses \(guesses) range \(miss.location):\(miss.length)"
+      )
+    }
+
+    if let detail = formulaResultSkipsSpellCheck() {
+      return Result(name: name, passed: false, detail: detail)
+    }
+    if let detail = formulaBarKeepsSpellingMarks() {
+      return Result(name: name, passed: false, detail: detail)
+    }
+    if let detail = cellEditorSpellChecksProseOnly() {
+      return Result(name: name, passed: false, detail: detail)
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: "prose uses the system checker; formulas and numbers do not"
+    )
+  }
+
+  /// Editing `=A1` checks the formula, not the word the cell displays.
+  private static func formulaResultSkipsSpellCheck() -> String? {
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "recieve"), at: .origin)
+    sheet.setCell(Cell(raw: "=A1"), at: CellAddress(row: 0, col: 1))
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    let displayed = viewModel.displayString(at: CellAddress(row: 0, col: 1))
+    guard displayed == "recieve" else { return "formula result \(displayed)" }
+    viewModel.selection = CellAddress(row: 0, col: 1)
+    viewModel.beginEditing()
+    guard viewModel.editText == "=A1", !EditorSpellCheck.shouldCheck(viewModel.editText) else {
+      return "edit text \(viewModel.editText)"
+    }
+    guard EditorSpellCheck.shouldCheck(displayed) else { return "result was treated as edit text" }
+    return nil
+  }
+
+  /// Formula-bar attribute updates must not wipe the system underline, and `=` turns checking off.
+  private static func formulaBarKeepsSpellingMarks() -> String? {
+    let box = SpellCheckTextBox("recieve")
+    let field = FormulaBarTextField(
+      text: Binding(get: { box.text }, set: { box.text = $0 }),
+      liveText: box.text,
+      namedRanges: [],
+      highlights: [],
+      focusedHighlightIndex: nil,
+      onSubmit: { _ in },
+      onTextChange: {},
+      onBeginEditing: {},
+      onCaretMoved: { _ in }
+    )
+    let coordinator = field.makeCoordinator()
+    let textView = FormulaBarNSTextView(frame: NSRect(x: 0, y: 0, width: 280, height: 40))
+    textView.font = .systemFont(ofSize: 16)
+    coordinator.textView = textView
+    textView.delegate = coordinator
+    let window = SpellCheckWindow(contentRect: textView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = textView
+    window.setFrameOrigin(NSPoint(x: -4200, y: -4200))
+    window.makeKeyAndOrderFront(nil)
+    defer {
+      window.orderOut(nil)
+      window.close()
+    }
+
+    textView.string = "recieve"
+    guard textView.isContinuousSpellCheckingEnabled, !textView.isAutomaticSpellingCorrectionEnabled else {
+      return "formula bar prose check=\(textView.isContinuousSpellCheckingEnabled) correction=\(textView.isAutomaticSpellingCorrectionEnabled)"
+    }
+    if let detail = waitForSpellingUnderline(on: textView, label: "formula bar") {
+      return detail
+    }
+    coordinator.applyAttributes(force: false)
+    guard spellingMarkLength(textView) > 0 else {
+      return "formula bar attribute update cleared the underline"
+    }
+    if let detail = spellingContextMenuFailure(on: textView, label: "formula bar") {
+      return detail
+    }
+
+    textView.string = "=SUM(A1)"
+    guard textView.string == "=SUM(A1)", !textView.isContinuousSpellCheckingEnabled else {
+      return "formula bar formula check=\(textView.isContinuousSpellCheckingEnabled) text=\(textView.string)"
+    }
+    textView.string = "42"
+    guard !textView.isContinuousSpellCheckingEnabled else { return "formula bar number was checked" }
+    textView.string = "recieve"
+    guard textView.isContinuousSpellCheckingEnabled else { return "formula bar prose stayed unchecked" }
+    return nil
+  }
+
+  /// The in-cell field editor checks the typed text, then the standard menu offers a fix, Ignore, and Learn.
+  private static func cellEditorSpellChecksProseOnly() -> String? {
+    let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
+    let grid = SpreadsheetGridNSView(frame: frame)
+    let host = SpellFieldEditorHost()
+    let window = SpellCheckWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.delegate = host
+    window.contentView = grid
+    window.setFrameOrigin(NSPoint(x: -4200, y: -4200))
+    window.makeKeyAndOrderFront(nil)
+    defer {
+      grid.hideEditor(commit: false)
+      window.contentView = nil
+      window.delegate = nil
+      window.orderOut(nil)
+      window.close()
+    }
+
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "recieve"), at: .origin)
+    sheet.setCell(Cell(raw: "=A1"), at: CellAddress(row: 0, col: 1))
+    sheet.setCell(Cell(raw: "42"), at: CellAddress(row: 0, col: 2))
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    grid.viewModel = viewModel
+    grid.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    // The grid takes first responder once, on the next turns. Edit after that.
+    RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+
+    func open(_ address: CellAddress) -> NSTextView? {
+      grid.hideEditor(commit: false)
+      viewModel.selection = address
+      viewModel.beginEditing()
+      grid.showEditor(selectAll: true)
+      if let textView = window.firstResponder as? NSTextView { return textView }
+      if let field = window.firstResponder as? NSTextField {
+        return field.currentEditor() as? NSTextView
+      }
+      return nil
+    }
+
+    guard let prose = open(.origin) else { return "cell editor did not focus" }
+    guard prose is CellFieldEditor else { return "cell editor is not the field editor" }
+    guard prose.string == "recieve",
+          prose.isContinuousSpellCheckingEnabled,
+          !prose.isAutomaticSpellingCorrectionEnabled,
+          !prose.isGrammarCheckingEnabled
+    else {
+      return "cell prose \(prose.string) check=\(prose.isContinuousSpellCheckingEnabled)"
+    }
+    if let detail = waitForSpellingUnderline(on: prose, label: "cell") { return detail }
+    if let detail = spellingContextMenuFailure(on: prose, label: "cell") { return detail }
+
+    guard let formula = open(CellAddress(row: 0, col: 1)) else { return "formula editor did not focus" }
+    let displayed = viewModel.displayString(at: CellAddress(row: 0, col: 1))
+    guard displayed == "recieve", formula.string == "=A1", !formula.isContinuousSpellCheckingEnabled else {
+      return "cell formula edit=\(formula.string) result=\(displayed) check=\(formula.isContinuousSpellCheckingEnabled)"
+    }
+
+    guard let number = open(CellAddress(row: 0, col: 2)) else { return "number editor did not focus" }
+    guard number.string == "42", !number.isContinuousSpellCheckingEnabled else {
+      return "cell number \(number.string) check=\(number.isContinuousSpellCheckingEnabled)"
+    }
+    return nil
+  }
+
+  /// English orthography is only so this check has a known misspelling. Editing uses the system language.
+  private static func waitForSpellingUnderline(on textView: NSTextView, label: String) -> String? {
+    let length = (textView.string as NSString).length
+    guard length > 0 else { return "\(label) empty" }
+    let orthography = NSOrthography(dominantScript: "Latn", languageMap: ["Latn": ["en"]])
+    textView.checkText(
+      in: NSRange(location: 0, length: length),
+      types: NSTextCheckingResult.CheckingType.spelling.rawValue,
+      options: [.orthography: orthography]
+    )
+    let deadline = Date().addingTimeInterval(2)
+    while Date() < deadline && spellingMarkLength(textView) == 0 {
+      RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+    }
+    guard spellingMarkLength(textView) > 0 else {
+      return "\(label) no system underline language=\(NSSpellChecker.shared.language())"
+    }
+    return nil
+  }
+
+  private static func spellingContextMenuFailure(on textView: NSTextView, label: String) -> String? {
+    guard let window = textView.window else { return "\(label) has no window" }
+    textView.layoutSubtreeIfNeeded()
+    guard let container = textView.textContainer, let layout = textView.layoutManager else {
+      return "\(label) no layout"
+    }
+    layout.ensureLayout(for: container)
+    let length = (textView.string as NSString).length
+    let word = NSRange(location: 0, length: length)
+    let glyphs = layout.glyphRange(forCharacterRange: word, actualCharacterRange: nil)
+    var rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+    guard rect.width > 1, rect.height > 1 else { return "\(label) glyph rect \(rect)" }
+    rect.origin.x += textView.textContainerOrigin.x
+    rect.origin.y += textView.textContainerOrigin.y
+    let windowPoint = textView.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+    window.makeFirstResponder(textView)
+    textView.setSelectedRange(word)
+    guard let event = NSEvent.mouseEvent(
+      with: .rightMouseDown,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ) else {
+      return "\(label) no click"
+    }
+    let items = menuItems(in: textView.menu(for: event))
+    let titles = items.map(\.title)
+    let lower = titles.map { $0.lowercased() }
+    let actions = items.compactMap { item -> String? in
+      guard let action = item.action else { return nil }
+      return NSStringFromSelector(action)
+    }
+    let represented = items.compactMap { $0.representedObject as? String }.map { $0.lowercased() }
+    let suggestion = lower.contains("receive") || represented.contains("receive")
+    let ignore = lower.contains("ignore spelling") || lower.contains("ignore") || actions.contains("ignoreSpelling:")
+    let learn = lower.contains("learn spelling") || lower.contains("learn") || actions.contains { $0.lowercased().contains("learn") }
+    guard suggestion, ignore, learn else {
+      let shown = titles.prefix(16).joined(separator: " | ")
+      return "\(label) menu suggestion=\(suggestion) ignore=\(ignore) learn=\(learn) [\(shown)]"
+    }
+    return nil
+  }
+
+  private static func spellingMarkLength(_ textView: NSTextView) -> Int {
+    guard let layout = textView.layoutManager else { return 0 }
+    let full = NSRange(location: 0, length: (textView.string as NSString).length)
+    guard full.length > 0 else { return 0 }
+    var marked = 0
+    layout.enumerateTemporaryAttributes(in: full, options: []) { attributes, range, _ in
+      let state = (attributes[.spellingState] as? NSNumber)?.intValue
+        ?? (attributes[.spellingState] as? Int)
+        ?? 0
+      if state != 0 {
+        marked += range.length
+      }
+    }
+    return marked
+  }
+
+  private static func menuItems(in menu: NSMenu?) -> [NSMenuItem] {
+    guard let menu else { return [] }
+    var items: [NSMenuItem] = []
+    for item in menu.items {
+      items.append(item)
+      items.append(contentsOf: menuItems(in: item.submenu))
+    }
+    return items
+  }
+
+  private final class SpellCheckWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+  }
+
+  private final class SpellFieldEditorHost: NSObject, NSWindowDelegate {
+    let fieldEditor: CellFieldEditor = {
+      let editor = CellFieldEditor()
+      editor.isFieldEditor = true
+      return editor
+    }()
+
+    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+      guard client is CellEditorTextField else { return nil }
+      return fieldEditor
+    }
+  }
+
+  private final class SpellCheckTextBox {
+    var text: String
+    init(_ text: String) { self.text = text }
   }
 
   private static func octoberEighth2026() -> Date? {
