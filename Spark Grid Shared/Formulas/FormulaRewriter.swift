@@ -34,6 +34,18 @@ enum FormulaRewriter {
     case delete(at: Int, count: Int)
   }
 
+  /// Renames a defined-name token. Function calls keep their names.
+  static func renameDefinedName(_ raw: String, from old: String, to new: String) -> String {
+    guard FormulaSyntax.isFormula(raw) else { return raw }
+    guard old.caseInsensitiveCompare(new) != .orderedSame else { return raw }
+    do {
+      let expr = try FormulaParser.parse(raw)
+      return "=" + serialize(renameExpr(expr, from: old, to: new))
+    } catch {
+      return raw
+    }
+  }
+
   /// Returns adjusted formula text (including leading `=`), or the original raw if not a formula / unparseable.
   static func adjust(_ raw: String, rowDelta: Int, colDelta: Int) -> String {
     guard FormulaSyntax.isFormula(raw) else { return raw }
@@ -69,6 +81,22 @@ enum FormulaRewriter {
       return "=" + serialize(shifted)
     } catch {
       return raw
+    }
+  }
+
+  private static func renameExpr(_ expr: FormulaExpr, from old: String, to new: String) -> FormulaExpr {
+    switch expr {
+    case .namedRange(let name):
+      if name.caseInsensitiveCompare(old) == .orderedSame { return .namedRange(new) }
+      return expr
+    case .unary(let op, let inner):
+      return .unary(op, renameExpr(inner, from: old, to: new))
+    case .binary(let op, let lhs, let rhs):
+      return .binary(op, renameExpr(lhs, from: old, to: new), renameExpr(rhs, from: old, to: new))
+    case .call(let name, let args):
+      return .call(name, args.map { renameExpr($0, from: old, to: new) })
+    default:
+      return expr
     }
   }
 

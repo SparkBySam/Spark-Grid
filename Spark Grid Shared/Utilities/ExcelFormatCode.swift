@@ -3,6 +3,26 @@ import Foundation
 /// Renders an Excel number-format code: thousands separators, the currency symbol
 /// in the code, and the date or time pattern.
 enum ExcelFormatCode {
+  /// Maps a stored format code onto the categories the grid already displays.
+  static func numberFormatKind(for code: String) -> CellFormat.NumberFormat {
+    let custom = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if custom.isEmpty || custom == "general" || custom == "@" { return .general }
+    if custom.contains("%") { return .percent }
+    if custom.contains("$") || custom.contains("¥") || custom.contains("€") || custom.contains("£")
+      || custom.contains("₩") || custom.contains("₹") || custom.contains("₽") || custom.contains("[$")
+    {
+      return .currency
+    }
+    if custom.contains("e+") || custom.contains("e-") { return .scientific }
+    let looksLikeDate = (custom.contains("y") || custom.contains("d")) && custom.contains("m")
+    if looksLikeDate { return .date }
+    if custom.contains("h") && (custom.contains(":") || custom.contains("m") || custom.contains("s")) {
+      return .time
+    }
+    if custom.contains("0") || custom.contains("#") { return .number }
+    return .general
+  }
+
   static func formatted(_ value: Double, code: String, fractionDigits: Int?) -> String? {
     let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty || trimmed.caseInsensitiveCompare("General") == .orderedSame {

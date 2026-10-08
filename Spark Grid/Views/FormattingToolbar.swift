@@ -123,6 +123,8 @@ struct FormattingToolbar: View {
         Button("General") { viewModel.setNumberFormat(.general) }
         Button("Number") { viewModel.setNumberFormat(.number) }
         Button("Scientific") { viewModel.setNumberFormat(.scientific) }
+        Divider()
+        Button("Cell Format…") { CellFormatViewerPresenter.present(from: viewModel) }
       } label: {
         Text("123")
           .font(.system(size: 13, weight: .medium, design: .monospaced))

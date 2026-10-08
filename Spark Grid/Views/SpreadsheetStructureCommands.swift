@@ -88,6 +88,11 @@ struct SpreadsheetStructureCommands: Commands {
 
       Divider()
 
+      Button("Name Manager…") {
+        guard let viewModel else { return }
+        NameManagerPresenter.present(from: viewModel)
+      }
+      .disabled(viewModel == nil)
       Button("Define Named Range…") {
         Self.promptDefineNamedRange(viewModel: viewModel)
       }

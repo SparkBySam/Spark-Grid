@@ -35,4 +35,27 @@ struct CellRange: Codable, Equatable, Sendable {
   var isSingleCell: Bool {
     start == end
   }
+
+  var a1Label: String {
+    let n = normalized
+    let start = CellAddress(row: n.minRow, col: n.minCol).a1
+    let end = CellAddress(row: n.maxRow, col: n.maxCol).a1
+    return start == end ? start : "\(start):\(end)"
+  }
+
+  /// `A1` or `A1:B2` on the current sheet. Sheet-qualified and open-ended text is left alone.
+  static func fromA1(_ text: String) -> CellRange? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, !trimmed.contains("!") else { return nil }
+    if let (start, end) = A1Reference.parseFormulaRange(trimmed) {
+      guard start.sheet == nil, end.sheet == nil,
+            !start.isRowOpen, !start.isColOpen, !end.isRowOpen, !end.isColOpen
+      else { return nil }
+      return CellRange(start: start.address, end: end.address)
+    }
+    if let ref = A1Reference.parseFormulaRef(trimmed), ref.sheet == nil, !ref.isRowOpen, !ref.isColOpen {
+      return CellRange(start: ref.address, end: ref.address)
+    }
+    return nil
+  }
 }

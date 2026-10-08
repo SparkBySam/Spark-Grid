@@ -90,6 +90,13 @@ extension SpreadsheetViewModel {
     applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Clear Conditional Formats")
   }
 
+  func replaceConditionalFormatRule(_ rule: ConditionalFormatRule) {
+    var rules = activeSheet.conditionalFormats
+    guard let index = rules.firstIndex(where: { $0.id == rule.id }) else { return }
+    rules[index] = rule
+    replaceConditionalFormats(rules, actionName: "Edit Conditional Format")
+  }
+
   func replaceConditionalFormats(_ rules: [ConditionalFormatRule], actionName: String = "Conditional Format") {
     commitEditIfNeeded()
     let before = activeSheet.conditionalFormats

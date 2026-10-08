@@ -36,7 +36,7 @@ nonisolated enum FormulaError: Equatable, Sendable, CaseIterable {
     case .arrayResult:
       return "This formula produces more than one value, but it sits in a single cell. Wrap it in SUM(…) to combine the results, or use ARRAYFORMULA to fill a range."
     case .name:
-      return "Unknown function or named range. Check the spelling, or define the name under Sheet → Define Named Range…"
+      return "Unknown function or named range. Check the spelling, or define the name under Sheet → Name Manager…"
     case .cycle:
       return "Circular reference. This formula depends on itself (directly or through other cells)."
     case .na:
