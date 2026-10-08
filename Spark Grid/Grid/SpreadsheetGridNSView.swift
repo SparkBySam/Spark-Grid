@@ -1386,6 +1386,8 @@ final class SpreadsheetGridNSView: NSView {
     NSBezierPath(rect: clipRect.intersection(gridBounds)).addClip()
 
     // Fast full-span lines — one stroke per unique grid line (avoid painting shared edges twice).
+    // A merge is one cell: drop interior segments, keep the border around the outside.
+    let cuts = mergeGridLineCuts(region: region)
     let colRange = visibleColumnRange()
     for col in colRange {
       guard columnIncludedInGridLines(col, region: region, frozenCols: frozenCols) else { continue }
@@ -1393,11 +1395,23 @@ final class SpreadsheetGridNSView: NSView {
       let maxX = x + columnWidth(at: col)
       if region == .scrollable, x < frozenBoundaryX - 0.5 { continue }
       if region == .frozenCorner || region == .frozenLeft, maxX > frozenBoundaryX + 0.5 { continue }
-      path.move(to: NSPoint(x: x, y: gridBounds.minY))
-      path.line(to: NSPoint(x: x, y: gridBounds.maxY))
+      appendGridLine(
+        path,
+        axis: x,
+        from: gridBounds.minY,
+        to: gridBounds.maxY,
+        horizontal: false,
+        gaps: verticalMergeGaps(boundaryColumn: col, cuts: cuts)
+      )
       if col == colRange.upperBound {
-        path.move(to: NSPoint(x: maxX, y: gridBounds.minY))
-        path.line(to: NSPoint(x: maxX, y: gridBounds.maxY))
+        appendGridLine(
+          path,
+          axis: maxX,
+          from: gridBounds.minY,
+          to: gridBounds.maxY,
+          horizontal: false,
+          gaps: verticalMergeGaps(boundaryColumn: col + 1, cuts: cuts)
+        )
       }
     }
 
@@ -1411,15 +1425,193 @@ final class SpreadsheetGridNSView: NSView {
       if region == .scrollable, y < frozenBoundaryY - 0.5 { continue }
       if region == .frozenCorner || region == .frozenTop, maxY > frozenBoundaryY + 0.5 { continue }
       if maxY < gridBounds.minY || y > gridBounds.maxY { continue }
-      path.move(to: NSPoint(x: gridBounds.minX, y: y))
-      path.line(to: NSPoint(x: gridBounds.maxX, y: y))
+      appendGridLine(
+        path,
+        axis: y,
+        from: gridBounds.minX,
+        to: gridBounds.maxX,
+        horizontal: true,
+        gaps: horizontalMergeGaps(boundaryRow: row, cuts: cuts)
+      )
       if row == rowRange.upperBound {
-        path.move(to: NSPoint(x: gridBounds.minX, y: maxY))
-        path.line(to: NSPoint(x: gridBounds.maxX, y: maxY))
+        appendGridLine(
+          path,
+          axis: maxY,
+          from: gridBounds.minX,
+          to: gridBounds.maxX,
+          horizontal: true,
+          gaps: horizontalMergeGaps(boundaryRow: row + 1, cuts: cuts)
+        )
       }
     }
     path.stroke()
     NSGraphicsContext.restoreGraphicsState()
+  }
+
+  /// View-space hole where a merge crosses this region. Row and column indexes stay
+  /// the full merge so a line is interior even when the other axis is clipped to the
+  /// frozen or scrolling side. The x/y span is only the part this region paints, so a
+  /// scrolled merge does not use frozen coordinates (and the reverse).
+  private struct MergeGridLineCut {
+    var minRow: Int
+    var maxRow: Int
+    var minCol: Int
+    var maxCol: Int
+    var minX: CGFloat
+    var maxX: CGFloat
+    var minY: CGFloat
+    var maxY: CGFloat
+  }
+
+  private func mergeGridLineCuts(region: GridLineRegion) -> [MergeGridLineCut] {
+    guard let merges = viewModel?.activeSheet.mergedRanges, !merges.isEmpty else { return [] }
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    let rowLimit = rowCount()
+    let colLimit = columnCount()
+    let rowLower: Int
+    let rowUpper: Int
+    let colLower: Int
+    let colUpper: Int
+    switch region {
+    case .scrollable:
+      rowLower = frozenRows
+      rowUpper = rowLimit
+      colLower = frozenCols
+      colUpper = colLimit
+    case .frozenCorner:
+      rowLower = 0
+      rowUpper = frozenRows
+      colLower = 0
+      colUpper = frozenCols
+    case .frozenTop:
+      rowLower = 0
+      rowUpper = frozenRows
+      colLower = frozenCols
+      colUpper = colLimit
+    case .frozenLeft:
+      rowLower = frozenRows
+      rowUpper = rowLimit
+      colLower = 0
+      colUpper = frozenCols
+    }
+    guard rowUpper > rowLower, colUpper > colLower else { return [] }
+
+    var cuts: [MergeGridLineCut] = []
+    cuts.reserveCapacity(merges.count)
+    for merge in merges {
+      let n = merge.normalized
+      guard n.maxRow > n.minRow || n.maxCol > n.minCol else { continue }
+      let row0 = max(n.minRow, rowLower)
+      let row1 = min(n.maxRow, rowUpper - 1)
+      let col0 = max(n.minCol, colLower)
+      let col1 = min(n.maxCol, colUpper - 1)
+      guard row0 <= row1, col0 <= col1 else { continue }
+      let minY = yForRow(row0)
+      let maxY = yForRow(row1) + rowHeight(at: row1)
+      let minX = xForColumn(col0)
+      let maxX = xForColumn(col1) + columnWidth(at: col1)
+      guard maxY - minY > 0.5, maxX - minX > 0.5 else { continue }
+      cuts.append(MergeGridLineCut(
+        minRow: n.minRow,
+        maxRow: n.maxRow,
+        minCol: n.minCol,
+        maxCol: n.maxCol,
+        minX: minX,
+        maxX: maxX,
+        minY: minY,
+        maxY: maxY
+      ))
+    }
+    return cuts
+  }
+
+  /// Left edge of `col` is interior when the merge contains the columns on both sides.
+  private func verticalMergeGaps(boundaryColumn col: Int, cuts: [MergeGridLineCut]) -> [(CGFloat, CGFloat)] {
+    guard !cuts.isEmpty else { return [] }
+    var gaps: [(CGFloat, CGFloat)] = []
+    gaps.reserveCapacity(cuts.count)
+    for cut in cuts where cut.minCol < col && col <= cut.maxCol {
+      gaps.append((cut.minY, cut.maxY))
+    }
+    return gaps
+  }
+
+  /// Top edge of `row` is interior when the merge contains the rows on both sides.
+  private func horizontalMergeGaps(boundaryRow row: Int, cuts: [MergeGridLineCut]) -> [(CGFloat, CGFloat)] {
+    guard !cuts.isEmpty else { return [] }
+    var gaps: [(CGFloat, CGFloat)] = []
+    gaps.reserveCapacity(cuts.count)
+    for cut in cuts where cut.minRow < row && row <= cut.maxRow {
+      gaps.append((cut.minX, cut.maxX))
+    }
+    return gaps
+  }
+
+  private func appendGridLine(
+    _ path: NSBezierPath,
+    axis: CGFloat,
+    from: CGFloat,
+    to: CGFloat,
+    horizontal: Bool,
+    gaps: [(CGFloat, CGFloat)]
+  ) {
+    let start = min(from, to)
+    let end = max(from, to)
+    guard end - start > 0.5 else { return }
+    if gaps.isEmpty {
+      addGridSegment(path, axis: axis, from: start, to: end, horizontal: horizontal)
+      return
+    }
+    var cuts: [(CGFloat, CGFloat)] = []
+    cuts.reserveCapacity(gaps.count)
+    for gap in gaps {
+      let low = max(start, min(gap.0, gap.1))
+      let high = min(end, max(gap.0, gap.1))
+      if high - low > 0.25 {
+        cuts.append((low, high))
+      }
+    }
+    guard !cuts.isEmpty else {
+      addGridSegment(path, axis: axis, from: start, to: end, horizontal: horizontal)
+      return
+    }
+    cuts.sort { $0.0 < $1.0 }
+    var merged: [(CGFloat, CGFloat)] = []
+    merged.reserveCapacity(cuts.count)
+    for cut in cuts {
+      if let last = merged.last, cut.0 <= last.1 + 0.25 {
+        merged[merged.count - 1] = (last.0, max(last.1, cut.1))
+      } else {
+        merged.append(cut)
+      }
+    }
+    var cursor = start
+    for cut in merged {
+      if cut.0 - cursor > 0.5 {
+        addGridSegment(path, axis: axis, from: cursor, to: cut.0, horizontal: horizontal)
+      }
+      cursor = max(cursor, cut.1)
+    }
+    if end - cursor > 0.5 {
+      addGridSegment(path, axis: axis, from: cursor, to: end, horizontal: horizontal)
+    }
+  }
+
+  private func addGridSegment(
+    _ path: NSBezierPath,
+    axis: CGFloat,
+    from: CGFloat,
+    to: CGFloat,
+    horizontal: Bool
+  ) {
+    if horizontal {
+      path.move(to: NSPoint(x: from, y: axis))
+      path.line(to: NSPoint(x: to, y: axis))
+    } else {
+      path.move(to: NSPoint(x: axis, y: from))
+      path.line(to: NSPoint(x: axis, y: to))
+    }
   }
 
   private func drawGridLines(in dirtyRect: NSRect) {

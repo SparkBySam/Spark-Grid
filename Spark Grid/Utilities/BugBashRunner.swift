@@ -69,6 +69,7 @@ enum BugBashRunner {
     results.append(chartCommandFreePlacement())
     results.append(chartSlidesUnderFrozenPanes())
     results.append(MainActor.assumeIsolated { frozenPanesCoverChartPixels() })
+    results.append(MainActor.assumeIsolated { mergedCellsHideInteriorGridLines() })
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
@@ -2083,6 +2084,242 @@ enum BugBashRunner {
     return Result(name: name, passed: true, detail: "frozen header and columns cover Calls by Rep")
   }
 
+  /// A merged range paints as one cell. Interior grid lines disappear, the border
+  /// around the outside stays, and unmerge draws those interior lines again.
+  /// The same rule holds while the merge is selected, crosses a freeze, or scrolls.
+  @MainActor
+  private static func mergedCellsHideInteriorGridLines() -> Result {
+    let name = "merged cells hide interior grid"
+    let header = SpreadsheetGridNSView.baseHeaderSize
+    let rowH = Workbook.defaultRowHeight
+    let colW = Workbook.defaultColumnWidth
+    // snapshotGrid's frame. Scroll math below matches ensureCellVisible against it.
+    let viewHeight: CGFloat = 560
+    let vertical = CGPoint(x: 1, y: 0)
+    let horizontal = CGPoint(x: 0, y: 1)
+
+    func fail(_ detail: String) -> Result {
+      Result(name: name, passed: false, detail: detail)
+    }
+    func paintRed(sheet: inout Sheet, rows: ClosedRange<Int>, cols: ClosedRange<Int>) {
+      var format = CellFormat()
+      format.fillColor = CodableColor(red: 1, green: 0, blue: 0, alpha: 1)
+      let cell = Cell(raw: "", format: format)
+      for row in rows {
+        for col in cols {
+          sheet.setCell(cell, at: CellAddress(row: row, col: col))
+        }
+      }
+    }
+    func isRed(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.redComponent > 0.85 && rgb.greenComponent < 0.2 && rgb.blueComponent < 0.2
+    }
+    func channelDelta(_ a: NSColor, _ b: NSColor) -> CGFloat {
+      guard let lhs = a.usingColorSpace(.deviceRGB), let rhs = b.usingColorSpace(.deviceRGB) else {
+        return 1
+      }
+      return abs(lhs.redComponent - rhs.redComponent)
+        + abs(lhs.greenComponent - rhs.greenComponent)
+        + abs(lhs.blueComponent - rhs.blueComponent)
+    }
+    func viewY(_ row: Int, scroll: CGFloat, frozenRows: Int) -> CGFloat {
+      if row < frozenRows { return header + CGFloat(row) * rowH }
+      return header + CGFloat(row) * rowH - scroll
+    }
+    func viewX(_ col: Int, scroll: CGFloat, frozenCols: Int) -> CGFloat {
+      if col < frozenCols { return header + CGFloat(col) * colW }
+      return header + CGFloat(col) * colW - scroll
+    }
+    func boundaryX(_ col: Int, scroll: CGFloat = 0, frozenCols: Int = 0) -> CGFloat {
+      viewX(col, scroll: scroll, frozenCols: frozenCols)
+    }
+    func boundaryY(_ row: Int, scroll: CGFloat = 0, frozenRows: Int = 0) -> CGFloat {
+      viewY(row, scroll: scroll, frozenRows: frozenRows)
+    }
+    func midX(_ col: Int, scroll: CGFloat = 0, frozenCols: Int = 0) -> CGFloat {
+      viewX(col, scroll: scroll, frozenCols: frozenCols) + colW / 2
+    }
+    func midY(_ row: Int, scroll: CGFloat = 0, frozenRows: Int = 0) -> CGFloat {
+      viewY(row, scroll: scroll, frozenRows: frozenRows) + rowH / 2
+    }
+
+    /// How strongly a hairline shows across `point`, compared with the cell 8pt to the side.
+    /// `wantsRed` fails closed when the sample landed on the wrong surface.
+    func lineStrength(
+      _ snap: GridSnapshot,
+      at point: NSPoint,
+      perpendicular: CGPoint,
+      fromTop: Bool,
+      wantsRed: Bool = true
+    ) -> CGFloat? {
+      let fillPoint = NSPoint(
+        x: point.x + perpendicular.x * 8,
+        y: point.y + perpendicular.y * 8
+      )
+      let fill = snap.color(at: fillPoint, fromTop: fromTop)
+      guard isRed(fill) == wantsRed else { return nil }
+      var strongest: CGFloat = 0
+      for step in stride(from: CGFloat(-1), through: CGFloat(1), by: CGFloat(0.5)) {
+        let sample = snap.color(
+          at: NSPoint(x: point.x + perpendicular.x * step, y: point.y + perpendicular.y * step),
+          fromTop: fromTop
+        )
+        strongest = max(strongest, channelDelta(fill, sample))
+      }
+      return strongest
+    }
+
+    func orientation(of snap: GridSnapshot, redAt point: NSPoint) -> Bool? {
+      [true, false].first { isRed(snap.color(at: point, fromTop: $0)) }
+    }
+    func hidesLine(_ strength: CGFloat, comparedTo control: CGFloat) -> Bool {
+      strength < 0.03 || (strength < control * 0.4 && control - strength > 0.02)
+    }
+    func showsLine(_ strength: CGFloat, comparedTo control: CGFloat) -> Bool {
+      strength > 0.04 && strength > control * 0.5
+    }
+
+    // Rows 1...6 and cols 1...5 are red. Only rows 2...5, cols 2...4 are merged,
+    // so the outside border has the same fill on both sides as an interior line.
+    var block = Sheet(name: "Merge")
+    paintRed(sheet: &block, rows: 1...6, cols: 1...5)
+    block.mergedRanges = [CellRange(
+      start: CellAddress(row: 2, col: 2),
+      end: CellAddress(row: 5, col: 4)
+    )]
+    let interiorVertical = NSPoint(x: boundaryX(4), y: midY(4))
+    let interiorHorizontal = NSPoint(x: midX(3), y: boundaryY(4))
+    let outsideVertical = NSPoint(x: boundaryX(4), y: midY(1))
+    let outerLeft = NSPoint(x: boundaryX(2), y: midY(4))
+    let outerBottom = NSPoint(x: midX(3), y: boundaryY(6))
+    let fillProbe = NSPoint(x: midX(3), y: midY(4))
+
+    guard let mergedSnap = snapshotGrid(sheet: block),
+          let fromTop = orientation(of: mergedSnap, redAt: fillProbe)
+    else {
+      return fail("grid snapshot failed or the merged fill was not red")
+    }
+    guard let control = lineStrength(mergedSnap, at: outsideVertical, perpendicular: vertical, fromTop: fromTop),
+          let interiorV = lineStrength(mergedSnap, at: interiorVertical, perpendicular: vertical, fromTop: fromTop),
+          let interiorH = lineStrength(mergedSnap, at: interiorHorizontal, perpendicular: horizontal, fromTop: fromTop),
+          let leftBorder = lineStrength(mergedSnap, at: outerLeft, perpendicular: vertical, fromTop: fromTop),
+          let bottomBorder = lineStrength(mergedSnap, at: outerBottom, perpendicular: horizontal, fromTop: fromTop)
+    else {
+      return fail("merged fill missed a sample point")
+    }
+    guard control > 0.04 else {
+      return fail(String(format: "control grid line was not visible (%.3f)", control))
+    }
+    guard hidesLine(interiorV, comparedTo: control), hidesLine(interiorH, comparedTo: control) else {
+      return fail(String(format: "interior lines stayed vertical %.3f horizontal %.3f control %.3f", interiorV, interiorH, control))
+    }
+    guard showsLine(leftBorder, comparedTo: control), showsLine(bottomBorder, comparedTo: control) else {
+      return fail(String(format: "outer border dropped left %.3f bottom %.3f control %.3f", leftBorder, bottomBorder, control))
+    }
+
+    let unmergeModel = SpreadsheetViewModel(workbook: Workbook(sheets: [block]))
+    unmergeModel.select(CellAddress(row: 2, col: 2))
+    let selectedSpan = unmergeModel.selectionRange.normalized
+    guard selectedSpan.minRow == 2, selectedSpan.maxRow == 5, selectedSpan.minCol == 2, selectedSpan.maxCol == 4 else {
+      return fail("selection did not cover the merge")
+    }
+    guard let selectedSnap = snapshotGrid(sheet: block, prepare: { grid in
+      grid.viewModel?.select(CellAddress(row: 2, col: 2))
+    }), let selectedTop = orientation(of: selectedSnap, redAt: fillProbe) else {
+      return fail("selected merge snapshot failed")
+    }
+    guard let selectedInteriorV = lineStrength(selectedSnap, at: interiorVertical, perpendicular: vertical, fromTop: selectedTop),
+          let selectedInteriorH = lineStrength(selectedSnap, at: interiorHorizontal, perpendicular: horizontal, fromTop: selectedTop)
+    else {
+      return fail("selection changed the merged fill")
+    }
+    guard hidesLine(selectedInteriorV, comparedTo: control), hidesLine(selectedInteriorH, comparedTo: control) else {
+      return fail(String(format: "selection redrew interior lines vertical %.3f horizontal %.3f", selectedInteriorV, selectedInteriorH))
+    }
+
+    unmergeModel.unmergeSelection()
+    guard unmergeModel.activeSheet.mergedRanges.isEmpty else {
+      return fail("unmerge left a range")
+    }
+    guard let openSnap = snapshotGrid(sheet: unmergeModel.activeSheet),
+          let openTop = orientation(of: openSnap, redAt: fillProbe),
+          let opened = lineStrength(openSnap, at: interiorVertical, perpendicular: vertical, fromTop: openTop),
+          let openedRow = lineStrength(openSnap, at: interiorHorizontal, perpendicular: horizontal, fromTop: openTop)
+    else {
+      return fail("unmerged snapshot failed")
+    }
+    guard showsLine(opened, comparedTo: control), showsLine(openedRow, comparedTo: control) else {
+      return fail(String(format: "unmerge did not restore lines vertical %.3f horizontal %.3f", opened, openedRow))
+    }
+
+    // Frozen band keeps its own red merge. A second, unfilled merge crosses the
+    // freeze into the body. A third sits below the fold so scrolling moves the holes
+    // with the cells. The cross-freeze merge is unfilled because each pane clips
+    // the anchor's paint; both sides are the sheet background.
+    var frozenSheet = Sheet(name: "Frozen merge", frozenRows: 2, frozenColumns: 1)
+    paintRed(sheet: &frozenSheet, rows: 0...1, cols: 3...7)
+    paintRed(sheet: &frozenSheet, rows: 21...25, cols: 2...6)
+    frozenSheet.mergedRanges = [
+      CellRange(start: CellAddress(row: 0, col: 0), end: CellAddress(row: 5, col: 2)),
+      CellRange(start: CellAddress(row: 0, col: 4), end: CellAddress(row: 1, col: 6)),
+      CellRange(start: CellAddress(row: 22, col: 3), end: CellAddress(row: 25, col: 5)),
+    ]
+    let scrollRow = 26
+    let scroll = (header + CGFloat(scrollRow + 1) * rowH) - viewHeight
+    let frozenFill = NSPoint(x: midX(5), y: midY(0, frozenRows: 2))
+    let frozenInteriorV = NSPoint(x: boundaryX(6), y: midY(0, frozenRows: 2))
+    let frozenInteriorH = NSPoint(x: midX(5), y: boundaryY(1, frozenRows: 2))
+    let frozenOuter = NSPoint(x: boundaryX(4), y: midY(0, frozenRows: 2))
+    let crossFrozen = NSPoint(x: boundaryX(2), y: midY(0, frozenRows: 2))
+    let crossFrozenRow = NSPoint(x: midX(1), y: boundaryY(1, frozenRows: 2))
+    let crossControl = NSPoint(x: boundaryX(9), y: midY(0, frozenRows: 2))
+    let crossBody = NSPoint(x: boundaryX(2), y: midY(5, scroll: scroll, frozenRows: 2))
+    let crossBodyLine = NSPoint(x: boundaryX(2), y: midY(7, scroll: scroll, frozenRows: 2))
+    let scrolledInteriorV = NSPoint(x: boundaryX(5), y: midY(23, scroll: scroll, frozenRows: 2))
+    let scrolledInteriorH = NSPoint(x: midX(4), y: boundaryY(24, scroll: scroll, frozenRows: 2))
+    let scrolledOutside = NSPoint(x: boundaryX(5), y: midY(21, scroll: scroll, frozenRows: 2))
+
+    guard let frozenSnap = snapshotGrid(sheet: frozenSheet, prepare: { grid in
+      grid.viewModel?.select(CellAddress(row: scrollRow, col: 8))
+      grid.scrollSelectionIntoView()
+    }) else {
+      return fail("frozen snapshot failed")
+    }
+    guard let frozenTop = orientation(of: frozenSnap, redAt: frozenFill) else {
+      return fail("frozen merge fill was not red")
+    }
+    guard let frozenV = lineStrength(frozenSnap, at: frozenInteriorV, perpendicular: vertical, fromTop: frozenTop),
+          let frozenH = lineStrength(frozenSnap, at: frozenInteriorH, perpendicular: horizontal, fromTop: frozenTop),
+          let frozenEdge = lineStrength(frozenSnap, at: frozenOuter, perpendicular: vertical, fromTop: frozenTop),
+          let crossV = lineStrength(frozenSnap, at: crossFrozen, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
+          let crossH = lineStrength(frozenSnap, at: crossFrozenRow, perpendicular: horizontal, fromTop: frozenTop, wantsRed: false),
+          let crossLine = lineStrength(frozenSnap, at: crossControl, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
+          let crossScrolled = lineStrength(frozenSnap, at: crossBody, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
+          let crossScrolledLine = lineStrength(frozenSnap, at: crossBodyLine, perpendicular: vertical, fromTop: frozenTop, wantsRed: false),
+          let scrolledV = lineStrength(frozenSnap, at: scrolledInteriorV, perpendicular: vertical, fromTop: frozenTop),
+          let scrolledH = lineStrength(frozenSnap, at: scrolledInteriorH, perpendicular: horizontal, fromTop: frozenTop),
+          let scrolledLine = lineStrength(frozenSnap, at: scrolledOutside, perpendicular: vertical, fromTop: frozenTop)
+    else {
+      return fail("frozen or scrolled sample missed its fill")
+    }
+    guard showsLine(crossLine, comparedTo: crossLine),
+          showsLine(crossScrolledLine, comparedTo: crossScrolledLine),
+          showsLine(scrolledLine, comparedTo: scrolledLine),
+          showsLine(frozenEdge, comparedTo: frozenEdge)
+    else {
+      return fail(String(format: "line outside a merge was not visible frozen %.3f body %.3f scroll %.3f edge %.3f", crossLine, crossScrolledLine, scrolledLine, frozenEdge))
+    }
+    guard hidesLine(frozenV, comparedTo: frozenEdge), hidesLine(frozenH, comparedTo: frozenEdge),
+          hidesLine(crossV, comparedTo: crossLine), hidesLine(crossH, comparedTo: crossLine),
+          hidesLine(crossScrolled, comparedTo: crossScrolledLine),
+          hidesLine(scrolledV, comparedTo: scrolledLine), hidesLine(scrolledH, comparedTo: scrolledLine)
+    else {
+      return fail(String(format: "freeze/scroll interior stayed band %.3f %.3f cross %.3f %.3f %.3f scrolled %.3f %.3f", frozenV, frozenH, crossV, crossH, crossScrolled, scrolledV, scrolledH))
+    }
+    return Result(name: name, passed: true, detail: "interior lines drop out; the outside border and unmerge put them back")
+  }
+
   private struct GridSnapshot {
     var image: NSBitmapImageRep
     var pointScale: CGFloat
@@ -2099,7 +2336,10 @@ enum BugBashRunner {
   }
 
   @MainActor
-  private static func snapshotGrid(sheet: Sheet) -> GridSnapshot? {
+  private static func snapshotGrid(
+    sheet: Sheet,
+    prepare: ((SpreadsheetGridNSView) -> Void)? = nil
+  ) -> GridSnapshot? {
     let frame = NSRect(x: 0, y: 0, width: 900, height: 560)
     let grid = SpreadsheetGridNSView(frame: frame)
     let window = NSWindow(
@@ -2114,6 +2354,7 @@ enum BugBashRunner {
     window.orderFrontRegardless()
     grid.viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
     grid.layoutSubtreeIfNeeded()
+    prepare?(grid)
     grid.needsDisplay = true
     window.displayIfNeeded()
     RunLoop.current.run(until: Date().addingTimeInterval(0.15))
