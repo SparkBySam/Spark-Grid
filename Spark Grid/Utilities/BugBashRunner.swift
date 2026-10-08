@@ -78,6 +78,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { conditionalFormatRuleEdit() })
     results.append(cellTextOverflowAndClip())
     results.append(MainActor.assumeIsolated { cellTextWrapLayout() })
+    results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
     return results
   }
 
@@ -3103,6 +3104,93 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "editor height \(grid.editorFrame.height) row \(rowHeight)")
     }
     return Result(name: name, passed: true, detail: "hit testing, selection, freeze, and editor share \(Int(rowHeight))pt")
+  }
+
+  @MainActor
+  private static func textDisplayToolbarLabel() -> Result {
+    let name = "text display toolbar label"
+    let overflowTitle = CellFormat.TextDisplay.overflow.toolbarTitle
+    let wrapTitle = CellFormat.TextDisplay.wrap.toolbarTitle
+    let clipTitle = CellFormat.TextDisplay.clip.toolbarTitle
+    let mixedTitle = CellFormat.TextDisplay.mixedToolbarTitle
+    let modeTitles = [overflowTitle, wrapTitle, clipTitle]
+    if modeTitles != ["Overflow", "Wrap", "Clip"] || modeTitles.contains(mixedTitle) {
+      return Result(name: name, passed: false, detail: "menu titles \(modeTitles) mixed \(mixedTitle)")
+    }
+
+    var sheet = Sheet(name: "Label")
+    var wrap = CellFormat()
+    wrap.textDisplay = .wrap
+    var clip = CellFormat()
+    clip.textDisplay = .clip
+    sheet.setCell(Cell(raw: "wrap", format: wrap), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "clip", format: clip), at: CellAddress(row: 0, col: 1))
+    sheet.setCell(Cell(raw: "plain"), at: CellAddress(row: 0, col: 2))
+    var mergedWrap = CellFormat()
+    mergedWrap.textDisplay = .wrap
+    sheet.setCell(Cell(raw: "merged", format: mergedWrap), at: CellAddress(row: 1, col: 0))
+    sheet.mergedRanges = [
+      CellRange(start: CellAddress(row: 1, col: 0), end: CellAddress(row: 1, col: 1))
+    ]
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+
+    func label(_ expected: String, detail: String) -> Result? {
+      if viewModel.textDisplayToolbarTitle != expected {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "\(detail) label \(viewModel.textDisplayToolbarTitle)"
+        )
+      }
+      return nil
+    }
+
+    if let failed = label(wrapTitle, detail: "wrap cell") { return failed }
+    if viewModel.uniformTextDisplay != .wrap {
+      return Result(name: name, passed: false, detail: "wrap cell claimed \(String(describing: viewModel.uniformTextDisplay))")
+    }
+
+    viewModel.select(CellAddress(row: 0, col: 1))
+    if let failed = label(clipTitle, detail: "clip cell") { return failed }
+
+    viewModel.select(CellAddress(row: 0, col: 2))
+    if let failed = label(overflowTitle, detail: "overflow cell") { return failed }
+
+    viewModel.selectRange(from: CellAddress(row: 0, col: 2), to: CellAddress(row: 0, col: 3))
+    if let failed = label(overflowTitle, detail: "empty neighbors") { return failed }
+
+    viewModel.selectRange(from: CellAddress(row: 0, col: 0), to: CellAddress(row: 0, col: 1))
+    if viewModel.uniformTextDisplay != nil || modeTitles.contains(viewModel.textDisplayToolbarTitle) {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "mixed range claimed \(viewModel.textDisplayToolbarTitle)"
+      )
+    }
+    if let failed = label(mixedTitle, detail: "mixed range") { return failed }
+
+    viewModel.select(CellAddress(row: 0, col: 0))
+    viewModel.commandClickCell(CellAddress(row: 0, col: 2))
+    if viewModel.uniformTextDisplay != nil || viewModel.textDisplayToolbarTitle != mixedTitle {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "split selection claimed \(viewModel.textDisplayToolbarTitle)"
+      )
+    }
+
+    viewModel.setTextDisplay(.clip)
+    if let failed = label(clipTitle, detail: "after applying clip") { return failed }
+    if viewModel.activeSheet.cell(at: CellAddress(row: 0, col: 0)).format?.textDisplay != .clip
+      || viewModel.activeSheet.cell(at: CellAddress(row: 0, col: 2)).format?.textDisplay != .clip
+    {
+      return Result(name: name, passed: false, detail: "clip did not apply to both selected cells")
+    }
+
+    viewModel.selectRange(from: CellAddress(row: 1, col: 0), to: CellAddress(row: 1, col: 1))
+    if let failed = label(wrapTitle, detail: "merged wrap") { return failed }
+
+    return Result(name: name, passed: true, detail: "label follows the selection; mixed does not name a mode")
   }
 
   private static func octoberEighth2026() -> Date? {
