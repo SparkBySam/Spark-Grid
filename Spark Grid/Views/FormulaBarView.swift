@@ -24,6 +24,13 @@ struct FormulaBarView: View {
     SpreadsheetChrome.formulaFieldHeight(lineCount: viewportLineCount)
   }
 
+  @State private var showFunctionList = false
+
+  private var argumentHint: String? {
+    guard viewModel.showsFormulaArgumentHint else { return nil }
+    return viewModel.formulaArgumentHint
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       HStack(alignment: .top, spacing: 8) {
@@ -35,36 +42,54 @@ struct FormulaBarView: View {
 
         Rectangle()
           .fill(SpreadsheetChrome.chromeDividerColor)
-          .frame(width: SpreadsheetChrome.dividerHeight)
+          .frame(width: SpreadsheetChrome.dividerHeight, height: barHeight)
 
-        FormulaBarTextField(
-          text: Binding(
-            get: { viewModel.formulaBarText },
-            set: { viewModel.formulaBarText = $0 }
-          ),
-          liveText: viewModel.formulaBarText,
-          namedRanges: Array(viewModel.workbook.namedRanges.keys),
-          highlights: viewModel.formulaReferenceHighlights,
-          focusedHighlightIndex: viewModel.focusedFormulaHighlightIndex,
-          visibleHeight: fieldHeight,
-          onSubmit: { text in
-            viewModel.commitFormulaBarText(text)
-          },
-          onTextChange: {},
-          onBeginEditing: {
-            if !viewModel.isEditing {
-              viewModel.beginEditing()
-            }
-          },
-          onCaretMoved: { index in
-            viewModel.updateFormulaHighlightFocus(atUTF16: index)
+        VStack(alignment: .leading, spacing: 0) {
+          HStack(alignment: .top, spacing: 8) {
+            functionButton
+            FormulaBarTextField(
+              text: Binding(
+                get: { viewModel.formulaBarText },
+                set: { viewModel.formulaBarText = $0 }
+              ),
+              liveText: viewModel.formulaBarText,
+              caretToken: viewModel.formulaCaretToken,
+              caretUTF16: viewModel.formulaCaretUTF16,
+              namedRanges: Array(viewModel.workbook.namedRanges.keys),
+              highlights: viewModel.formulaReferenceHighlights,
+              focusedHighlightIndex: viewModel.focusedFormulaHighlightIndex,
+              visibleHeight: fieldHeight,
+              onSubmit: { text in
+                viewModel.commitFormulaBarText(text)
+              },
+              onTextChange: {},
+              onBeginEditing: {
+                if !viewModel.isEditing {
+                  viewModel.beginEditing()
+                }
+              },
+              onCaretMoved: { index in
+                viewModel.updateFormulaHighlightFocus(atUTF16: index)
+              }
+            )
+            .frame(maxWidth: .infinity, minHeight: fieldHeight, maxHeight: fieldHeight)
+            .padding(.vertical, 5)
           }
-        )
-        .frame(maxWidth: .infinity, minHeight: fieldHeight, maxHeight: fieldHeight)
-        .padding(.vertical, 5)
+          .frame(height: barHeight)
+
+          if let argumentHint {
+            Text(argumentHint)
+              .font(.system(size: 11))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+              .padding(.leading, 36)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .frame(height: SpreadsheetChrome.formulaArgumentHintHeight)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(.horizontal, 10)
-      .frame(height: barHeight)
       .contentShape(Rectangle())
       .onTapGesture(count: 2) {
         guard contentLineCount > 1 else { return }
@@ -87,6 +112,34 @@ struct FormulaBarView: View {
     .foregroundStyle(Color(nsColor: .labelColor))
     .onChange(of: viewModel.selection) { _, _ in
       isExpanded = false
+    }
+  }
+
+  /// Excel-style fx, between the name box and the formula text.
+  private var functionButton: some View {
+    Button {
+      showFunctionList.toggle()
+    } label: {
+      Text("fx")
+        .font(.system(size: 14, weight: .medium, design: .serif))
+        .italic()
+        .frame(width: 28, height: 22)
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(Color(nsColor: .labelColor))
+    .padding(.top, 3)
+    .help("Insert function")
+    .accessibilityLabel("Insert function")
+    .popover(isPresented: $showFunctionList, arrowEdge: .bottom) {
+      FormulaFunctionPicker(
+        onChoose: { name in
+          viewModel.insertFormulaFunction(name)
+          showFunctionList = false
+        },
+        onClose: {
+          showFunctionList = false
+        }
+      )
     }
   }
 }

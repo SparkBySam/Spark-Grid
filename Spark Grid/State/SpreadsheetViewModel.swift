@@ -25,6 +25,11 @@ final class SpreadsheetViewModel {
   private(set) var selectionRanges: [CellRange] = [.singleOrigin]
   var isEditing = false
   var editText = ""
+  /// One-line argument signature shown under the formula bar after Insert Function.
+  var formulaArgumentHint: String?
+  /// Bumped when Insert Function should place the formula-bar caret. Zero means none.
+  var formulaCaretToken = 0
+  var formulaCaretUTF16 = 0
   /// Bumps when formula edit text / focus changes so the grid can redraw ref highlights.
   private(set) var formulaHighlightRevision = 0
   /// Which formula reference token is focused (clicked in the formula bar).
@@ -303,6 +308,19 @@ final class SpreadsheetViewModel {
       if !isEditing { isEditing = true }
       noteFormulaEditTextChanged()
     }
+  }
+
+  var showsFormulaArgumentHint: Bool {
+    isEditing && formulaArgumentHint?.isEmpty == false
+  }
+
+  /// Puts `=NAME()` in the active cell's formula bar, caret between the parentheses.
+  func insertFormulaFunction(_ name: String) {
+    guard let insertion = FormulaFunctionCatalog.insertion(for: name) else { return }
+    formulaBarText = insertion.text
+    formulaArgumentHint = insertion.signatureLine
+    formulaCaretUTF16 = insertion.caretUTF16
+    formulaCaretToken += 1
   }
 
   func syncEditTextFromSelection() {
@@ -597,6 +615,7 @@ final class SpreadsheetViewModel {
 
   func beginEditing(preserveSelection: Bool = true) {
     if !preserveSelection { return }
+    formulaArgumentHint = nil
     editText = selectedCell.raw
     isEditing = true
     focusedFormulaHighlightIndex = nil
@@ -604,6 +623,7 @@ final class SpreadsheetViewModel {
   }
 
   func commitEdit() {
+    formulaArgumentHint = nil
     let address = selectionAnchor
     let newValue = editText
     let oldValue = activeSheet.cell(at: address).raw
@@ -624,6 +644,7 @@ final class SpreadsheetViewModel {
   }
 
   func cancelEdit() {
+    formulaArgumentHint = nil
     syncEditTextFromSelection()
     isEditing = false
     noteFormulaEditTextChanged()
