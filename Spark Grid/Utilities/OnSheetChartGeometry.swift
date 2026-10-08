@@ -46,6 +46,19 @@ enum OnSheetChartGeometry {
     return CGRect(x: xForColumn(col), y: top, width: width, height: height)
   }
 
+  /// Chart frame inside a layer that uses the grid's flipped viewport.
+  /// `chartRect` is already in viewport coordinates: `yForRow` has applied
+  /// scroll once. Subtract only the layer origin. A second scroll shift
+  /// would slide the chart with the gesture instead of with its cells.
+  static func hostFrame(chartRect: CGRect, layerFrame: CGRect) -> CGRect {
+    CGRect(
+      x: chartRect.minX - layerFrame.minX,
+      y: chartRect.minY - layerFrame.minY,
+      width: chartRect.width,
+      height: chartRect.height
+    )
+  }
+
   /// Edge or corner of a selected chart. `body` is the interior, used to move it.
   enum ChartFrameHandle: Equatable {
     case body

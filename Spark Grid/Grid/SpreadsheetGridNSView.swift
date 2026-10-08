@@ -64,8 +64,16 @@ final class SpreadsheetGridNSView: NSView {
   }
   private var activeChartDrag: ChartDragState?
   private let chartHandleThickness: CGFloat = 8
-  private let chartLayerView: NSView = {
-    let view = NSView()
+  /// Flipped like the grid. Host frames are viewport coordinates whose
+  /// origin is the chart's top-left. An unflipped layer reads that origin
+  /// as the bottom-left, so the chart moves up when its anchor moves down
+  /// and scrolls against the cells.
+  private final class ChartLayerView: NSView {
+    override var isFlipped: Bool { true }
+  }
+
+  private let chartLayerView: ChartLayerView = {
+    let view = ChartLayerView()
     view.wantsLayer = true
     view.layer?.backgroundColor = NSColor.clear.cgColor
     view.layer?.masksToBounds = true
@@ -1560,11 +1568,9 @@ final class SpreadsheetGridNSView: NSView {
         removeChartHost(id: chart.id)
         continue
       }
-      let local = NSRect(
-        x: rect.minX - chartLayerView.frame.minX,
-        y: rect.minY - chartLayerView.frame.minY,
-        width: rect.width,
-        height: height
+      let local = OnSheetChartGeometry.hostFrame(
+        chartRect: NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: height),
+        layerFrame: chartLayerView.frame
       )
       let snapshot = ChartHostSnapshot(
         chart: chart,
@@ -1840,13 +1846,11 @@ final class SpreadsheetGridNSView: NSView {
     needsDisplay = true
   }
 
-  /// Pointer delta for a chart drag. `OnSheetChartHost` is flipped, which
-  /// reverses vertical pointer movement when it becomes an anchor row.
-  /// Negating only that part makes a downward drag move the chart down the
-  /// sheet and an upward drag move it up. Horizontal drag is unchanged.
-  /// Top and bottom resize handles use this same translation.
+  /// Pointer delta in the flipped grid. Positive `dy` is downward.
+  /// The chart layer is flipped the same way, so this is not negated:
+  /// negating it raises the anchor when the pointer moves down.
   static func chartDragTranslation(dx: CGFloat, dy: CGFloat) -> CGSize {
-    CGSize(width: dx, height: -dy)
+    CGSize(width: dx, height: dy)
   }
 
   private func applyChartDrag(to point: NSPoint) {
