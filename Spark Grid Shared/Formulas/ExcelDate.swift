@@ -17,6 +17,11 @@ enum ExcelDate {
     return days.rounded(.down)
   }
 
+  /// Date and time fraction. `NOW` uses this; `TODAY` stays on the day serial.
+  static func serialWithTime(from date: Date) -> Double {
+    date.timeIntervalSince(epoch) / 86_400
+  }
+
   static func date(from serial: Double) -> Date? {
     epoch.addingTimeInterval(serial * 86_400)
   }
