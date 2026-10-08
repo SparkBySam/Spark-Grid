@@ -23,14 +23,9 @@ struct SpreadsheetCommands: Commands {
       Button("Cut") { viewModel?.cutSelection() }
         .keyboardShortcut(settings.keyEquivalent(for: .cut), modifiers: settings.eventModifiers(for: .cut))
         .disabled(viewModel == nil)
-      Button("Copy") {
-        if let text = viewModel?.copySelection() {
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(text, forType: .string)
-        }
-      }
-      .keyboardShortcut(settings.keyEquivalent(for: .copy), modifiers: settings.eventModifiers(for: .copy))
-      .disabled(viewModel == nil)
+      Button("Copy") { viewModel?.copySelectionToPasteboard() }
+        .keyboardShortcut(settings.keyEquivalent(for: .copy), modifiers: settings.eventModifiers(for: .copy))
+        .disabled(viewModel == nil)
       Button("Paste") { viewModel?.pasteFromPasteboard() }
         .keyboardShortcut(settings.keyEquivalent(for: .paste), modifiers: settings.eventModifiers(for: .paste))
         .disabled(viewModel == nil)

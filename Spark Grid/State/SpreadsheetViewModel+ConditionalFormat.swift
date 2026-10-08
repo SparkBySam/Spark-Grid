@@ -119,6 +119,31 @@ extension SpreadsheetViewModel {
     setActiveSheetPreservingFormulas(sheet)
   }
 
+  func pasteCopiedConditionalFormats(
+    _ payload: SpreadsheetClipboard.ConditionalFormatClipboardPayload?,
+    at origin: CellAddress,
+    actionName: String = "Paste"
+  ) {
+    guard let payload else { return }
+    let sheet = activeSheet
+    let pasted = ConditionalFormatPaste.retargetedRules(
+      payload,
+      to: origin,
+      maxRow: sheet.effectiveRowCount - 1,
+      maxCol: sheet.effectiveColumnCount - 1
+    )
+    guard !pasted.isEmpty else { return }
+    var next = sheet.conditionalFormats
+    var changed = false
+    for rule in pasted {
+      if next.contains(where: { ConditionalFormatPaste.sameAppearance($0, rule) }) { continue }
+      next.append(rule)
+      changed = true
+    }
+    guard changed else { return }
+    applyConditionalFormats(next, undoBefore: sheet.conditionalFormats, actionName: actionName)
+  }
+
   private func applyConditionalFormats(
     _ rules: [ConditionalFormatRule],
     undoBefore: [ConditionalFormatRule],

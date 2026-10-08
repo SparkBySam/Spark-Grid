@@ -3664,9 +3664,7 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @objc private func handleMenuCopy(_ sender: Any?) {
-    guard let text = viewModel?.copySelection() else { return }
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
+    viewModel?.copySelectionToPasteboard()
   }
 
   @objc private func handleMenuPaste(_ sender: Any?) {
@@ -3956,9 +3954,7 @@ final class SpreadsheetGridNSView: NSView {
         viewModel?.copySelectedImageToPasteboard()
         return true
       }
-      if let text = viewModel?.copySelection() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+      if viewModel?.copySelectionToPasteboard() == true {
         return true
       }
     }
