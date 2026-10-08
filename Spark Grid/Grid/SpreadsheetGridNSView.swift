@@ -4516,17 +4516,27 @@ final class CellEditorTextField: NSTextField {}
 
 /// Field editor that saves on the Save shortcut instead of inserting the key.
 final class CellFieldEditor: NSTextView {
-  private var isSyncingSpellCheck = false
+  private var isHandlingTextChange = false
+  private var isApplyingSpellPolicy = false
 
   override func didChangeText() {
-    if isSyncingSpellCheck {
+    // Applying the policy can notify a text change. Ignore that re-entry so
+    // AppKit does not put the defaults back on top of the policy.
+    if isApplyingSpellPolicy {
+      return
+    }
+    if isHandlingTextChange {
       super.didChangeText()
       return
     }
-    isSyncingSpellCheck = true
-    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    isHandlingTextChange = true
+    isAutomaticSpellingCorrectionEnabled = false
+    isGrammarCheckingEnabled = false
     super.didChangeText()
-    isSyncingSpellCheck = false
+    isHandlingTextChange = false
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    isApplyingSpellPolicy = false
   }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {

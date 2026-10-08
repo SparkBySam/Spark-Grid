@@ -462,25 +462,73 @@ final class FormulaBarContainerView: NSView {
 }
 
 final class FormulaBarNSTextView: NSTextView {
-  private var isSyncingSpellCheck = false
+  private var isReplacingString = false
+  private var isApplyingSpellPolicy = false
+  private var spellCheckSyncPending = false
 
   override var acceptsFirstResponder: Bool { true }
 
+  /// Replacing the string puts continuous checking and automatic correction back
+  /// to the text view defaults. Prose has to win after that replacement returns.
+  override var string: String {
+    get { super.string }
+    set {
+      if isReplacingString || isApplyingSpellPolicy {
+        super.string = newValue
+        return
+      }
+      isReplacingString = true
+      isAutomaticSpellingCorrectionEnabled = false
+      isGrammarCheckingEnabled = false
+      super.string = newValue
+      applySpellPolicy()
+      isReplacingString = false
+    }
+  }
+
   override func didChangeText() {
-    if isSyncingSpellCheck {
+    // Applying the policy can notify a text change. Ignore that re-entry so
+    // AppKit does not put the defaults back on top of the policy.
+    if isApplyingSpellPolicy {
+      return
+    }
+    if isReplacingString {
       super.didChangeText()
       return
     }
-    isSyncingSpellCheck = true
-    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    isReplacingString = true
+    isAutomaticSpellingCorrectionEnabled = false
+    isGrammarCheckingEnabled = false
     super.didChangeText()
-    isSyncingSpellCheck = false
+    isReplacingString = false
+    applySpellPolicy()
+    scheduleSpellCheckSync()
+  }
+
+  private func applySpellPolicy() {
+    guard !isApplyingSpellPolicy else { return }
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    isApplyingSpellPolicy = false
+  }
+
+  /// A keystroke can restore the defaults after `didChangeText` returns.
+  /// Apply the same policy once more on the next turn.
+  private func scheduleSpellCheckSync() {
+    guard !spellCheckSyncPending else { return }
+    spellCheckSyncPending = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.spellCheckSyncPending = false
+      self.applySpellPolicy()
+    }
   }
 
   override func becomeFirstResponder() -> Bool {
     let ok = super.becomeFirstResponder()
     if ok {
       isRichText = true
+      applySpellPolicy()
     }
     return ok
   }
@@ -511,6 +559,7 @@ final class FormulaBarNSTextView: NSTextView {
       return
     }
     super.insertText(insertString, replacementRange: replacementRange)
+    applySpellPolicy()
   }
 
   override func insertCompletion(
