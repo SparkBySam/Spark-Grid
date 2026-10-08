@@ -68,8 +68,27 @@ final class SpreadsheetGridNSView: NSView {
   /// origin is the chart's top-left. An unflipped layer reads that origin
   /// as the bottom-left, so the chart moves up when its anchor moves down
   /// and scrolls against the cells.
+  ///
+  /// This layer stays the full cell viewport so a chart keeps scrolling with
+  /// its anchor. Frozen rows and columns are not clipped out of the chart;
+  /// `FrozenPaneOverlayView` paints those cells above this layer.
   private final class ChartLayerView: NSView {
     override var isFlipped: Bool { true }
+  }
+
+  /// Paints frozen rows and columns after the chart layer. The grid's own
+  /// `draw` runs before subviews, so a chart would otherwise cover the panes.
+  private final class FrozenPaneOverlayView: NSView {
+    weak var grid: SpreadsheetGridNSView?
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+      NSGraphicsContext.current?.cgContext.clear(dirtyRect)
+      grid?.drawFrozenPanesCoveringCharts(in: dirtyRect)
+    }
   }
 
   private let chartLayerView: ChartLayerView = {
@@ -81,6 +100,16 @@ final class SpreadsheetGridNSView: NSView {
     view.clipsToBounds = true
     return view
   }()
+  /// Above the chart (z 5) and below the cell editor (z 8).
+  private let frozenPaneOverlay: FrozenPaneOverlayView = {
+    let view = FrozenPaneOverlayView()
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.zPosition = 6
+    view.layer?.isOpaque = false
+    return view
+  }()
+  private var isPropagatingDisplay = false
   private var chartHosts: [UUID: OnSheetChartHost] = [:]
   private var chartHostSnapshots: [UUID: ChartHostSnapshot] = [:]
   private var isLayingOutCharts = false
@@ -133,6 +162,28 @@ final class SpreadsheetGridNSView: NSView {
   override var isFlipped: Bool { true }
   override var acceptsFirstResponder: Bool { true }
 
+  override var needsDisplay: Bool {
+    get { super.needsDisplay }
+    set {
+      super.needsDisplay = newValue
+      if newValue {
+        displayFrozenPaneOverlay()
+      }
+    }
+  }
+
+  override func setNeedsDisplay(_ invalidRect: NSRect) {
+    super.setNeedsDisplay(invalidRect)
+    displayFrozenPaneOverlay()
+  }
+
+  private func displayFrozenPaneOverlay() {
+    guard !isPropagatingDisplay else { return }
+    isPropagatingDisplay = true
+    frozenPaneOverlay.needsDisplay = true
+    isPropagatingDisplay = false
+  }
+
   private var contentRect: NSRect {
     NSRect(
       x: headerSize,
@@ -171,6 +222,8 @@ final class SpreadsheetGridNSView: NSView {
     layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     configureEditor()
     addSubview(chartLayerView, positioned: .below, relativeTo: editor)
+    frozenPaneOverlay.grid = self
+    addSubview(frozenPaneOverlay, positioned: .above, relativeTo: chartLayerView)
   }
 
   override func layout() {
@@ -894,22 +947,22 @@ final class SpreadsheetGridNSView: NSView {
       for chart in sheet.charts {
         let rect = chartRect(for: chart)
         guard rect.width >= 8, rect.height >= 8, rect.intersects(bounds) else { continue }
-        addCursorRect(rect, cursor: .openHand)
+        addScrollableCursorRect(rect, cursor: .openHand)
         guard chart.id == selectedChartID else { continue }
         let thickness = chartHandleThickness
-        addCursorRect(
+        addScrollableCursorRect(
           NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: thickness),
           cursor: .resizeUpDown
         )
-        addCursorRect(
+        addScrollableCursorRect(
           NSRect(x: rect.minX, y: rect.maxY - thickness, width: rect.width, height: thickness),
           cursor: .resizeUpDown
         )
-        addCursorRect(
+        addScrollableCursorRect(
           NSRect(x: rect.minX, y: rect.minY, width: thickness, height: rect.height),
           cursor: .resizeLeftRight
         )
-        addCursorRect(
+        addScrollableCursorRect(
           NSRect(x: rect.maxX - thickness, y: rect.minY, width: thickness, height: rect.height),
           cursor: .resizeLeftRight
         )
@@ -920,7 +973,7 @@ final class SpreadsheetGridNSView: NSView {
           NSPoint(x: rect.minX, y: rect.maxY),
           NSPoint(x: rect.maxX, y: rect.maxY),
         ] {
-          addCursorRect(
+          addScrollableCursorRect(
             NSRect(x: origin.x - corner / 2, y: origin.y - corner / 2, width: corner, height: corner),
             cursor: .crosshair
           )
@@ -959,6 +1012,8 @@ final class SpreadsheetGridNSView: NSView {
     }
 
     // 2. Frozen panes redrawn on top so scrolled content cannot bleed through.
+    //    Subviews paint after this, so the chart layer still covers these cells.
+    //    FrozenPaneOverlayView paints the same panes again above the chart.
     if frozenRowCount() > 0 || frozenColumnCount() > 0 {
       if let ctx = NSGraphicsContext.current {
         ctx.saveGraphicsState()
@@ -1546,7 +1601,13 @@ final class SpreadsheetGridNSView: NSView {
     guard !isLayingOutCharts else { return }
     isLayingOutCharts = true
     defer { isLayingOutCharts = false }
+    // Full cell viewport, not the scrollable inset. Host frames then move
+    // with the anchor cells, including the part that slides under a freeze.
     chartLayerView.frame = contentRect
+    if frozenPaneOverlay.frame != bounds {
+      frozenPaneOverlay.frame = bounds
+    }
+    frozenPaneOverlay.isHidden = frozenRowCount() == 0 && frozenColumnCount() == 0
     guard let viewModel else {
       removeChartHosts()
       return
@@ -1671,13 +1732,75 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func chartHitTest(at point: NSPoint) -> SheetChart? {
-    guard contentRect.contains(point), let charts = viewModel?.activeSheet.charts else { return nil }
+    guard contentRect.contains(point), !pointIsCoveredByFrozenPane(point),
+          let charts = viewModel?.activeSheet.charts
+    else { return nil }
     for chart in charts.reversed() {
       let rect = chartRect(for: chart)
       if rect.width < 8 || rect.height < 8 { continue }
       if rect.contains(point) { return chart }
     }
     return nil
+  }
+
+  /// Frozen rows and columns stay above the chart, so a click there selects
+  /// the cell. The scrollable part of the chart still hits.
+  private func pointIsCoveredByFrozenPane(_ point: NSPoint) -> Bool {
+    OnSheetChartGeometry.frozenPaneCovers(
+      point,
+      contentRect: contentRect,
+      frozenColumnBoundaryX: frozenColumnBoundaryX(),
+      frozenRowBoundaryY: frozenRowBoundaryY(),
+      frozenColumns: frozenColumnCount(),
+      frozenRows: frozenRowCount()
+    )
+  }
+
+  private func frozenPaneCoverRects() -> [NSRect] {
+    OnSheetChartGeometry.frozenPaneCoverRects(
+      contentRect: contentRect,
+      frozenColumnBoundaryX: frozenColumnBoundaryX(),
+      frozenRowBoundaryY: frozenRowBoundaryY(),
+      frozenColumns: frozenColumnCount(),
+      frozenRows: frozenRowCount()
+    )
+  }
+
+  /// Chart cursors stop at the freeze. The pane owns those cells.
+  private func addScrollableCursorRect(_ rect: NSRect, cursor: NSCursor) {
+    let visible = rect.intersection(scrollableCellsClipRect())
+    guard !visible.isNull, visible.width >= 1, visible.height >= 1 else { return }
+    addCursorRect(visible, cursor: cursor)
+  }
+
+  /// Sheet background, frozen cells, pictures, and the freeze divider, in the
+  /// overlay's context. The chart layer is underneath, so where a chart has
+  /// scrolled under the header or the frozen columns, these cells cover it.
+  fileprivate func drawFrozenPanesCoveringCharts(in dirtyRect: NSRect) {
+    let panes = frozenPaneCoverRects()
+    guard !panes.isEmpty, let ctx = NSGraphicsContext.current else { return }
+
+    ctx.saveGraphicsState()
+    let cover = NSBezierPath()
+    for rect in panes {
+      cover.appendRect(rect)
+    }
+    cover.addClip()
+
+    NSColor.windowBackgroundColor.setFill()
+    for rect in panes where dirtyRect.intersects(rect) {
+      rect.fill()
+    }
+    let skipGridlines = visibleRegionIsMostlyBordered()
+    drawFrozenCells(in: dirtyRect)
+    if !skipGridlines {
+      drawFrozenGridLines(in: dirtyRect)
+    }
+    // Pictures stay above frozen cells, including the strip that covers a chart.
+    drawImages(in: dirtyRect)
+    ctx.restoreGraphicsState()
+
+    drawFreezeDividers(in: dirtyRect)
   }
 
   private func drawImageSelectionChrome(in rect: NSRect) {

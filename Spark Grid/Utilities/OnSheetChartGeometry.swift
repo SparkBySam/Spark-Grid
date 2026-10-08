@@ -59,6 +59,63 @@ enum OnSheetChartGeometry {
     )
   }
 
+  /// Viewport rectangles where frozen rows and columns cover a scrolling chart.
+  /// The top rect is the frozen header, full content width, including the
+  /// corner. The left rect is frozen columns below that header. The chart
+  /// keeps the frame from its anchor cells; these rects are only the cover.
+  static func frozenPaneCoverRects(
+    contentRect: CGRect,
+    frozenColumnBoundaryX: CGFloat,
+    frozenRowBoundaryY: CGFloat,
+    frozenColumns: Int,
+    frozenRows: Int
+  ) -> [CGRect] {
+    guard contentRect.width > 0, contentRect.height > 0 else { return [] }
+    guard frozenColumns > 0 || frozenRows > 0 else { return [] }
+    var rects: [CGRect] = []
+    if frozenRows > 0 {
+      let height = min(contentRect.height, max(0, frozenRowBoundaryY - contentRect.minY))
+      if height > 0 {
+        rects.append(CGRect(
+          x: contentRect.minX,
+          y: contentRect.minY,
+          width: contentRect.width,
+          height: height
+        ))
+      }
+    }
+    if frozenColumns > 0 {
+      let width = min(contentRect.width, max(0, frozenColumnBoundaryX - contentRect.minX))
+      let y = frozenRows > 0
+        ? min(contentRect.maxY, max(contentRect.minY, frozenRowBoundaryY))
+        : contentRect.minY
+      let height = contentRect.maxY - y
+      if width > 0, height > 0 {
+        rects.append(CGRect(x: contentRect.minX, y: y, width: width, height: height))
+      }
+    }
+    return rects
+  }
+
+  /// True when `point` is in a frozen row or frozen column, including the
+  /// divider on the boundary. Header bands outside `contentRect` are not panes.
+  static func frozenPaneCovers(
+    _ point: CGPoint,
+    contentRect: CGRect,
+    frozenColumnBoundaryX: CGFloat,
+    frozenRowBoundaryY: CGFloat,
+    frozenColumns: Int,
+    frozenRows: Int
+  ) -> Bool {
+    guard frozenColumns > 0 || frozenRows > 0 else { return false }
+    guard point.x >= contentRect.minX, point.x < contentRect.maxX,
+          point.y >= contentRect.minY, point.y < contentRect.maxY
+    else { return false }
+    if frozenRows > 0, point.y <= frozenRowBoundaryY { return true }
+    if frozenColumns > 0, point.x <= frozenColumnBoundaryX { return true }
+    return false
+  }
+
   /// Edge or corner of a selected chart. `body` is the interior, used to move it.
   enum ChartFrameHandle: Equatable {
     case body
