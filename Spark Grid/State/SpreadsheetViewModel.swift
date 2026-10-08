@@ -949,6 +949,34 @@ final class SpreadsheetViewModel {
     selectedCell.format ?? CellFormat()
   }
 
+  /// Text display shared by every selected cell. Nil when the selection mixes modes.
+  /// Covered merge cells follow the anchor and are not a second mode.
+  var uniformTextDisplay: CellFormat.TextDisplay? {
+    let sheet = activeSheet
+    var uniform: CellFormat.TextDisplay?
+    var counted = 0
+    for range in selectionRanges {
+      let bounds = range.normalized
+      for row in bounds.minRow...bounds.maxRow {
+        for col in bounds.minCol...bounds.maxCol {
+          let address = CellAddress(row: row, col: col)
+          if sheet.isCoveredByMerge(address) { continue }
+          let display = sheet.cell(at: address).format?.textDisplay ?? .overflow
+          counted += 1
+          if let uniform, uniform != display { return nil }
+          uniform = display
+        }
+      }
+    }
+    if counted > 0 { return uniform }
+    return sheet.cell(at: selectionAnchor).format?.textDisplay ?? .overflow
+  }
+
+  /// Label on the wrap toolbar control. A mixed selection does not name Overflow, Wrap, or Clip.
+  var textDisplayToolbarTitle: String {
+    uniformTextDisplay?.toolbarTitle ?? CellFormat.TextDisplay.mixedToolbarTitle
+  }
+
   func toggleBold() { updateSelectedFormat { $0.bold.toggle() } }
   func toggleItalic() { updateSelectedFormat { $0.italic.toggle() } }
   func toggleUnderline() { updateSelectedFormat { $0.underline.toggle() } }

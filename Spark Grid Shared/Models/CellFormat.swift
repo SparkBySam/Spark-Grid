@@ -29,6 +29,18 @@ struct CellFormat: Codable, Equatable, Sendable {
     case overflow
     case wrap
     case clip
+
+    /// Toolbar and menu label for this mode.
+    var toolbarTitle: String {
+      switch self {
+      case .overflow: return "Overflow"
+      case .wrap: return "Wrap"
+      case .clip: return "Clip"
+      }
+    }
+
+    /// Toolbar label when the selection does not share one mode.
+    static let mixedToolbarTitle = "Mixed"
   }
 
   var textDisplay: TextDisplay {

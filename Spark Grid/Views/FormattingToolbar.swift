@@ -340,7 +340,7 @@ struct FormattingToolbar: View {
           .font(.system(size: 13))
       }
 
-      TextDisplayToolbarMenu(viewModel: viewModel, showLabel: showLabels)
+      TextDisplayToolbarMenu(viewModel: viewModel)
 
       RotateToolbarMenu(
         viewModel: viewModel,
@@ -1006,16 +1006,17 @@ private struct BorderStylePreview: View {
 
 private struct TextDisplayToolbarMenu: View {
   @Bindable var viewModel: SpreadsheetViewModel
-  var showLabel: Bool
 
-  private var mode: CellFormat.TextDisplay { viewModel.selectedFormat.textDisplay }
-  private var isActive: Bool { mode != .overflow }
+  /// Nil when the selection mixes modes, so the menu does not check one of them.
+  private var uniform: CellFormat.TextDisplay? { viewModel.uniformTextDisplay }
+  private var title: String { viewModel.textDisplayToolbarTitle }
+  private var isActive: Bool { uniform == .wrap || uniform == .clip }
 
   var body: some View {
-    ToolbarMenuButton(title: "Wrap", showLabel: showLabel, width: 32) {
-      textItem(.overflow, title: "Overflow")
-      textItem(.wrap, title: "Wrap")
-      textItem(.clip, title: "Clip")
+    ToolbarMenuButton(title: title, showLabel: true, width: 32, titleWidth: 64) {
+      textItem(.overflow)
+      textItem(.wrap)
+      textItem(.clip)
     } label: {
       Image(systemName: "text.word.spacing")
         .font(.system(size: 13, weight: isActive ? .semibold : .regular))
@@ -1026,17 +1027,18 @@ private struct TextDisplayToolbarMenu: View {
         )
     }
     .help("Overflow, wrap, or clip text")
+    .accessibilityLabel(title)
   }
 
   @ViewBuilder
-  private func textItem(_ display: CellFormat.TextDisplay, title: String) -> some View {
+  private func textItem(_ display: CellFormat.TextDisplay) -> some View {
     Button {
       viewModel.setTextDisplay(display)
     } label: {
-      if mode == display {
-        Label(title, systemImage: "checkmark")
+      if uniform == display {
+        Label(display.toolbarTitle, systemImage: "checkmark")
       } else {
-        Text(title)
+        Text(display.toolbarTitle)
       }
     }
   }
@@ -1142,6 +1144,8 @@ private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
   let title: String
   var showLabel = false
   var width: CGFloat = 32
+  /// Wider than the icon when the caption is a word like "Overflow".
+  var titleWidth: CGFloat? = nil
   @ViewBuilder var menuContent: () -> MenuContent
   @ViewBuilder var label: () -> Label
 
@@ -1158,7 +1162,7 @@ private struct ToolbarMenuButton<Label: View, MenuContent: View>: View {
             .font(.system(size: 9))
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .frame(width: max(width, 40))
+            .frame(width: titleWidth ?? max(width, 40))
         }
       }
       .frame(minWidth: 40)
