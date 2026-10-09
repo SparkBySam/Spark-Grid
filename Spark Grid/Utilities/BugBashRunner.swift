@@ -70,6 +70,7 @@ enum BugBashRunner {
     results.append(chartCommandFreePlacement())
     results.append(chartSlidesUnderFrozenPanes())
     results.append(MainActor.assumeIsolated { frozenPanesCoverChartPixels() })
+    results.append(MainActor.assumeIsolated { scrolledCellsStayBelowFrozenPanes() })
     results.append(MainActor.assumeIsolated { mergedCellsHideInteriorGridLines() })
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
@@ -2089,6 +2090,111 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "chart layer is above the frozen pane")
     }
     return Result(name: name, passed: true, detail: "frozen header and columns cover Calls by Rep")
+  }
+
+  /// A scrolled row and column that start underneath the freeze must not paint
+  /// over the last frozen row or the last frozen column. The cells just outside
+  /// the panes stay their own color, so the pane overlay did not clear the body.
+  @MainActor
+  private static func scrolledCellsStayBelowFrozenPanes() -> Result {
+    let name = "scrolled cells stay below frozen panes"
+    let header = SpreadsheetGridNSView.baseHeaderSize
+    let rowH = Workbook.defaultRowHeight
+    let colW = Workbook.defaultColumnWidth
+    // snapshotGrid's frame. Scroll matches ensureCellVisible against that size.
+    let viewWidth: CGFloat = 900
+    let viewHeight: CGFloat = 560
+    let frozenRows = 2
+    let frozenCols = 1
+    let boundaryY = header + CGFloat(frozenRows) * rowH
+    let boundaryX = header + CGFloat(frozenCols) * colW
+    // Bottom-aligning row 39 / column O leaves row 18 and column F straddling.
+    let scrollRow = 39
+    let scrollCol = 14
+    let scrollY = header + CGFloat(scrollRow + 1) * rowH - viewHeight
+    let scrollX = header + CGFloat(scrollCol + 1) * colW - viewWidth
+    let straddlingRow = 17
+    let straddlingCol = 5
+    let rowBelow = 20
+
+    func viewY(_ row: Int) -> CGFloat {
+      if row < frozenRows { return header + CGFloat(row) * rowH }
+      return header + CGFloat(row) * rowH - scrollY
+    }
+    func viewX(_ col: Int) -> CGFloat {
+      if col < frozenCols { return header + CGFloat(col) * colW }
+      return header + CGFloat(col) * colW - scrollX
+    }
+    func paint(_ sheet: inout Sheet, row: Int, col: Int, rgb: (CGFloat, CGFloat, CGFloat)) {
+      var format = CellFormat()
+      format.fillColor = CodableColor(red: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+      sheet.setCell(Cell(raw: "", format: format), at: CellAddress(row: row, col: col))
+    }
+
+    var sheet = Sheet(name: "Frozen edge", frozenRows: frozenRows, frozenColumns: frozenCols)
+    for row in 0..<frozenRows {
+      for col in 0...8 {
+        paint(&sheet, row: row, col: col, rgb: (1, 0, 0))
+      }
+    }
+    for col in 0...8 {
+      paint(&sheet, row: straddlingRow, col: col, rgb: (0, 0, 1))
+    }
+    let rowJustBelow = straddlingRow + 1
+    for col in 0...8 {
+      paint(&sheet, row: rowJustBelow, col: col, rgb: (0, 0, 1))
+    }
+    paint(&sheet, row: rowBelow, col: 0, rgb: (0, 1, 0))
+    paint(&sheet, row: rowBelow, col: straddlingCol, rgb: (0, 0, 1))
+
+    let stableRed = NSPoint(x: viewX(6) + colW / 2, y: viewY(0) + rowH / 2)
+    let lastFrozenRow = NSPoint(x: viewX(6) + colW / 2, y: boundaryY - 6)
+    // Mid-cell of the first row fully below the freeze, clear of the divider.
+    let scrolledBelow = NSPoint(x: viewX(6) + colW / 2, y: viewY(rowJustBelow) + rowH / 2)
+    let cornerOverlap = NSPoint(x: boundaryX - 4, y: boundaryY - 6)
+    let lastFrozenColumn = NSPoint(x: boundaryX - 4, y: viewY(rowBelow) + rowH / 2)
+    let scrolledBeside = NSPoint(x: viewX(straddlingCol) + colW / 2, y: viewY(rowBelow) + rowH / 2)
+
+    func isRed(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.redComponent > 0.85 && rgb.greenComponent < 0.2 && rgb.blueComponent < 0.2
+    }
+    func isGreen(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.greenComponent > 0.85 && rgb.redComponent < 0.2 && rgb.blueComponent < 0.2
+    }
+    func isBlue(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.blueComponent > 0.85 && rgb.redComponent < 0.2 && rgb.greenComponent < 0.2
+    }
+    func describe(_ color: NSColor) -> String {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return "nil" }
+      return String(format: "%.2f,%.2f,%.2f", rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+    }
+
+    guard let snap = snapshotGrid(sheet: sheet, prepare: { grid in
+      grid.viewModel?.select(CellAddress(row: scrollRow, col: scrollCol))
+      grid.scrollSelectionIntoView()
+    }) else {
+      return Result(name: name, passed: false, detail: "grid snapshot failed")
+    }
+    let fromTop = [true, false].first { isRed(snap.color(at: stableRed, fromTop: $0)) }
+    guard let fromTop else {
+      return Result(name: name, passed: false, detail: "frozen row 1 was not red")
+    }
+    let rowColor = snap.color(at: lastFrozenRow, fromTop: fromTop)
+    let belowColor = snap.color(at: scrolledBelow, fromTop: fromTop)
+    let cornerColor = snap.color(at: cornerOverlap, fromTop: fromTop)
+    let columnColor = snap.color(at: lastFrozenColumn, fromTop: fromTop)
+    let besideColor = snap.color(at: scrolledBeside, fromTop: fromTop)
+    guard isRed(rowColor), isRed(cornerColor), isGreen(columnColor), isBlue(belowColor), isBlue(besideColor) else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "row \(describe(rowColor)) corner \(describe(cornerColor)) column \(describe(columnColor)) below \(describe(belowColor)) beside \(describe(besideColor))"
+      )
+    }
+    return Result(name: name, passed: true, detail: "last frozen row and column stay above the scrolled cells")
   }
 
   /// A merged range paints as one cell. Interior grid lines disappear, the border

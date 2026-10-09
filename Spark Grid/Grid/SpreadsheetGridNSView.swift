@@ -100,8 +100,11 @@ final class SpreadsheetGridNSView: NSView {
       guard let ctx = NSGraphicsContext.current else { return }
       let local = bounds.intersection(dirtyRect)
       guard !local.isNull else { return }
-      // Clear only this pane. Grid points are in the superview's coordinates.
+      // Clear only this pane. An opaque base stays in this view's coordinates so a
+      // missed redraw cannot leave the last frozen row transparent over the body.
       ctx.cgContext.clear(local)
+      NSColor.windowBackgroundColor.setFill()
+      local.fill()
       ctx.saveGraphicsState()
       let origin = convert(CGPoint.zero, to: grid)
       ctx.cgContext.translateBy(x: -origin.x, y: -origin.y)
@@ -1078,18 +1081,18 @@ final class SpreadsheetGridNSView: NSView {
         drawGridLines(in: dirtyRect)
       }
       drawScrollableOverflowText(in: dirtyRect)
-      drawSelection(in: dirtyRect)
-      drawFormulaReferenceHighlights(in: dirtyRect)
       ctx.restoreGraphicsState()
     }
 
-    // 2. Frozen panes redrawn on top so scrolled content cannot bleed through.
-    //    Subviews paint after this, so the chart layer still covers these cells.
-    //    Pane-sized overlays paint the same panes again above the chart.
+    // 2. Frozen panes redrawn on top so a straddling scrolled row cannot cover
+    //    the last frozen row or column. Subviews paint after this, so the chart
+    //    layer still covers these cells. Pane-sized overlays paint them again
+    //    above the chart — not a full-grid clear.
     if frozenRowCount() > 0 || frozenColumnCount() > 0 {
       if let ctx = NSGraphicsContext.current {
         ctx.saveGraphicsState()
         NSBezierPath(rect: contentRect).addClip()
+        fillFrozenPaneBackgrounds(in: dirtyRect)
         drawFrozenCells(in: dirtyRect)
         if !skipGridlines {
           drawFrozenGridLines(in: dirtyRect)
@@ -1097,6 +1100,14 @@ final class SpreadsheetGridNSView: NSView {
         drawFrozenOverflowText(in: dirtyRect)
         ctx.restoreGraphicsState()
       }
+    }
+
+    if let ctx = NSGraphicsContext.current {
+      ctx.saveGraphicsState()
+      NSBezierPath(rect: contentRect).addClip()
+      drawSelection(in: dirtyRect)
+      drawFormulaReferenceHighlights(in: dirtyRect)
+      ctx.restoreGraphicsState()
     }
 
     // Pictures float above cell fills and gridlines (scrollable + frozen).
@@ -1182,6 +1193,48 @@ final class SpreadsheetGridNSView: NSView {
     )
   }
 
+  /// Opaque sheet background for the dirty slice of each frozen pane. Scrolled
+  /// cells are clipped below the boundary; this still covers strokes and text
+  /// that antialias across the last frozen row or column.
+  private func fillFrozenPaneBackgrounds(in dirtyRect: NSRect) {
+    guard frozenRowCount() > 0 || frozenColumnCount() > 0 else { return }
+    NSColor.windowBackgroundColor.setFill()
+    for rect in [frozenCellsClipRect(), frozenTopStripClipRect(), frozenLeftStripClipRect()] {
+      guard rect.width > 0.5, rect.height > 0.5 else { continue }
+      let hit = rect.intersection(dirtyRect)
+      guard !hit.isNull, hit.width > 0.5, hit.height > 0.5 else { continue }
+      hit.fill()
+    }
+  }
+
+  /// Where a selection or formula highlight may paint. A range that only scrolls
+  /// stays out of the frozen panes, even when its cell rect starts underneath them.
+  private func paneClipRect(for range: CellRange) -> NSRect {
+    var clip = contentRect
+    let n = range.normalized
+    let frozenRows = frozenRowCount()
+    let frozenCols = frozenColumnCount()
+    if frozenRows > 0 {
+      if n.minRow >= frozenRows {
+        let top = max(clip.minY, frozenRowBoundaryY())
+        clip = NSRect(x: clip.minX, y: top, width: clip.width, height: max(0, clip.maxY - top))
+      } else if n.maxRow < frozenRows {
+        let bottom = min(clip.maxY, frozenRowBoundaryY())
+        clip = NSRect(x: clip.minX, y: clip.minY, width: clip.width, height: max(0, bottom - clip.minY))
+      }
+    }
+    if frozenCols > 0, clip.width > 0.5, clip.height > 0.5 {
+      if n.minCol >= frozenCols {
+        let left = max(clip.minX, frozenColumnBoundaryX())
+        clip = NSRect(x: left, y: clip.minY, width: max(0, clip.maxX - left), height: clip.height)
+      } else if n.maxCol < frozenCols {
+        let right = min(clip.maxX, frozenColumnBoundaryX())
+        clip = NSRect(x: clip.minX, y: clip.minY, width: max(0, right - clip.minX), height: clip.height)
+      }
+    }
+    return clip
+  }
+
   private func frozenLeftStripClipRect() -> NSRect {
     let frozenCols = frozenColumnCount()
     guard frozenCols > 0 else { return .zero }
@@ -1253,45 +1306,79 @@ final class SpreadsheetGridNSView: NSView {
     if isSheetSelection, dirtyRect.intersects(columnHeaderClip) {
       selectionFill.setFill()
       columnHeaderClip.fill()
+    }
+    let frozenCols = frozenColumnCount()
+    let columnBoundaryX = frozenCols > 0 ? frozenColumnBoundaryX() : columnHeaderClip.minX
+    let scrollingColumnClip = NSRect(
+      x: columnBoundaryX,
+      y: columnHeaderClip.minY,
+      width: max(0, columnHeaderClip.maxX - columnBoundaryX),
+      height: columnHeaderClip.height
+    )
+    let frozenColumnClip = NSRect(
+      x: headerSize,
+      y: 0,
+      width: max(0, columnBoundaryX - headerSize),
+      height: headerSize
+    )
+    func drawColumnHeaders(_ columns: [Int], clip passClip: NSRect) {
+      guard passClip.width > 0.5, passClip.height > 0.5 else { return }
+      NSGraphicsContext.saveGraphicsState()
+      NSBezierPath(rect: passClip).addClip()
+      for col in columns {
+        let rect = columnHeaderRect(for: col)
+        let onScreen = rect.intersection(columnHeaderClip)
+        let visible = onScreen.intersection(passClip)
+        guard !visible.isNull, !visible.isEmpty, dirtyRect.intersects(visible) else { continue }
+        if !isSheetSelection {
+          let isSelected = isColumnSelected(col)
+          (isSelected ? selectionFill : headerFill).setFill()
+          visible.fill()
+        }
+        let label = A1Notation.columnLabel(for: col) as NSString
+        let size = label.size(withAttributes: attrs)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: visible).addClip()
+        label.draw(
+          at: NSPoint(x: onScreen.midX - size.width / 2, y: onScreen.midY - size.height / 2),
+          withAttributes: attrs
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        if !isSheetSelection, isColumnSelected(col) {
+          accent.setStroke()
+          let border = NSBezierPath()
+          border.lineWidth = 2
+          border.move(to: NSPoint(x: visible.minX + 0.5, y: visible.maxY - 1))
+          border.line(to: NSPoint(x: visible.maxX - 0.5, y: visible.maxY - 1))
+          border.stroke()
+        }
+        gridLine.setStroke()
+        if abs(rect.maxX - columnBoundaryX) > 0.5 {
+          NSBezierPath.strokeLine(from: NSPoint(x: rect.maxX, y: 0), to: NSPoint(x: rect.maxX, y: headerSize))
+        }
+      }
+      NSGraphicsContext.restoreGraphicsState()
+    }
+    // Scrolling headers first. Frozen headers are painted again afterward so a
+    // column that straddles the boundary cannot cover the last frozen column.
+    drawColumnHeaders(headerColumnIndices().filter { $0 >= frozenCols }, clip: scrollingColumnClip)
+    if frozenCols > 0 {
+      (isSheetSelection ? selectionFill : headerFill).setFill()
+      frozenColumnClip.fill()
+      drawColumnHeaders((0..<frozenCols).filter { shouldDrawColumnHeader($0) }, clip: frozenColumnClip)
+      gridLine.setStroke()
+      NSBezierPath.strokeLine(
+        from: NSPoint(x: columnBoundaryX, y: 0),
+        to: NSPoint(x: columnBoundaryX, y: headerSize)
+      )
+    }
+    if isSheetSelection, dirtyRect.intersects(columnHeaderClip) {
       accent.setStroke()
       let border = NSBezierPath()
       border.lineWidth = 2
       border.move(to: NSPoint(x: columnHeaderClip.minX, y: columnHeaderClip.maxY - 1))
       border.line(to: NSPoint(x: columnHeaderClip.maxX, y: columnHeaderClip.maxY - 1))
       border.stroke()
-    }
-    let colRange = headerColumnIndices()
-    for col in colRange {
-      let rect = columnHeaderRect(for: col)
-      let drawRect = rect.intersection(columnHeaderClip)
-      guard !drawRect.isEmpty, dirtyRect.intersects(drawRect) else { continue }
-      if !isSheetSelection {
-        let isSelected = isColumnSelected(col)
-        (isSelected ? selectionFill : headerFill).setFill()
-        drawRect.fill()
-      }
-      let label = A1Notation.columnLabel(for: col) as NSString
-      let size = label.size(withAttributes: attrs)
-      label.draw(
-        at: NSPoint(x: drawRect.midX - size.width / 2, y: drawRect.midY - size.height / 2),
-        withAttributes: attrs
-      )
-      if !isSheetSelection {
-        let isSelected = isColumnSelected(col)
-        if isSelected {
-          accent.setStroke()
-          let border = NSBezierPath()
-          border.lineWidth = 2
-          border.move(to: NSPoint(x: drawRect.minX + 0.5, y: drawRect.maxY - 1))
-          border.line(to: NSPoint(x: drawRect.maxX - 0.5, y: drawRect.maxY - 1))
-          border.stroke()
-        }
-      }
-      gridLine.setStroke()
-      let boundaryX = frozenColumnBoundaryX()
-      if abs(rect.maxX - boundaryX) > 0.5 {
-        NSBezierPath.strokeLine(from: NSPoint(x: rect.maxX, y: 0), to: NSPoint(x: rect.maxX, y: headerSize))
-      }
     }
     NSGraphicsContext.restoreGraphicsState()
 
@@ -1324,45 +1411,78 @@ final class SpreadsheetGridNSView: NSView {
     if isSheetSelection, dirtyRect.intersects(rowHeaderClip) {
       selectionFill.setFill()
       rowHeaderClip.fill()
+    }
+    let frozenRows = frozenRowCount()
+    let rowBoundaryY = frozenRows > 0 ? frozenRowBoundaryY() : rowHeaderClip.minY
+    let scrollingRowClip = NSRect(
+      x: rowHeaderClip.minX,
+      y: rowBoundaryY,
+      width: rowHeaderClip.width,
+      height: max(0, rowHeaderClip.maxY - rowBoundaryY)
+    )
+    let frozenRowClip = NSRect(
+      x: 0,
+      y: headerSize,
+      width: headerSize,
+      height: max(0, rowBoundaryY - headerSize)
+    )
+    func drawRowHeaders(_ rows: [Int], clip passClip: NSRect) {
+      guard passClip.width > 0.5, passClip.height > 0.5 else { return }
+      NSGraphicsContext.saveGraphicsState()
+      NSBezierPath(rect: passClip).addClip()
+      for row in rows {
+        let rect = rowHeaderRect(for: row)
+        let onScreen = rect.intersection(rowHeaderClip)
+        let visible = onScreen.intersection(passClip)
+        guard !visible.isNull, !visible.isEmpty, dirtyRect.intersects(visible) else { continue }
+        if !isSheetSelection {
+          let isSelected = isRowSelected(row)
+          (isSelected ? selectionFill : headerFill).setFill()
+          visible.fill()
+        }
+        let label = "\(row + 1)" as NSString
+        let size = label.size(withAttributes: attrs)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: visible).addClip()
+        label.draw(
+          at: NSPoint(x: onScreen.midX - size.width / 2, y: onScreen.midY - size.height / 2),
+          withAttributes: attrs
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        if !isSheetSelection, isRowSelected(row) {
+          accent.setStroke()
+          let border = NSBezierPath()
+          border.lineWidth = 2
+          border.move(to: NSPoint(x: visible.maxX - 1, y: visible.minY + 0.5))
+          border.line(to: NSPoint(x: visible.maxX - 1, y: visible.maxY - 0.5))
+          border.stroke()
+        }
+        gridLine.setStroke()
+        if abs(rect.maxY - rowBoundaryY) > 0.5 {
+          NSBezierPath.strokeLine(from: NSPoint(x: 0, y: rect.maxY), to: NSPoint(x: headerSize, y: rect.maxY))
+        }
+      }
+      NSGraphicsContext.restoreGraphicsState()
+    }
+    // Same order as columns: scrolling labels cannot remain on the last frozen row.
+    drawRowHeaders(headerRowIndices().filter { $0 >= frozenRows }, clip: scrollingRowClip)
+    if frozenRows > 0 {
+      (isSheetSelection ? selectionFill : headerFill).setFill()
+      frozenRowClip.fill()
+      drawRowHeaders((0..<frozenRows).filter { shouldDrawRowHeader($0) }, clip: frozenRowClip)
+      gridLine.setStroke()
+      NSBezierPath.strokeLine(
+        from: NSPoint(x: 0, y: rowBoundaryY),
+        to: NSPoint(x: headerSize, y: rowBoundaryY)
+      )
+    }
+    if isSheetSelection, dirtyRect.intersects(rowHeaderClip) {
       accent.setStroke()
       let border = NSBezierPath()
       border.lineWidth = 2
       border.move(to: NSPoint(x: rowHeaderClip.maxX - 1, y: rowHeaderClip.minY))
       border.line(to: NSPoint(x: rowHeaderClip.maxX - 1, y: rowHeaderClip.maxY))
       border.stroke()
-    }
-    let rowRange = headerRowIndices()
-    for row in rowRange {
-      let rect = rowHeaderRect(for: row)
-      let drawRect = rect.intersection(rowHeaderClip)
-      guard !drawRect.isEmpty, dirtyRect.intersects(drawRect) else { continue }
-      if !isSheetSelection {
-        let isSelected = isRowSelected(row)
-        (isSelected ? selectionFill : headerFill).setFill()
-        drawRect.fill()
-      }
-      let label = "\(row + 1)" as NSString
-      let size = label.size(withAttributes: attrs)
-      label.draw(
-        at: NSPoint(x: drawRect.midX - size.width / 2, y: drawRect.midY - size.height / 2),
-        withAttributes: attrs
-      )
-      if !isSheetSelection {
-        let isSelected = isRowSelected(row)
-        if isSelected {
-          accent.setStroke()
-          let border = NSBezierPath()
-          border.lineWidth = 2
-          border.move(to: NSPoint(x: drawRect.maxX - 1, y: drawRect.minY + 0.5))
-          border.line(to: NSPoint(x: drawRect.maxX - 1, y: drawRect.maxY - 0.5))
-          border.stroke()
-        }
-      }
-      gridLine.setStroke()
-      let boundaryY = frozenRowBoundaryY()
-      if abs(rect.maxY - boundaryY) > 0.5 {
-        NSBezierPath.strokeLine(from: NSPoint(x: 0, y: rect.maxY), to: NSPoint(x: headerSize, y: rect.maxY))
-      }
     }
     NSGraphicsContext.restoreGraphicsState()
   }
@@ -2980,16 +3100,28 @@ final class SpreadsheetGridNSView: NSView {
       )
 
       // Full selection outline (Excel-familiar), not an L-anchor on the active cell.
+      // Clip to the pane that owns the range so a scrolled cell starting under
+      // the freeze cannot stroke across the last frozen row or column.
+      let clip = paneClipRect(for: range)
+      guard clip.width > 0.5, clip.height > 0.5, dirtyRect.intersects(clip) else { continue }
       if isCellRectInContentArea(fullRect), dirtyRect.intersects(fullRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: clip).addClip()
         NSColor.controlAccentColor.setStroke()
         let border = NSBezierPath(rect: fullRect.insetBy(dx: 0.5, dy: 0.5))
         border.lineWidth = index == ranges.count - 1 ? 2 : 1.5
         border.stroke()
+        NSGraphicsContext.restoreGraphicsState()
       }
     }
 
-    if !isMulti {
+    if !isMulti, let range = ranges.last {
+      let clip = paneClipRect(for: range)
+      guard clip.width > 0.5, clip.height > 0.5 else { return }
+      NSGraphicsContext.saveGraphicsState()
+      NSBezierPath(rect: clip).addClip()
       drawFillHandle(in: dirtyRect)
+      NSGraphicsContext.restoreGraphicsState()
     }
   }
 
@@ -3034,10 +3166,14 @@ final class SpreadsheetGridNSView: NSView {
         width: bottomRight.maxX - topLeft.minX,
         height: bottomRight.maxY - topLeft.minY
       )
+      let clip = paneClipRect(for: highlight.cellRange)
+      guard clip.width > 0.5, clip.height > 0.5, dirtyRect.intersects(clip) else { continue }
       guard isCellRectInContentArea(fillRect), dirtyRect.intersects(fillRect) else { continue }
 
       let color = highlight.color
       let isFocused = focused == index || (focused == nil && highlights.count == 1)
+      NSGraphicsContext.saveGraphicsState()
+      NSBezierPath(rect: clip).addClip()
       color.withAlphaComponent(isFocused ? 0.16 : 0.08).setFill()
       fillRect.fill()
 
@@ -3047,6 +3183,7 @@ final class SpreadsheetGridNSView: NSView {
       // Sheets-style dashed range outline
       border.setLineDash([4, 3], count: 2, phase: 0)
       border.stroke()
+      NSGraphicsContext.restoreGraphicsState()
     }
   }
 
