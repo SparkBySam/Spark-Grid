@@ -78,6 +78,8 @@ struct CellFormatViewerSheet: View {
   @State private var rulePrimary = ""
   @State private var ruleSecondary = ""
   @State private var ruleError: String?
+  @State private var ruleBold = false
+  @State private var ruleBoldTouched = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -350,6 +352,15 @@ struct CellFormatViewerSheet: View {
             .textFieldStyle(.roundedBorder)
         }
       }
+      if rule.predicate.usesFontStyle {
+        Toggle("Bold", isOn: Binding(
+          get: { ruleBold },
+          set: { newValue in
+            ruleBold = newValue
+            ruleBoldTouched = true
+          }
+        ))
+      }
       if let ruleError {
         Text(ruleError)
           .font(.caption)
@@ -430,13 +441,22 @@ struct CellFormatViewerSheet: View {
     ruleRangeText = rule.range.a1Label
     rulePrimary = rule.predicate.primaryEditText ?? ""
     ruleSecondary = rule.predicate.secondaryEditText ?? ""
+    ruleBold = rule.style.bold == true
+    ruleBoldTouched = false
     ruleError = nil
   }
 
   private func updateRule(_ rule: ConditionalFormatRule) {
-    guard let edited = rule.edited(rangeText: ruleRangeText, primary: rulePrimary, secondary: ruleSecondary) else {
+    guard var edited = rule.edited(rangeText: ruleRangeText, primary: rulePrimary, secondary: ruleSecondary) else {
       ruleError = "That range or value doesn’t match this rule."
       return
+    }
+    if rule.predicate.usesFontStyle {
+      edited.style = edited.style.withBoldCheckbox(
+        isOn: ruleBold,
+        previous: rule.style.bold,
+        touched: ruleBoldTouched
+      )
     }
     ruleError = nil
     viewModel.replaceConditionalFormatRule(edited)
