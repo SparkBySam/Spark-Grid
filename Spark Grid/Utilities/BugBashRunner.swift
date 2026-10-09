@@ -75,6 +75,7 @@ enum BugBashRunner {
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
     results.append(everydayFormulas())
+    results.append(nowAndTodayUseLocalTime())
     results.append(lookupFormulas())
     results.append(formulaFunctionPicker())
     results.append(excelFormatCodes())
@@ -3207,13 +3208,117 @@ enum BugBashRunner {
       }
     }
 
-    let before = ExcelDate.serialWithTime(from: Date())
+    let before = ExcelDate.localSerialWithTime(from: Date())
     let now = evalFormula("=NOW()", cells: [:])
-    let after = ExcelDate.serialWithTime(from: Date())
+    let after = ExcelDate.localSerialWithTime(from: Date())
     guard case .number(let serial) = now, serial >= before - 0.00001, serial <= after + 0.00001 else {
       return Result(name: name, passed: false, detail: "NOW got \(now.displayString)")
     }
     return Result(name: name, passed: true, detail: "criteria, wildcards, text, and rounding")
+  }
+
+  /// `NOW`/`TODAY` must show the Mac wall clock. Cell formats read serials in UTC,
+  /// so 2026-10-09 00:52:30 UTC is 10/8/2026 17:52:30 in Pacific time, not the UTC string.
+  private static func nowAndTodayUseLocalTime() -> Result {
+    let name = "NOW and TODAY use local time"
+    func fail(_ detail: String) -> Result {
+      Result(name: name, passed: false, detail: detail)
+    }
+    func shown(_ serial: Double, code: String) -> String {
+      ExcelFormatCode.formatted(serial, code: code, fractionDigits: nil) ?? ""
+    }
+
+    guard let losAngeles = TimeZone(identifier: "America/Los_Angeles"),
+          let tokyo = TimeZone(identifier: "Asia/Tokyo")
+    else {
+      return fail("missing time zone identifier")
+    }
+    guard let utcEvening = utcDate(year: 2026, month: 10, day: 9, hour: 0, minute: 52, second: 30),
+          let utcMorning = utcDate(year: 2026, month: 10, day: 9, hour: 7, minute: 30, second: 0)
+    else {
+      return fail("could not build UTC instants")
+    }
+
+    let probed = ExcelDate.wallClock()
+    if abs(probed.date.timeIntervalSinceNow) > 2 {
+      return fail("wall clock is not the Mac clock")
+    }
+    if probed.timeZone.secondsFromGMT(for: probed.date) != TimeZone.current.secondsFromGMT(for: probed.date) {
+      return fail("wall clock zone \(probed.timeZone.identifier) is not the Mac zone")
+    }
+
+    let losAngelesNow = ExcelDate.localSerialWithTime(from: utcEvening, timeZone: losAngeles)
+    let tokyoNow = ExcelDate.localSerialWithTime(from: utcEvening, timeZone: tokyo)
+    let utcNow = ExcelDate.serialWithTime(from: utcEvening)
+    if shown(losAngelesNow, code: "m/d/yyyy hh:mm:ss") != "10/8/2026 17:52:30" {
+      return fail("Los Angeles \(shown(losAngelesNow, code: "m/d/yyyy hh:mm:ss"))")
+    }
+    if shown(tokyoNow, code: "m/d/yyyy hh:mm:ss") != "10/9/2026 09:52:30" {
+      return fail("Tokyo \(shown(tokyoNow, code: "m/d/yyyy hh:mm:ss"))")
+    }
+    if shown(utcNow, code: "m/d/yyyy hh:mm:ss") != "10/9/2026 00:52:30" {
+      return fail("UTC serial display changed to \(shown(utcNow, code: "m/d/yyyy hh:mm:ss"))")
+    }
+    if abs(losAngelesNow - utcNow) < 1e-8 {
+      return fail("Los Angeles serial matched UTC")
+    }
+    let losAngelesToday = ExcelDate.localSerial(from: utcEvening, timeZone: losAngeles)
+    if shown(losAngelesToday, code: "m/d/yyyy") != "10/8/2026" {
+      return fail("TODAY Los Angeles \(shown(losAngelesToday, code: "m/d/yyyy"))")
+    }
+
+    let originalClock = ExcelDate.wallClock
+    let previousTZ = getenv("TZ").map { String(cString: $0) }
+    defer {
+      ExcelDate.wallClock = originalClock
+      if let previousTZ {
+        setenv("TZ", previousTZ, 1)
+      } else {
+        unsetenv("TZ")
+      }
+      NSTimeZone.resetSystemTimeZone()
+    }
+
+    ExcelDate.wallClock = {
+      (date: utcEvening, timeZone: losAngeles)
+    }
+    guard case .number(let nowSerial) = evalFormula("=NOW()", cells: [:]) else {
+      return fail("NOW did not return a number")
+    }
+    guard case .number(let todaySerial) = evalFormula("=TODAY()", cells: [:]) else {
+      return fail("TODAY did not return a number")
+    }
+    if shown(nowSerial, code: "m/d/yyyy hh:mm:ss") != "10/8/2026 17:52:30" {
+      return fail("NOW displayed \(shown(nowSerial, code: "m/d/yyyy hh:mm:ss"))")
+    }
+    if shown(todaySerial, code: "m/d/yyyy") != "10/8/2026" {
+      return fail("TODAY displayed \(shown(todaySerial, code: "m/d/yyyy"))")
+    }
+
+    setenv("TZ", "America/Los_Angeles", 1)
+    NSTimeZone.resetSystemTimeZone()
+    let switched = TimeZone.current.secondsFromGMT(for: utcEvening)
+    if switched != losAngeles.secondsFromGMT(for: utcEvening) {
+      return fail("process zone \(TimeZone.current.identifier) did not switch to America/Los_Angeles")
+    }
+    if shown(utcNow, code: "m/d/yyyy hh:mm:ss") != "10/9/2026 00:52:30" {
+      return fail("date formats followed the Mac zone")
+    }
+
+    ExcelDate.wallClock = {
+      (date: utcMorning, timeZone: losAngeles)
+    }
+    guard case .number(let year) = evalFormula("=YEAR(NOW())", cells: [:]),
+          case .number(let month) = evalFormula("=MONTH(NOW())", cells: [:]),
+          case .number(let day) = evalFormula("=DAY(NOW())", cells: [:]),
+          case .string(let text) = evalFormula("=TEXT(NOW(),\"M/D/YYYY\")", cells: [:])
+    else {
+      return fail("date parts did not evaluate")
+    }
+    if year != 2026 || month != 10 || day != 9 || text != "10/9/2026" {
+      return fail("local morning parts \(year)-\(month)-\(day) text \(text)")
+    }
+    return Result(name: name, passed: true, detail: "Mac wall clock, not UTC")
   }
 
   private static func lookupFormulas() -> Result {
@@ -4824,13 +4929,19 @@ enum BugBashRunner {
   }
 
   private static func octoberEighth2026() -> Date? {
+    utcDate(year: 2026, month: 10, day: 8, hour: 12, minute: 0, second: 0)
+  }
+
+  private static func utcDate(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int) -> Date? {
     var components = DateComponents()
     components.calendar = Calendar(identifier: .gregorian)
     components.timeZone = TimeZone(secondsFromGMT: 0)
-    components.year = 2026
-    components.month = 10
-    components.day = 8
-    components.hour = 12
+    components.year = year
+    components.month = month
+    components.day = day
+    components.hour = hour
+    components.minute = minute
+    components.second = second
     return components.date
   }
 }
