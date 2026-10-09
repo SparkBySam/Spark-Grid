@@ -132,6 +132,58 @@ enum CellTextLayout {
     return min(maxWrappedRowHeight, max(0, height))
   }
 
+  /// Wrapped height for a single row (scaled). Zero when the row has no wrap cells.
+  static func wrappedRowHeight(
+    row: Int,
+    sheet: Sheet,
+    defaultRowHeight: CGFloat,
+    defaultColumnWidth: CGFloat,
+    zoom: CGFloat = 1,
+    columnWidth: (Int) -> CGFloat,
+    displayText: (CellAddress) -> String,
+    extraWidthInset: (CellAddress) -> CGFloat = { _ in 0 }
+  ) -> CGFloat {
+    var required: CGFloat = 0
+    for (address, cell) in sheet.cells where address.row == row {
+      guard let format = cell.format, format.textDisplay == .wrap else { continue }
+      if sheet.isCoveredByMerge(address) { continue }
+      let text = displayText(address)
+      guard !text.isEmpty else { continue }
+      let width = columnSpanWidth(
+        for: address,
+        sheet: sheet,
+        columnWidth: columnWidth,
+        defaultColumnWidth: defaultColumnWidth
+      )
+      let needed = preferredWrappedRowHeight(
+        text: text,
+        format: format,
+        columnWidth: width,
+        zoom: zoom,
+        extraWidthInset: extraWidthInset(address)
+      )
+      guard needed > 0 else { continue }
+      if let merge = sheet.mergeContaining(address) {
+        let rows = merge.normalized
+        if rows.minRow == rows.maxRow {
+          required = max(required, needed)
+        } else {
+          var others: CGFloat = 0
+          if rows.minRow < rows.maxRow {
+            for mergeRow in (rows.minRow + 1)...rows.maxRow {
+              others += sheet.rowHeight(for: mergeRow, default: defaultRowHeight) * zoom
+            }
+          }
+          let anchorNeed = max(0, needed - others)
+          required = max(required, anchorNeed)
+        }
+      } else {
+        required = max(required, needed)
+      }
+    }
+    return required
+  }
+
   /// Minimum row heights (already scaled by `zoom`) required by wrapped cells. The tallest cell on a row wins.
   static func wrappedRowHeights(
     sheet: Sheet,
