@@ -705,7 +705,8 @@ final class CellFormatCodeTextField: NSTextField {
     }
   }
 
-  /// Plain-text paste at the caret. Does not write the workbook.
+  /// Plain-text paste at the caret, drawn with the same attributes as typed text.
+  /// Replacing into the text storage keeps a black foreground from the pasteboard.
   func insertPasteboardReplacingSelection() {
     guard let pasted = NSPasteboard.general.string(forType: .string) else { return }
     if let editor = ensureEditor(), let storage = editor.textStorage {
@@ -716,16 +717,42 @@ final class CellFormatCodeTextField: NSTextField {
       } else if NSMaxRange(range) > ns.length {
         range.length = max(0, ns.length - range.location)
       }
+      let typed = attributesMatchingTypedText(in: editor)
+      let inserted = NSRange(location: range.location, length: (pasted as NSString).length)
       storage.beginEditing()
       storage.replaceCharacters(in: range, with: pasted)
+      if inserted.length > 0, NSMaxRange(inserted) <= storage.length {
+        storage.setAttributes(typed, range: inserted)
+      }
       storage.endEditing()
       let caret = range.location + (pasted as NSString).length
       editor.setSelectedRange(NSRange(location: min(caret, (editor.string as NSString).length), length: 0))
+      editor.typingAttributes = typed
       editor.didChangeText()
+      if inserted.length > 0, let storage = editor.textStorage, NSMaxRange(inserted) <= storage.length {
+        storage.beginEditing()
+        storage.setAttributes(typed, range: inserted)
+        storage.endEditing()
+      }
     } else {
       stringValue = pasted
     }
     onTextChange?(liveText)
+  }
+
+  /// Font and foreground used for characters typed in this field.
+  private func attributesMatchingTypedText(in editor: NSTextView) -> [NSAttributedString.Key: Any] {
+    var attrs = editor.typingAttributes
+    if attrs[.font] == nil {
+      attrs[.font] = editor.font ?? font ?? NSFont.monospacedSystemFont(
+        ofSize: NSFont.systemFontSize,
+        weight: .regular
+      )
+    }
+    if attrs[.foregroundColor] == nil {
+      attrs[.foregroundColor] = textColor ?? NSColor.labelColor
+    }
+    return attrs
   }
 
   override func becomeFirstResponder() -> Bool {
