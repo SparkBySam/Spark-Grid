@@ -33,6 +33,8 @@ struct FormulaEvaluator {
   var sheetExtent: SheetExtentLookup = { _ in (maxRow: 999, maxCol: 25) }
   /// Cell being evaluated (`COLUMN()` / `ROW()` with no argument).
   var evaluationOrigin: CellAddress?
+  /// Shared range snapshots for COUNTIFS / SUMIFS-style functions (one scan per range per batch).
+  var aggregateRangeCache: FormulaAggregateRangeCache?
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {

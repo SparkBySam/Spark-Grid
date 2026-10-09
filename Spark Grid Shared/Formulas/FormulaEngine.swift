@@ -8,6 +8,9 @@ final class FormulaEngine {
   private var dependencyRanges: [CellAddress: [CellRange]] = [:] // formula -> ranges read at eval
   private var dependents: [CellAddress: Set<CellAddress>] = [:] // cell -> formulas that use it
   private var revision: Int = 0
+  private let aggregateRangeCache = FormulaAggregateRangeCache()
+  /// Results from `recalculateEntireWorkbook` (and incremental edits), keyed by sheet name.
+  private var recalculatedSheetValues: [String: [CellAddress: CellValue]] = [:]
 
   private var workbook = Workbook.empty
   private var activeSheetName = "Sheet1"
@@ -32,6 +35,9 @@ final class FormulaEngine {
       return cached
     }
     let raw = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if FormulaSyntax.isFormula(raw), let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
+      return stored
+    }
     if FormulaSyntax.isFormula(raw), let snapshot = sheet.cell(at: address).importedFormulaResult {
       let value = CellValue.fromImportedExcel(snapshot)
       valueCache[address] = value
@@ -87,13 +93,37 @@ final class FormulaEngine {
       guard let self else { return (999, 25) }
       return self.extent(for: sheetName ?? self.activeSheetName)
     }
+    evaluator.aggregateRangeCache = aggregateRangeCache
     return evaluator.evaluate(expr)
+  }
+
+  /// Re-evaluates every formula on every sheet (does not block open; call explicitly after import).
+  @discardableResult
+  func recalculateEntireWorkbook(_ workbook: Workbook) -> TimeInterval {
+    let start = CFAbsoluteTimeGetCurrent()
+    self.workbook = workbook
+    recalculatedSheetValues.removeAll(keepingCapacity: true)
+    aggregateRangeCache.invalidateAll()
+    foreignCache.removeAll(keepingCapacity: true)
+    foreignVisiting.removeAll(keepingCapacity: true)
+    for sheet in workbook.sheets {
+      activeSheetName = sheet.name
+      clearFormulaGraph()
+      for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+        ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
+      }
+      recalculateAll(sheet: sheet)
+      mergeRecalculatedValues(for: sheet)
+    }
+    revision &+= 1
+    return CFAbsoluteTimeGetCurrent() - start
   }
 
   /// Full rebuild for the workbook's active sheet (also enables cross-sheet lookups).
   /// When `recalculate` is false, formulas evaluate on demand via `displayValue` (faster open / sheet switch).
   func rebuild(workbook: Workbook, recalculate: Bool = false) {
-    clear()
+    clearFormulaGraph()
+    aggregateRangeCache.invalidateAll()
     self.workbook = workbook
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
@@ -119,6 +149,9 @@ final class FormulaEngine {
   func cellsDidChange(_ addresses: [CellAddress], sheet: Sheet) {
     guard !addresses.isEmpty else { return }
     foreignCache.removeAll(keepingCapacity: true)
+    for address in addresses {
+      aggregateRangeCache.invalidate(sheetName: activeSheetName, address: address)
+    }
     var dirty: Set<CellAddress> = []
     for address in addresses {
       ingest(address: address, raw: sheet.cell(at: address).raw, sheet: sheet, recalculate: false)
@@ -142,9 +175,38 @@ final class FormulaEngine {
       }
     }
     recalculate(addresses: seen, sheet: sheet)
+    mergeRecalculatedValues(for: sheet)
   }
 
   func clear() {
+    clearFormulaGraph()
+    aggregateRangeCache.invalidateAll()
+    recalculatedSheetValues.removeAll(keepingCapacity: true)
+    revision &+= 1
+  }
+
+  private func sheetKey(_ name: String) -> String {
+    name.lowercased()
+  }
+
+  private func storedRecalculatedValue(sheetName: String, at address: CellAddress) -> CellValue? {
+    recalculatedSheetValues[sheetKey(sheetName)]?[address]
+  }
+
+  private func mergeRecalculatedValues(for sheet: Sheet) {
+    let key = sheetKey(sheet.name)
+    var merged = recalculatedSheetValues[key] ?? [:]
+    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+      if let value = valueCache[address] {
+        merged[address] = value
+      }
+    }
+    if !merged.isEmpty {
+      recalculatedSheetValues[key] = merged
+    }
+  }
+
+  private func clearFormulaGraph() {
     valueCache.removeAll(keepingCapacity: true)
     formulaAST.removeAll(keepingCapacity: true)
     dependencies.removeAll(keepingCapacity: true)
@@ -152,7 +214,6 @@ final class FormulaEngine {
     dependents.removeAll(keepingCapacity: true)
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
-    revision &+= 1
   }
 
   // MARK: - Private
@@ -284,6 +345,7 @@ final class FormulaEngine {
         guard let self else { return (999, 25) }
         return self.extent(for: sheetName ?? self.activeSheetName)
       }
+      evaluator.aggregateRangeCache = aggregateRangeCache
       valueCache[address] = evaluator.evaluate(expr)
     }
 
@@ -333,6 +395,12 @@ final class FormulaEngine {
     if let cached = foreignCache[key] {
       return cached
     }
+    let rawForStored = sheet.cell(at: address).raw
+    if FormulaSyntax.isFormula(rawForStored),
+       let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
+      foreignCache[key] = stored
+      return stored
+    }
     if foreignVisiting.contains(key) {
       return .error(.cycle)
     }
@@ -373,6 +441,7 @@ final class FormulaEngine {
         guard let self else { return (999, 25) }
         return self.extent(for: sheetName ?? sheet.name)
       }
+      evaluator.aggregateRangeCache = aggregateRangeCache
       let value = evaluator.evaluate(expr)
       foreignCache[key] = value
       return value

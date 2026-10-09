@@ -61,14 +61,12 @@ extension FormulaEvaluator {
     let criterion = evaluate(args[1])
     if case .error = criterion { return criterion }
     let test = criteriaTest(from: criterion)
-    var count = 0
     var memo: [LookupMemoKey: CellValue] = [:]
-    for row in 0..<anchor.rows {
-      for col in 0..<anchor.cols {
-        let value = lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
-        if aggregateRowError(value) { continue }
-        if criteriaMatch(value, test) { count += 1 }
-      }
+    let values = snapshotValues(anchor: anchor, memo: &memo)
+    var count = 0
+    for value in values {
+      if aggregateRowError(value) { continue }
+      if criteriaMatch(value, test) { count += 1 }
     }
     return .number(Double(count))
   }
@@ -94,26 +92,26 @@ extension FormulaEvaluator {
       tests.append((anchor, criteriaTest(from: criterion)))
       index += 2
     }
-    var count = 0
     var memo: [LookupMemoKey: CellValue] = [:]
-    for row in 0..<first.rows {
-      for col in 0..<first.cols {
-        var matched = true
-        for (anchor, test) in tests {
-          let value = lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
-          if aggregateRowError(value) {
-            matched = false
-            break
-          }
-          if !criteriaMatch(value, test) {
-            matched = false
-            break
-          }
+    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
+    let count = rangeSnapshots[0].count
+    var matches = 0
+    for offset in 0..<count {
+      var matched = true
+      for (rangeIndex, test) in tests.map(\.1).enumerated() {
+        let value = rangeSnapshots[rangeIndex][offset]
+        if aggregateRowError(value) {
+          matched = false
+          break
         }
-        if matched { count += 1 }
+        if !criteriaMatch(value, test) {
+          matched = false
+          break
+        }
       }
+      if matched { matches += 1 }
     }
-    return .number(Double(count))
+    return .number(Double(matches))
   }
 
   func evalCOUNTBLANK(_ args: [FormulaExpr]) -> CellValue {
@@ -300,30 +298,61 @@ extension FormulaEvaluator {
       tests.append((anchor, criteriaTest(from: criterion)))
       index += 2
     }
+    var memo: [LookupMemoKey: CellValue] = [:]
+    let sumValues = snapshotValues(anchor: sum, memo: &memo)
+    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
+    let cellCount = sumValues.count
+    var total = 0.0
+    var matchCount = 0
+    for offset in 0..<cellCount {
+      var matched = true
+      for (rangeIndex, test) in tests.map(\.1).enumerated() {
+        let value = rangeSnapshots[rangeIndex][offset]
+        if aggregateRowError(value) {
+          matched = false
+          break
+        }
+        if !criteriaMatch(value, test) {
+          matched = false
+          break
+        }
+      }
+      guard matched else { continue }
+      let value = sumValues[offset]
+      if aggregateRowError(value) { continue }
+      guard let number = numericAddend(value) else { continue }
+      total += number
+      matchCount += 1
+    }
+    switch kind {
+    case .sum:
+      return .number(total)
+    case .average:
+      guard matchCount > 0 else { return .error(.divZero) }
+      return .number(total / Double(matchCount))
+    }
+  }
+
+  private func reduceMatches(
+    criteria: RangeAnchor,
+    test: CriteriaTest,
+    values: RangeAnchor,
+    kind: AggregateKind
+  ) -> CellValue {
+    var memo: [LookupMemoKey: CellValue] = [:]
+    let criteriaValues = snapshotValues(anchor: criteria, memo: &memo)
+    let sumValues = snapshotValues(anchor: values, memo: &memo)
     var total = 0.0
     var count = 0
-    var memo: [LookupMemoKey: CellValue] = [:]
-    for row in 0..<sum.rows {
-      for col in 0..<sum.cols {
-        var matched = true
-        for (anchor, test) in tests {
-          let value = lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
-          if aggregateRowError(value) {
-            matched = false
-            break
-          }
-          if !criteriaMatch(value, test) {
-            matched = false
-            break
-          }
-        }
-        guard matched else { continue }
-        let value = lookupForAggregate(cellRef(sum, row: row, col: col), memo: &memo)
-        if aggregateRowError(value) { continue }
-        guard let number = numericAddend(value) else { continue }
-        total += number
-        count += 1
-      }
+    for offset in 0..<criteriaValues.count {
+      let candidate = criteriaValues[offset]
+      if aggregateRowError(candidate) { continue }
+      guard criteriaMatch(candidate, test) else { continue }
+      let value = sumValues[offset]
+      if aggregateRowError(value) { continue }
+      guard let number = numericAddend(value) else { continue }
+      total += number
+      count += 1
     }
     switch kind {
     case .sum:
@@ -334,34 +363,33 @@ extension FormulaEvaluator {
     }
   }
 
-  private func reduceMatches(
-    criteria: RangeAnchor,
-    test: CriteriaTest,
-    values: RangeAnchor,
-    kind: AggregateKind
-  ) -> CellValue {
-    var total = 0.0
-    var count = 0
-    var memo: [LookupMemoKey: CellValue] = [:]
-    for row in 0..<criteria.rows {
-      for col in 0..<criteria.cols {
-        let candidate = lookupForAggregate(cellRef(criteria, row: row, col: col), memo: &memo)
-        if aggregateRowError(candidate) { continue }
-        guard criteriaMatch(candidate, test) else { continue }
-        let value = lookupForAggregate(cellRef(values, row: row, col: col), memo: &memo)
-        if aggregateRowError(value) { continue }
-        guard let number = numericAddend(value) else { continue }
-        total += number
-        count += 1
+  private func snapshotValues(
+    anchor: RangeAnchor,
+    memo: inout [LookupMemoKey: CellValue]
+  ) -> [CellValue] {
+    let count = anchor.rows * anchor.cols
+    let key = AggregateRangeKey(
+      sheet: anchor.sheet,
+      row: anchor.row,
+      col: anchor.col,
+      rows: anchor.rows,
+      cols: anchor.cols
+    )
+    if let cache = aggregateRangeCache {
+      return cache.rowMajorValues(key: key, count: count) { index in
+        let row = index / anchor.cols
+        let col = index % anchor.cols
+        return lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
       }
     }
-    switch kind {
-    case .sum:
-      return .number(total)
-    case .average:
-      guard count > 0 else { return .error(.divZero) }
-      return .number(total / Double(count))
+    var values: [CellValue] = []
+    values.reserveCapacity(count)
+    for row in 0..<anchor.rows {
+      for col in 0..<anchor.cols {
+        values.append(lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo))
+      }
     }
+    return values
   }
 
   // MARK: - Criteria
