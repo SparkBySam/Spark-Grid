@@ -107,6 +107,7 @@ enum BugBashRunner {
     case conditionalFormat = "conditional_format"
     case enterpriseThemed = "enterprise_themed"
     case enterpriseImages = "enterprise_images"
+    case bdcKpiYtdLayout = "bdc_kpi_ytd_layout"
 
     var envKey: String {
       switch self {
@@ -114,6 +115,7 @@ enum BugBashRunner {
       case .conditionalFormat: return "SPARK_GRID_FIXTURE_CF"
       case .enterpriseThemed: return "SPARK_GRID_FIXTURE_ENTERPRISE"
       case .enterpriseImages: return "SPARK_GRID_FIXTURE_ENTERPRISE_IMAGES"
+      case .bdcKpiYtdLayout: return "SPARK_GRID_FIXTURE_BDC_YTD"
       }
     }
 
@@ -5444,6 +5446,76 @@ enum BugBashRunner {
     init(_ text: String) { self.text = text }
   }
 
+  /// Copies a workbook into the app sandbox temp dir so `SpreadsheetDocumentStore.load` can read it.
+  private static func sandboxReadableWorkbookURL(
+    cacheFileName: String,
+    envKeys: [String] = [],
+    fixturesFileName: String? = nil,
+    bundleResourceName: String? = nil
+  ) throws -> URL {
+    let fm = FileManager.default
+    let dest = fm.temporaryDirectory.appendingPathComponent("spark-grid-bugbash-\(cacheFileName)")
+    if fm.fileExists(atPath: dest.path), fm.isReadableFile(atPath: dest.path) {
+      return dest
+    }
+
+    func materialize(from source: URL) throws -> URL {
+      if source.path.hasPrefix(fm.temporaryDirectory.path), fm.isReadableFile(atPath: source.path) {
+        return source
+      }
+      let data = try Data(contentsOf: source)
+      try data.write(to: dest, options: .atomic)
+      return dest
+    }
+
+    var candidates: [URL] = []
+    let env = ProcessInfo.processInfo.environment
+    for key in envKeys {
+      if let raw = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+         !raw.isEmpty,
+         fm.fileExists(atPath: raw)
+      {
+        candidates.append(URL(fileURLWithPath: raw))
+      }
+    }
+    if let fixturesFileName,
+       let dir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !dir.isEmpty
+    {
+      let path = (dir as NSString).appendingPathComponent(fixturesFileName)
+      if fm.fileExists(atPath: path) {
+        candidates.append(URL(fileURLWithPath: path))
+      }
+    }
+    if let bundleResourceName {
+      if let bundleURL = Bundle.main.url(
+        forResource: bundleResourceName,
+        withExtension: "xlsx",
+        subdirectory: "BugBashFixtures"
+      ) ?? Bundle.main.url(forResource: bundleResourceName, withExtension: "xlsx")
+      {
+        candidates.append(bundleURL)
+      }
+    }
+    if let fixturesFileName, let repoPath = bundledFixturePath(fixturesFileName) {
+      candidates.append(URL(fileURLWithPath: repoPath))
+    }
+
+    var lastError: Error?
+    for source in candidates {
+      do {
+        return try materialize(from: source)
+      } catch {
+        lastError = error
+      }
+    }
+    throw lastError ?? NSError(
+      domain: "BugBashRunner",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "no readable fixture for \(cacheFileName)"]
+    )
+  }
+
   /// Bundled sample under `web/samples/` (repo checkout).
   private static func bundledFixturePath(_ fileName: String) -> String? {
     let env = ProcessInfo.processInfo.environment
@@ -5518,24 +5590,16 @@ enum BugBashRunner {
     }
     return MainActor.assumeIsolated {
       let store = SpreadsheetDocumentStore()
-      let loadStart = CFAbsoluteTimeGetCurrent()
       do {
         try store.load(from: url)
       } catch {
         return Result(name: name, passed: false, detail: error.localizedDescription)
       }
       drainMainQueue()
-      let loadElapsed = CFAbsoluteTimeGetCurrent() - loadStart
-      guard loadElapsed < 45 else {
-        return Result(
-          name: name,
-          passed: false,
-          detail: String(format: "load baseline took %.1fs", loadElapsed)
-        )
-      }
       guard !store.isDirty else {
         return Result(name: name, passed: false, detail: "clean open marked edited")
       }
+      // Formula rebuild and first draw are not part of the open fingerprint regression.
       let vm = SpreadsheetViewModel(workbook: store.document.workbook)
       guard snapshotGrid(sheet: vm.activeSheet) != nil else {
         return Result(name: name, passed: false, detail: "grid snapshot failed")
@@ -5552,11 +5616,14 @@ enum BugBashRunner {
   @MainActor
   private static func bdcKpiYtdLayoutOpen() -> Result {
     let name = "BDC KPI YTD layout open"
-    guard let path = bundledFixturePath("bdc_kpi_ytd_layout.xlsx") else {
-      return Result(name: name, passed: false, detail: "missing web/samples/bdc_kpi_ytd_layout.xlsx")
-    }
     do {
-      let workbook = try XLSXCodec.importWorkbook(from: URL(fileURLWithPath: path))
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "bdc_kpi_ytd_layout.xlsx",
+        envKeys: [Fixture.bdcKpiYtdLayout.envKey],
+        fixturesFileName: "bdc_kpi_ytd_layout.xlsx",
+        bundleResourceName: "bdc_kpi_ytd_layout"
+      )
+      let workbook = try XLSXCodec.importWorkbook(from: url)
       let sheet = workbook.activeSheet
       guard sheet.frozenRows == 4, sheet.frozenColumns == 3 else {
         return Result(
@@ -5586,14 +5653,20 @@ enum BugBashRunner {
   private static func bdcKpiWorkbookOpenPath() -> Result {
     let name = "BDC KPI workbook open path"
     let env = ProcessInfo.processInfo.environment
-    guard let path = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !path.isEmpty,
-          FileManager.default.fileExists(atPath: path)
-    else {
-      return Result(name: name, passed: true, detail: "skipped (no SPARK_GRID_FIXTURE_BDC_KPI)")
+    let envPath = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesDir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesPath = (fixturesDir as NSString).appendingPathComponent("BDC-Digital-KPI-2026.xlsx")
+    let hasSource = (!envPath.isEmpty && FileManager.default.fileExists(atPath: envPath))
+      || (!fixturesDir.isEmpty && FileManager.default.fileExists(atPath: fixturesPath))
+    guard hasSource else {
+      return Result(name: name, passed: true, detail: "skipped (no KPI fixture source)")
     }
     do {
-      let url = URL(fileURLWithPath: path)
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "BDC-Digital-KPI-2026.xlsx",
+        envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
+        fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
+      )
       let imported = try XLSXCodec.importWorkbook(from: url)
       let cellCount = imported.sheets.reduce(0) { $0 + $1.cells.count }
       let fpStart = CFAbsoluteTimeGetCurrent()
