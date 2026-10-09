@@ -3102,7 +3102,7 @@ final class SpreadsheetGridNSView: NSView {
       // Full selection outline (Excel-familiar), not an L-anchor on the active cell.
       // Clip to the pane that owns the range so a scrolled cell starting under
       // the freeze cannot stroke across the last frozen row or column.
-      let clip = paneClipRect(for: n)
+      let clip = paneClipRect(for: range)
       guard clip.width > 0.5, clip.height > 0.5, dirtyRect.intersects(clip) else { continue }
       if isCellRectInContentArea(fullRect), dirtyRect.intersects(fullRect) {
         NSGraphicsContext.saveGraphicsState()
@@ -3116,7 +3116,7 @@ final class SpreadsheetGridNSView: NSView {
     }
 
     if !isMulti, let range = ranges.last {
-      let clip = paneClipRect(for: range.normalized)
+      let clip = paneClipRect(for: range)
       guard clip.width > 0.5, clip.height > 0.5 else { return }
       NSGraphicsContext.saveGraphicsState()
       NSBezierPath(rect: clip).addClip()
