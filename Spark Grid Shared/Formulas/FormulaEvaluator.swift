@@ -302,15 +302,16 @@ struct FormulaEvaluator {
       return evalXMATCH(args)
     case "TODAY":
       guard args.isEmpty else { return .error(.value) }
-      return .number(ExcelDate.serial(from: Date()))
+      let clock = ExcelDate.wallClock()
+      return .number(ExcelDate.localSerial(from: clock.date, timeZone: clock.timeZone))
     case "DATE":
       return evalDATE(args)
     case "YEAR":
-      return evalDatePart(args) { Calendar.current.component(.year, from: $0) }
+      return evalDatePart(args) { ExcelDate.utcComponent(.year, from: $0) }
     case "MONTH":
-      return evalDatePart(args) { Calendar.current.component(.month, from: $0) }
+      return evalDatePart(args) { ExcelDate.utcComponent(.month, from: $0) }
     case "DAY":
-      return evalDatePart(args) { Calendar.current.component(.day, from: $0) }
+      return evalDatePart(args) { ExcelDate.utcComponent(.day, from: $0) }
     case "SUMIF":
       return evalSUMIF(args)
     case "AVERAGEIF":
@@ -349,7 +350,8 @@ struct FormulaEvaluator {
       return evalDirectionalRound(args, mode: .down)
     case "NOW":
       guard args.isEmpty else { return .error(.value) }
-      return .number(ExcelDate.serialWithTime(from: Date()))
+      let clock = ExcelDate.wallClock()
+      return .number(ExcelDate.localSerialWithTime(from: clock.date, timeZone: clock.timeZone))
     default:
       return .error(.name)
     }
@@ -386,6 +388,7 @@ struct FormulaEvaluator {
         guard let date = ExcelDate.date(from: number) else { return .error(.value) }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         switch pattern {
         case "YYYY-MM-DD", "YYYY/MM/DD":
           formatter.dateFormat = "yyyy-MM-dd"
