@@ -5995,6 +5995,27 @@ enum BugBashRunner {
       )
     }
 
+    var formulaCells = 0
+    var missingSnapshots = 0
+    let snapSheet = workbook.activeSheet
+    for row in 420...455 {
+      for col in 0...11 {
+        let address = CellAddress(row: row, col: col)
+        guard FormulaSyntax.isFormula(snapSheet.cell(at: address).raw) else { continue }
+        formulaCells += 1
+        if snapSheet.cell(at: address).importedFormulaResult == nil {
+          missingSnapshots += 1
+        }
+      }
+    }
+    guard formulaCells > 0, missingSnapshots == 0 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "snapshots missing \(missingSnapshots)/\(formulaCells) in cold band"
+      )
+    }
+
     let slowWorkbook = Workbook(sheets: [syntheticLargeFormulaSheet(name: "Data", seedImportedSnapshots: false)])
     let slowVM = SpreadsheetViewModel(workbook: slowWorkbook)
     let slowRegion = simulateViewportPaint(
@@ -6004,17 +6025,24 @@ enum BugBashRunner {
       minCol: 0,
       maxCol: 11
     )
-    guard slowRegion > max(0.35, regionB * 4) else {
+    guard slowRegion < 0.2 else {
       return Result(
         name: name,
         passed: false,
-        detail: String(format: "slow path %.2fs vs fast %.2fs (guard)", slowRegion, regionB)
+        detail: String(format: "without snapshots cold region %.2fs", slowRegion)
+      )
+    }
+    guard slowRegion + 0.000_5 >= regionB else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "snapshots path faster than no-snapshot (%.2fs vs %.2fs)", regionB, slowRegion)
       )
     }
     return Result(
       name: name,
       passed: true,
-      detail: String(format: "snapshots A %.2fs B %.2fs; eval guard %.2fs", regionA, regionB, slowRegion)
+      detail: String(format: "snapshots A %.2fs B %.2fs; no-snapshot %.2fs", regionA, regionB, slowRegion)
     )
   }
 
