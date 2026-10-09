@@ -524,12 +524,82 @@ enum ExcelFormatCode {
     guard let date = ExcelDate.date(from: serial) else {
       return CellValue.number(serial).displayString
     }
-    let pattern = dateFormatterPattern(from: section)
+    var pattern = dateFormatterPattern(from: section)
+    if patternContainsUnquotedAMPM(pattern) {
+      // DateFormatter follows the Mac 24-hour clock and drops AM/PM (`h:mm AM/PM` → 17:52).
+      // The hour and marker are literals so the code stays 12-hour.
+      let hour = ExcelDate.utcComponent(.hour, from: date)
+      pattern = patternLocking12HourClock(pattern, hour: hour)
+    }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     formatter.dateFormat = pattern
     return formatter.string(from: date)
+  }
+
+  /// `h:mm AM/PM` becomes a pattern with an unquoted `a`. Quoted text such as `"AM"` does not.
+  private static func patternContainsUnquotedAMPM(_ pattern: String) -> Bool {
+    var quoted = false
+    let chars = Array(pattern)
+    var index = 0
+    while index < chars.count {
+      if chars[index] == "'" {
+        if quoted, index + 1 < chars.count, chars[index + 1] == "'" {
+          index += 2
+          continue
+        }
+        quoted.toggle()
+        index += 1
+        continue
+      }
+      if !quoted, chars[index] == "a" || chars[index] == "A" { return true }
+      index += 1
+    }
+    return false
+  }
+
+  /// Replaces hour and AM/PM tokens with the 12-hour clock (`5` and `PM`). Other tokens stay.
+  private static func patternLocking12HourClock(_ pattern: String, hour: Int) -> String {
+    let remainder = hour % 12
+    let clock = remainder == 0 ? 12 : remainder
+    let marker = hour >= 12 ? "PM" : "AM"
+    var output = ""
+    let chars = Array(pattern)
+    var index = 0
+    var quoted = false
+    while index < chars.count {
+      let character = chars[index]
+      if character == "'" {
+        if quoted, index + 1 < chars.count, chars[index + 1] == "'" {
+          output += "''"
+          index += 2
+          continue
+        }
+        quoted.toggle()
+        output.append(character)
+        index += 1
+        continue
+      }
+      if !quoted, character == "h" || character == "H" {
+        var end = index + 1
+        while end < chars.count, chars[end] == character { end += 1 }
+        let text = (end - index) >= 2 ? String(format: "%02d", clock) : String(clock)
+        output += quotedLiteral(text)
+        index = end
+        continue
+      }
+      if !quoted, character == "a" || character == "A" {
+        var end = index + 1
+        while end < chars.count, chars[end] == character { end += 1 }
+        output += quotedLiteral(marker)
+        index = end
+        continue
+      }
+      output.append(character)
+      index += 1
+    }
+    return output
   }
 
   private static func elapsedString(serial: Double, pattern: String) -> String? {

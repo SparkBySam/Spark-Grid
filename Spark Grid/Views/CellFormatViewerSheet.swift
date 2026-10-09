@@ -72,7 +72,7 @@ struct CellFormatViewerSheet: View {
   @State private var category: Category = .general
   @State private var codeText = ""
   @State private var loadedKey = ""
-  @FocusState private var codeFieldFocused: Bool
+  @State private var formatFieldFocusToken = 0
   @State private var selectedRuleID: UUID?
   @State private var ruleRangeText = ""
   @State private var rulePrimary = ""
@@ -227,11 +227,12 @@ struct CellFormatViewerSheet: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
           if category == .custom {
-            TextField("Format code", text: $codeText, prompt: Text("#,##0.00;(#,##0.00);0;@"))
-              .textFieldStyle(.roundedBorder)
-              .font(.system(.body, design: .monospaced))
-              .focused($codeFieldFocused)
-              .onSubmit { applyDraft() }
+            CellFormatCodeField(
+              text: $codeText,
+              focusToken: formatFieldFocusToken,
+              onSubmit: { runPanel(.apply) }
+            )
+            .frame(height: 24)
           }
           sampleBox
         }
@@ -384,12 +385,9 @@ struct CellFormatViewerSheet: View {
         reloadCode(force: true)
       }
       Spacer()
-      Button("Close") { onDismiss() }
+      Button("Close") { runPanel(.close) }
         .keyboardShortcut(.cancelAction)
-      Button("Apply") {
-        applyDraft()
-        reloadCode(force: true)
-      }
+      Button("Apply") { runPanel(.apply) }
       .keyboardShortcut(.defaultAction)
       .buttonStyle(.borderedProminent)
     }
@@ -424,8 +422,12 @@ struct CellFormatViewerSheet: View {
     }
     category = next
     if next == .custom {
-      codeFieldFocused = true
+      formatFieldFocusToken += 1
     }
+  }
+
+  private func runPanel(_ action: CellFormatPanelAction) {
+    CellFormatPanel.perform(action, store: applyDraft, close: onDismiss)
   }
 
   private func applyDraft() {
@@ -535,5 +537,241 @@ enum CellFormatViewerPresenter {
     } else {
       sheetWindow.makeKeyAndOrderFront(nil)
     }
+  }
+}
+
+/// Apply stores the draft and closes the panel. Close dismisses without storing.
+/// Clicking the parent window leaves the sheet up and does not store.
+enum CellFormatPanelAction: Equatable {
+  case apply
+  case close
+  case clickAway
+}
+
+struct CellFormatPanelResult: Equatable {
+  var storesDraft: Bool
+  var closes: Bool
+}
+
+enum CellFormatPanel {
+  static func result(for action: CellFormatPanelAction) -> CellFormatPanelResult {
+    switch action {
+    case .apply:
+      return CellFormatPanelResult(storesDraft: true, closes: true)
+    case .close:
+      return CellFormatPanelResult(storesDraft: false, closes: true)
+    case .clickAway:
+      return CellFormatPanelResult(storesDraft: false, closes: false)
+    }
+  }
+
+  static func perform(
+    _ action: CellFormatPanelAction,
+    store: () -> Void,
+    close: () -> Void
+  ) {
+    let outcome = result(for: action)
+    if outcome.storesDraft { store() }
+    if outcome.closes { close() }
+  }
+}
+
+/// Edit → Paste and the grid’s ⌘V. The format field takes the paste while it is editing.
+enum SpreadsheetPaste {
+  static func perform(on viewModel: SpreadsheetViewModel?) {
+    if CellFormatCodePaste.pasteIntoEditingField() { return }
+    viewModel?.pasteFromPasteboard()
+  }
+}
+
+enum CellFormatCodePaste {
+  static weak var editingField: CellFormatCodeTextField?
+
+  /// Swallows the paste shortcut while the format field is editing so the grid command does not run.
+  static func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+    guard let field = editingField, AppSettings.shared.matches(.paste, event: event) else {
+      return event
+    }
+    field.insertPasteboardReplacingSelection()
+    return nil
+  }
+
+  static func pasteIntoEditingField() -> Bool {
+    guard let field = editingField ?? fieldFromFirstResponder() else { return false }
+    field.insertPasteboardReplacingSelection()
+    return true
+  }
+
+  private static func fieldFromFirstResponder() -> CellFormatCodeTextField? {
+    let responder = NSApp.keyWindow?.firstResponder
+    if let field = responder as? CellFormatCodeTextField { return field }
+    if let textView = responder as? NSTextView, let field = textView.delegate as? CellFormatCodeTextField {
+      return field
+    }
+    return nil
+  }
+}
+
+/// Format code box. Paste stays in this field while it is focused.
+private struct CellFormatCodeField: NSViewRepresentable {
+  @Binding var text: String
+  var focusToken: Int
+  var onSubmit: () -> Void
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(text: $text, onSubmit: onSubmit)
+  }
+
+  func makeNSView(context: Context) -> CellFormatCodeTextField {
+    let field = CellFormatCodeTextField()
+    field.stringValue = text
+    field.placeholderString = "#,##0.00;(#,##0.00);0;@"
+    field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    field.isBezeled = true
+    field.bezelStyle = .roundedBezel
+    field.delegate = context.coordinator
+    field.cell?.isScrollable = true
+    field.cell?.wraps = false
+    field.cell?.lineBreakMode = .byClipping
+    field.setAccessibilityLabel("Format code")
+    field.onTextChange = { context.coordinator.text = $0 }
+    return field
+  }
+
+  func updateNSView(_ field: CellFormatCodeTextField, context: Context) {
+    context.coordinator.onSubmit = onSubmit
+    field.onTextChange = { context.coordinator.text = $0 }
+    field.delegate = context.coordinator
+    if field.liveText != text {
+      field.replaceLiveText(text)
+    }
+    if focusToken != context.coordinator.appliedFocusToken {
+      context.coordinator.appliedFocusToken = focusToken
+      if focusToken != 0 {
+        DispatchQueue.main.async {
+          field.window?.makeFirstResponder(field)
+        }
+      }
+    }
+  }
+
+  final class Coordinator: NSObject, NSTextFieldDelegate {
+    @Binding var text: String
+    var onSubmit: () -> Void
+    var appliedFocusToken = 0
+
+    init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+      _text = text
+      self.onSubmit = onSubmit
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+      guard let field = notification.object as? CellFormatCodeTextField else { return }
+      text = field.liveText
+    }
+
+    func control(
+      _ control: NSControl,
+      textView: NSTextView,
+      doCommandBy commandSelector: Selector
+    ) -> Bool {
+      if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+        onSubmit()
+        return true
+      }
+      return false
+    }
+  }
+}
+
+final class CellFormatCodeTextField: NSTextField {
+  var onTextChange: ((String) -> Void)?
+  private var pasteMonitor: Any?
+
+  var isInterceptingPaste: Bool { pasteMonitor != nil }
+
+  var liveText: String {
+    if let editor = currentEditor() as? NSTextView { return editor.string }
+    return stringValue
+  }
+
+  func replaceLiveText(_ text: String) {
+    if let editor = currentEditor() as? NSTextView {
+      if editor.string != text {
+        editor.string = text
+      }
+    } else if stringValue != text {
+      stringValue = text
+    }
+  }
+
+  /// Plain-text paste at the caret. Does not write the workbook.
+  func insertPasteboardReplacingSelection() {
+    guard let pasted = NSPasteboard.general.string(forType: .string) else { return }
+    if let editor = ensureEditor(), let storage = editor.textStorage {
+      let ns = editor.string as NSString
+      var range = editor.selectedRange()
+      if range.location == NSNotFound || range.location > ns.length {
+        range = NSRange(location: ns.length, length: 0)
+      } else if NSMaxRange(range) > ns.length {
+        range.length = max(0, ns.length - range.location)
+      }
+      storage.beginEditing()
+      storage.replaceCharacters(in: range, with: pasted)
+      storage.endEditing()
+      let caret = range.location + (pasted as NSString).length
+      editor.setSelectedRange(NSRange(location: min(caret, (editor.string as NSString).length), length: 0))
+      editor.didChangeText()
+    } else {
+      stringValue = pasted
+    }
+    onTextChange?(liveText)
+  }
+
+  override func becomeFirstResponder() -> Bool {
+    let ok = super.becomeFirstResponder()
+    if ok { beginInterceptingPaste() }
+    return ok
+  }
+
+  override func textDidBeginEditing(_ notification: Notification) {
+    beginInterceptingPaste()
+    super.textDidBeginEditing(notification)
+  }
+
+  override func textDidEndEditing(_ notification: Notification) {
+    endInterceptingPaste()
+    super.textDidEndEditing(notification)
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    if window == nil {
+      endInterceptingPaste()
+    }
+  }
+
+  private func beginInterceptingPaste() {
+    CellFormatCodePaste.editingField = self
+    guard pasteMonitor == nil else { return }
+    pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      CellFormatCodePaste.handleKeyDown(event)
+    }
+  }
+
+  private func endInterceptingPaste() {
+    if CellFormatCodePaste.editingField === self {
+      CellFormatCodePaste.editingField = nil
+    }
+    if let pasteMonitor {
+      NSEvent.removeMonitor(pasteMonitor)
+      self.pasteMonitor = nil
+    }
+  }
+
+  private func ensureEditor() -> NSTextView? {
+    if let editor = currentEditor() as? NSTextView { return editor }
+    window?.makeFirstResponder(self)
+    return currentEditor() as? NSTextView
   }
 }
