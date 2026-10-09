@@ -5919,7 +5919,7 @@ enum BugBashRunner {
     else { return nil }
     let target = address.a1
     for row in rows {
-      for cell in row.cells where cell.reference?.description == target {
+      for cell in row.cells where cell.reference.description == target {
         guard let raw = cell.value else { return nil }
         return Double(raw)
       }
