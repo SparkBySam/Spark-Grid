@@ -39,7 +39,7 @@ final class SpreadsheetPrintNSView: NSView {
       if wb.sheets.indices.contains(wb.activeSheetIndex) {
         wb.sheets[wb.activeSheetIndex] = sheet
       }
-      engine.rebuild(workbook: wb)
+      engine.rebuild(workbook: wb, recalculate: true)
     } else {
       engine.rebuild(sheet: sheet)
     }

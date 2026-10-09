@@ -196,6 +196,9 @@ enum BugBashRunner {
       let workbook = try XLSXCodec.importWorkbook(from: url)
       let elapsed = CFAbsoluteTimeGetCurrent() - start
       let cellCount = workbook.sheets.reduce(0) { $0 + $1.cells.count }
+      let formulaCount = workbook.sheets.reduce(0) { partial, sheet in
+        partial + sheet.cells.values.filter { FormulaSyntax.isFormula($0.raw) }.count
+      }
       guard elapsed < 300 else {
         return Result(
           name: name,
@@ -203,10 +206,17 @@ enum BugBashRunner {
           detail: String(format: "import took %.1fs for %d cells", elapsed, cellCount)
         )
       }
+      guard formulaCount >= 48_000 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "expected ~48191 formulas after shared expansion, got \(formulaCount)"
+        )
+      }
       return Result(
         name: name,
         passed: true,
-        detail: String(format: "%d cells imported in %.1fs", cellCount, elapsed)
+        detail: String(format: "%d cells, %d formulas imported in %.1fs", cellCount, formulaCount, elapsed)
       )
     } catch {
       return Result(name: name, passed: false, detail: error.localizedDescription)
@@ -3673,7 +3683,7 @@ enum BugBashRunner {
     sheet.setCell(Cell(raw: formula), at: result)
     let engine = FormulaEngine()
     let workbook = Workbook(sheets: [sheet])
-    engine.rebuild(workbook: workbook)
+    engine.rebuild(workbook: workbook, recalculate: true)
     return engine.displayValue(at: result, sheet: workbook.activeSheet)
   }
 
@@ -3863,7 +3873,7 @@ enum BugBashRunner {
       let data = try XLSXCodec.exportWorkbook(workbook)
       let roundTrip = try XLSXCodec.importWorkbook(from: data)
       let engine = FormulaEngine()
-      engine.rebuild(workbook: roundTrip)
+      engine.rebuild(workbook: roundTrip, recalculate: true)
       let summed = engine.displayValue(at: CellAddress(row: 0, col: 2), sheet: roundTrip.activeSheet)
       if summed != .number(30) || roundTrip.namedRange(named: "Sales") == nil {
         return Result(name: name, passed: false, detail: "exported Sales resolved to \(summed.displayString)")
@@ -3909,7 +3919,7 @@ enum BugBashRunner {
       formulaSheet.setCell(Cell(raw: "=Broken"), at: CellAddress(row: 3, col: 0))
       withFormula.activeSheet = formulaSheet
       let patchedEngine = FormulaEngine()
-      patchedEngine.rebuild(workbook: withFormula)
+      patchedEngine.rebuild(workbook: withFormula, recalculate: true)
       let total = patchedEngine.displayValue(at: CellAddress(row: 0, col: 2), sheet: withFormula.activeSheet)
       let rateValue = patchedEngine.displayValue(at: CellAddress(row: 1, col: 2), sheet: withFormula.activeSheet)
       let offsetValue = patchedEngine.displayValue(at: CellAddress(row: 3, col: 0), sheet: withFormula.activeSheet)
