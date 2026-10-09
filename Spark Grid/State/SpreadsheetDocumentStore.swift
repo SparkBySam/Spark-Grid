@@ -30,7 +30,7 @@ final class SpreadsheetDocumentStore {
   #endif
 
   init() {
-    savedFingerprint = try? JSONEncoder().encode(SpreadsheetDocument().workbook)
+    savedFingerprint = WorkbookFingerprint.data(for: SpreadsheetDocument().workbook)
   }
 
   var displayTitle: String {
@@ -288,7 +288,7 @@ final class SpreadsheetDocumentStore {
   }
 
   private func fingerprint(of workbook: Workbook) -> Data? {
-    try? JSONEncoder().encode(workbook)
+    WorkbookFingerprint.data(for: workbook)
   }
 
   private func noteRecent(_ url: URL) {

@@ -91,6 +91,9 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { cellTextWrapLayout() })
     results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
     results.append(MainActor.assumeIsolated { unsavedPromptOnce() })
+    results.append(largeWorkbookOpenBaseline())
+    results.append(MainActor.assumeIsolated { bdcKpiYtdLayoutOpen() })
+    results.append(MainActor.assumeIsolated { bdcKpiWorkbookOpenPath() })
     results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
     results.append(editorSpellChecking())
     return results
@@ -104,6 +107,7 @@ enum BugBashRunner {
     case conditionalFormat = "conditional_format"
     case enterpriseThemed = "enterprise_themed"
     case enterpriseImages = "enterprise_images"
+    case bdcKpiYtdLayout = "bdc_kpi_ytd_layout"
 
     var envKey: String {
       switch self {
@@ -111,6 +115,7 @@ enum BugBashRunner {
       case .conditionalFormat: return "SPARK_GRID_FIXTURE_CF"
       case .enterpriseThemed: return "SPARK_GRID_FIXTURE_ENTERPRISE"
       case .enterpriseImages: return "SPARK_GRID_FIXTURE_ENTERPRISE_IMAGES"
+      case .bdcKpiYtdLayout: return "SPARK_GRID_FIXTURE_BDC_YTD"
       }
     }
 
@@ -5439,6 +5444,255 @@ enum BugBashRunner {
   private final class SpellCheckTextBox {
     var text: String
     init(_ text: String) { self.text = text }
+  }
+
+  /// Copies a workbook into the app sandbox temp dir so `SpreadsheetDocumentStore.load` can read it.
+  private static func sandboxReadableWorkbookURL(
+    cacheFileName: String,
+    envKeys: [String] = [],
+    fixturesFileName: String? = nil,
+    bundleResourceName: String? = nil
+  ) throws -> URL {
+    let fm = FileManager.default
+    let dest = fm.temporaryDirectory.appendingPathComponent("spark-grid-bugbash-\(cacheFileName)")
+    if fm.fileExists(atPath: dest.path), fm.isReadableFile(atPath: dest.path) {
+      return dest
+    }
+
+    func materialize(from source: URL) throws -> URL {
+      if source.path.hasPrefix(fm.temporaryDirectory.path), fm.isReadableFile(atPath: source.path) {
+        return source
+      }
+      let data = try Data(contentsOf: source)
+      try data.write(to: dest, options: .atomic)
+      return dest
+    }
+
+    var candidates: [URL] = []
+    let env = ProcessInfo.processInfo.environment
+    for key in envKeys {
+      if let raw = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+         !raw.isEmpty,
+         fm.fileExists(atPath: raw)
+      {
+        candidates.append(URL(fileURLWithPath: raw))
+      }
+    }
+    if let fixturesFileName,
+       let dir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !dir.isEmpty
+    {
+      let path = (dir as NSString).appendingPathComponent(fixturesFileName)
+      if fm.fileExists(atPath: path) {
+        candidates.append(URL(fileURLWithPath: path))
+      }
+    }
+    if let bundleResourceName {
+      if let bundleURL = Bundle.main.url(
+        forResource: bundleResourceName,
+        withExtension: "xlsx",
+        subdirectory: "BugBashFixtures"
+      ) ?? Bundle.main.url(forResource: bundleResourceName, withExtension: "xlsx")
+      {
+        candidates.append(bundleURL)
+      }
+    }
+    if let fixturesFileName, let repoPath = bundledFixturePath(fixturesFileName) {
+      candidates.append(URL(fileURLWithPath: repoPath))
+    }
+
+    var lastError: Error?
+    for source in candidates {
+      do {
+        return try materialize(from: source)
+      } catch {
+        lastError = error
+      }
+    }
+    throw lastError ?? NSError(
+      domain: "BugBashRunner",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "no readable fixture for \(cacheFileName)"]
+    )
+  }
+
+  /// Bundled sample under `web/samples/` (repo checkout).
+  private static func bundledFixturePath(_ fileName: String) -> String? {
+    let env = ProcessInfo.processInfo.environment
+    let relative = "web/samples/\(fileName)"
+    if let root = env["SPARK_GRID_REPO_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !root.isEmpty
+    {
+      let path = (root as NSString).appendingPathComponent(relative)
+      if FileManager.default.fileExists(atPath: path) { return path }
+    }
+    let fromSource = URL(fileURLWithPath: #file)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("web/samples/\(fileName)")
+      .path
+    if FileManager.default.fileExists(atPath: fromSource) { return fromSource }
+    let cwd = (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(relative)
+    if FileManager.default.fileExists(atPath: cwd) { return cwd }
+    return nil
+  }
+
+  private static func syntheticLargeWorkbook() -> Workbook {
+    var cells: [CellAddress: Cell] = [:]
+    for row in 0..<800 {
+      for col in 0..<200 {
+        cells[CellAddress(row: row, col: col)] = Cell(raw: "1")
+      }
+    }
+    var summary = Sheet(
+      name: "YTD Summary",
+      cells: cells,
+      frozenRows: 4,
+      frozenColumns: 3,
+      mergedRanges: [
+        CellRange(start: .origin, end: CellAddress(row: 0, col: 24)),
+        CellRange(start: CellAddress(row: 1, col: 0), end: CellAddress(row: 1, col: 24)),
+      ]
+    )
+    summary.setCell(Cell(raw: "=IFERROR(COUNTIFS(Config!$C:$C,\"x\"),0)"), at: CellAddress(row: 9, col: 5))
+    var config = Sheet(name: "Config")
+    config.setCell(Cell(raw: "x"), at: CellAddress(row: 0, col: 2))
+    return Workbook(sheets: [summary, config], activeSheetIndex: 0)
+  }
+
+  /// BDC KPI-scale workbooks used to JSON-encode the entire model twice on open for dirty
+  /// baselines, spiking memory and jetsam-ing the Mac app. Streaming fingerprint must finish.
+  private static func largeWorkbookOpenBaseline() -> Result {
+    let name = "large workbook open baseline"
+    let workbook = syntheticLargeWorkbook()
+    let cellCount = workbook.sheets.reduce(0) { $0 + $1.cells.count }
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("spark-grid-large-open-\(UUID().uuidString).xlsx")
+    defer { try? FileManager.default.removeItem(at: url) }
+    do {
+      try XLSXCodec.exportWorkbook(workbook).write(to: url)
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+    let fingerprintStart = CFAbsoluteTimeGetCurrent()
+    let fp = WorkbookFingerprint.data(for: workbook)
+    let fingerprintElapsed = CFAbsoluteTimeGetCurrent() - fingerprintStart
+    guard fp.count == 32 else {
+      return Result(name: name, passed: false, detail: "fingerprint length \(fp.count)")
+    }
+    guard fingerprintElapsed < 20 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "fingerprint took %.1fs for %d cells", fingerprintElapsed, cellCount)
+      )
+    }
+    return MainActor.assumeIsolated {
+      let store = SpreadsheetDocumentStore()
+      do {
+        try store.load(from: url)
+      } catch {
+        return Result(name: name, passed: false, detail: error.localizedDescription)
+      }
+      drainMainQueue()
+      guard !store.isDirty else {
+        return Result(name: name, passed: false, detail: "clean open marked edited")
+      }
+      // Formula rebuild and first draw are not part of the open fingerprint regression.
+      let vm = SpreadsheetViewModel(workbook: store.document.workbook)
+      guard snapshotGrid(sheet: vm.activeSheet) != nil else {
+        return Result(name: name, passed: false, detail: "grid snapshot failed")
+      }
+      return Result(
+        name: name,
+        passed: true,
+        detail: "\(cellCount) cells fingerprinted and opened"
+      )
+    }
+  }
+
+  /// Minimal committed slice of BDC KPI YTD layout (frozen 3×4, wide merges, cross-sheet formula).
+  @MainActor
+  private static func bdcKpiYtdLayoutOpen() -> Result {
+    let name = "BDC KPI YTD layout open"
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "bdc_kpi_ytd_layout.xlsx",
+        envKeys: [Fixture.bdcKpiYtdLayout.envKey],
+        fixturesFileName: "bdc_kpi_ytd_layout.xlsx",
+        bundleResourceName: "bdc_kpi_ytd_layout"
+      )
+      let workbook = try XLSXCodec.importWorkbook(from: url)
+      let sheet = workbook.activeSheet
+      guard sheet.frozenRows == 4, sheet.frozenColumns == 3 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "freeze expected 4×3 got \(sheet.frozenRows)×\(sheet.frozenColumns)"
+        )
+      }
+      guard sheet.mergedRanges.contains(where: {
+        let n = $0.normalized
+        return n.minRow == 0 && n.minCol == 0 && n.maxCol == 24
+      }) else {
+        return Result(name: name, passed: false, detail: "missing A1:Y1 merge")
+      }
+      let vm = SpreadsheetViewModel(workbook: workbook)
+      guard snapshotGrid(sheet: vm.activeSheet) != nil else {
+        return Result(name: name, passed: false, detail: "grid snapshot failed")
+      }
+      return Result(name: name, passed: true, detail: "import, VM, and first draw ok")
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  /// Optional full BDC KPI workbook (set `SPARK_GRID_FIXTURE_BDC_KPI`); not committed to git.
+  @MainActor
+  private static func bdcKpiWorkbookOpenPath() -> Result {
+    let name = "BDC KPI workbook open path"
+    let env = ProcessInfo.processInfo.environment
+    let envPath = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesDir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesPath = (fixturesDir as NSString).appendingPathComponent("BDC-Digital-KPI-2026.xlsx")
+    let hasSource = (!envPath.isEmpty && FileManager.default.fileExists(atPath: envPath))
+      || (!fixturesDir.isEmpty && FileManager.default.fileExists(atPath: fixturesPath))
+    guard hasSource else {
+      return Result(name: name, passed: true, detail: "skipped (no KPI fixture source)")
+    }
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "BDC-Digital-KPI-2026.xlsx",
+        envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
+        fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
+      )
+      let imported = try XLSXCodec.importWorkbook(from: url)
+      let cellCount = imported.sheets.reduce(0) { $0 + $1.cells.count }
+      let fpStart = CFAbsoluteTimeGetCurrent()
+      let fp = WorkbookFingerprint.data(for: imported)
+      let fpElapsed = CFAbsoluteTimeGetCurrent() - fpStart
+      guard fp.count == 32, fpElapsed < 60 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(format: "fingerprint %.1fs", fpElapsed)
+        )
+      }
+      let store = SpreadsheetDocumentStore()
+      try store.load(from: url)
+      drainMainQueue()
+      guard !store.isDirty else {
+        return Result(name: name, passed: false, detail: "full workbook open marked edited")
+      }
+      let vm = SpreadsheetViewModel(workbook: store.document.workbook)
+      guard snapshotGrid(sheet: vm.activeSheet) != nil else {
+        return Result(name: name, passed: false, detail: "grid snapshot failed")
+      }
+      return Result(name: name, passed: true, detail: "\(cellCount) cells opened")
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
   }
 
   private static func octoberEighth2026() -> Date? {
