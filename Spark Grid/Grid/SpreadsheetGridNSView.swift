@@ -36,6 +36,15 @@ final class SpreadsheetGridNSView: NSView {
   private var cachedRowLayoutKey = ""
   private var cachedWrappedRowHeights: [Int: CGFloat] = [:]
   private var cachedWrappedRowKey = ""
+  private var rowsWithWrapText = Set<Int>()
+  private var wrapRowIndexKey = ""
+  private struct CellPaintCacheEntry {
+    var paint: ConditionalPaint
+    var value: CellValue
+    var displayText: String
+  }
+  private var cellPaintCache: [CellAddress: CellPaintCacheEntry] = [:]
+  private var cellPaintCacheKey = ""
   /// Previous selection dirty region — avoids full-grid redraws on click/drag.
   private var lastSelectionDirtyRect: NSRect = .null
   private let editor = CellEditorTextField()
@@ -371,31 +380,77 @@ final class SpreadsheetGridNSView: NSView {
     )
   }
 
+  private func refreshWrapRowIndexIfNeeded(viewModel: SpreadsheetViewModel, sheet: Sheet) {
+    let key = "\(viewModel.contentRevision)|\(sheet.id.uuidString)"
+    guard key != wrapRowIndexKey else { return }
+    wrapRowIndexKey = key
+    rowsWithWrapText.removeAll(keepingCapacity: true)
+    for (address, cell) in sheet.cells {
+      guard cell.format?.textDisplay == .wrap else { continue }
+      if sheet.isCoveredByMerge(address) { continue }
+      rowsWithWrapText.insert(address.row)
+    }
+  }
+
   private func wrappedRowHeights(viewModel: SpreadsheetViewModel, sheet: Sheet) -> [Int: CGFloat] {
     let key = "\(viewModel.contentRevision)|\(zoomScale)"
     if key == cachedWrappedRowKey { return cachedWrappedRowHeights }
+    refreshWrapRowIndexIfNeeded(viewModel: viewModel, sheet: sheet)
     let zoom = zoomScale
-    let heights = CellTextLayout.wrappedRowHeights(
-      sheet: sheet,
-      defaultRowHeight: Self.defaultRowHeight,
-      defaultColumnWidth: Self.defaultColumnWidth,
-      zoom: zoom,
-      columnWidth: { sheet.columnWidth(for: $0, default: Self.defaultColumnWidth) },
-      displayText: { viewModel.displayString(at: $0) },
-      extraWidthInset: { address in
-        var extra: CGFloat = 0
-        if viewModel.resolvedPaint(at: address).icon != nil {
-          extra += 14 * zoom
+    var heights: [Int: CGFloat] = [:]
+    for row in rowsWithWrapText {
+      let needed = CellTextLayout.wrappedRowHeight(
+        row: row,
+        sheet: sheet,
+        defaultRowHeight: Self.defaultRowHeight,
+        defaultColumnWidth: Self.defaultColumnWidth,
+        zoom: zoom,
+        columnWidth: { sheet.columnWidth(for: $0, default: Self.defaultColumnWidth) },
+        displayText: { viewModel.displayString(at: $0) },
+        extraWidthInset: { address in
+          var extra: CGFloat = 0
+          if viewModel.resolvedPaint(at: address).icon != nil {
+            extra += 14 * zoom
+          }
+          if viewModel.isFilterHeaderCell(row: address.row, col: address.col) {
+            extra += 14 * zoom
+          }
+          return extra
         }
-        if viewModel.isFilterHeaderCell(row: address.row, col: address.col) {
-          extra += 14 * zoom
-        }
-        return extra
+      )
+      if needed > 0 {
+        heights[row] = needed
       }
-    )
+    }
     cachedWrappedRowHeights = heights
     cachedWrappedRowKey = key
     return heights
+  }
+
+  private func cachedCellPaint(
+    at address: CellAddress,
+    viewModel: SpreadsheetViewModel,
+    sheet: Sheet,
+    cell: Cell
+  ) -> CellPaintCacheEntry {
+    let key = "\(viewModel.contentRevision)|\(zoomScale)"
+    if key != cellPaintCacheKey {
+      cellPaintCache.removeAll(keepingCapacity: true)
+      cellPaintCacheKey = key
+    }
+    if let cached = cellPaintCache[address] {
+      return cached
+    }
+    let paint = viewModel.resolvedPaint(at: address)
+    let value = viewModel.displayValue(at: address)
+    let displayText = CellFormatRenderer.displayText(
+      for: value,
+      format: paint.format ?? cell.format,
+      fallbackRaw: cell.raw
+    )
+    let entry = CellPaintCacheEntry(paint: paint, value: value, displayText: displayText)
+    cellPaintCache[address] = entry
+    return entry
   }
 
   private func frozenColumnCount() -> Int {
@@ -453,6 +508,57 @@ final class SpreadsheetGridNSView: NSView {
     cachedRowCount = 0
     cachedRowLayoutKey = ""
     cachedWrappedRowKey = ""
+    cellPaintCache.removeAll(keepingCapacity: true)
+    cellPaintCacheKey = ""
+  }
+
+  /// Strips of content newly exposed after a scroll delta (AppKit draw only these).
+  private func scrollExposureDirtyRects(from previousOrigin: CGPoint) -> [NSRect] {
+    let delta = CGPoint(x: scrollOrigin.x - previousOrigin.x, y: scrollOrigin.y - previousOrigin.y)
+    if delta == .zero { return [] }
+    let content = contentRect
+    var rects: [NSRect] = []
+    if delta.y > 0.5 {
+      rects.append(
+        NSRect(
+          x: content.minX,
+          y: max(content.minY, content.maxY - delta.y - 2),
+          width: content.width,
+          height: min(content.height, delta.y + 4)
+        )
+      )
+    } else if delta.y < -0.5 {
+      let strip = -delta.y
+      rects.append(
+        NSRect(
+          x: content.minX,
+          y: content.minY,
+          width: content.width,
+          height: min(content.height, strip + 4)
+        )
+      )
+    }
+    if delta.x > 0.5 {
+      rects.append(
+        NSRect(
+          x: max(content.minX, content.maxX - delta.x - 2),
+          y: content.minY,
+          width: min(content.width, delta.x + 4),
+          height: content.height
+        )
+      )
+    } else if delta.x < -0.5 {
+      let strip = -delta.x
+      rects.append(
+        NSRect(
+          x: content.minX,
+          y: content.minY,
+          width: min(content.width, strip + 4),
+          height: content.height
+        )
+      )
+    }
+    return rects
   }
 
   private func columnOffsets() -> [CGFloat] {
@@ -2556,9 +2662,17 @@ final class SpreadsheetGridNSView: NSView {
         let cell = sheet.cell(at: address)
         guard let rect = paintRect(for: address, sheet: sheet) else { continue }
         guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
-        let paint = viewModel.resolvedPaint(at: address)
-        drawCellContent(cell, at: address, rect: rect, viewModel: viewModel, paint: paint)
-        if let borders = paint.format?.borders ?? cell.format?.borders,
+        let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
+        drawCellContent(
+          cell,
+          at: address,
+          rect: rect,
+          viewModel: viewModel,
+          paint: cached.paint,
+          value: cached.value,
+          displayText: cached.displayText
+        )
+        if let borders = cached.paint.format?.borders ?? cell.format?.borders,
            borders.hasAny
         {
           borderItems.append((borders, rect))
@@ -2607,9 +2721,17 @@ final class SpreadsheetGridNSView: NSView {
         let cell = sheet.cell(at: address)
         guard let rect = paintRect(for: address, sheet: sheet) else { continue }
         guard dirtyRect.intersects(rect) else { continue }
-        let paint = viewModel.resolvedPaint(at: address)
-        drawCellContent(cell, at: address, rect: rect, viewModel: viewModel, paint: paint)
-        if let borders = paint.format?.borders ?? cell.format?.borders,
+        let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
+        drawCellContent(
+          cell,
+          at: address,
+          rect: rect,
+          viewModel: viewModel,
+          paint: cached.paint,
+          value: cached.value,
+          displayText: cached.displayText
+        )
+        if let borders = cached.paint.format?.borders ?? cell.format?.borders,
            borders.hasAny
         {
           borderItems.append((borders, rect))
@@ -2666,7 +2788,9 @@ final class SpreadsheetGridNSView: NSView {
     at address: CellAddress,
     rect: NSRect,
     viewModel: SpreadsheetViewModel,
-    paint: ConditionalPaint
+    paint: ConditionalPaint,
+    value: CellValue,
+    displayText: String
   ) {
     if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive {
       return
@@ -2692,16 +2816,10 @@ final class SpreadsheetGridNSView: NSView {
     let hideValue = paint.dataBarFraction != nil && paint.dataBarShowValue == false
     let drawFormat = paintFormat ?? cell.format ?? CellFormat()
     if !hideValue, !cell.raw.isEmpty, !drawFormat.overflowsUnclipped {
-      let value = viewModel.displayValue(at: address)
-      let text = CellFormatRenderer.displayText(
-        for: value,
-        format: drawFormat,
-        fallbackRaw: cell.raw
-      )
-      if !text.isEmpty {
+      if !displayText.isEmpty {
         let textRect = textDrawingRect(in: rect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
         drawPreparedText(
-          text,
+          displayText,
           value: value,
           format: drawFormat,
           textRect: textRect,
@@ -3929,12 +4047,23 @@ final class SpreadsheetGridNSView: NSView {
 
   override func scrollWheel(with event: NSEvent) {
     let invert = AppSettings.shared.invertScrollDirection
+    let previousOrigin = scrollOrigin
     scrollOrigin.x += event.scrollingDeltaX
     scrollOrigin.y += event.scrollingDeltaY * (invert ? -1 : 1)
     clampScrollOrigin()
     updateEditorFrame()
     layoutOnSheetCharts()
-    needsDisplay = true
+    let dirtyRects = scrollExposureDirtyRects(from: previousOrigin)
+    if dirtyRects.isEmpty {
+      needsDisplay = true
+    } else {
+      for rect in dirtyRects {
+        setNeedsDisplay(rect.intersection(bounds))
+      }
+      // Headers track scroll position.
+      setNeedsDisplay(NSRect(x: 0, y: 0, width: bounds.width, height: headerSize))
+      setNeedsDisplay(NSRect(x: 0, y: 0, width: headerSize, height: bounds.height))
+    }
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {

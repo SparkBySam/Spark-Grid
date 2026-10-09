@@ -31,13 +31,22 @@ final class FormulaEngine {
     if let cached = valueCache[address] {
       return cached
     }
+    let raw = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if FormulaSyntax.isFormula(raw), let snapshot = sheet.cell(at: address).importedFormulaResult {
+      let value = CellValue.fromImportedExcel(snapshot)
+      valueCache[address] = value
+      return value
+    }
+    if FormulaSyntax.isFormula(raw) {
+      ensureIngested(address: address, raw: raw, sheet: sheet)
+    }
     if formulaAST[address] != nil {
       recalculate(addresses: [address], sheet: sheet)
       if let cached = valueCache[address] {
         return cached
       }
     }
-    let value = literalOrEmpty(sheet.cell(at: address).raw)
+    let value = literalOrEmpty(raw)
     valueCache[address] = value
     return value
   }
@@ -89,9 +98,14 @@ final class FormulaEngine {
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
     for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
+      if let snapshot = cell.importedFormulaResult {
+        valueCache[address] = CellValue.fromImportedExcel(snapshot)
+      }
     }
     if recalculate {
+      for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+        ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
+      }
       recalculateAll(sheet: sheet)
     }
   }
@@ -142,6 +156,11 @@ final class FormulaEngine {
   }
 
   // MARK: - Private
+
+  private func ensureIngested(address: CellAddress, raw: String, sheet: Sheet) {
+    guard formulaAST[address] == nil else { return }
+    ingest(address: address, raw: raw, sheet: sheet, recalculate: false)
+  }
 
   private func ingest(address: CellAddress, raw: String, sheet: Sheet, recalculate: Bool) {
     if let oldDeps = dependencies.removeValue(forKey: address) {

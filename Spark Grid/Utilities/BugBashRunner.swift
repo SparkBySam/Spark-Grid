@@ -101,6 +101,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { bdcKpiYtdLayoutOpen() })
     results.append(MainActor.assumeIsolated { bdcKpiWorkbookOpenPath() })
     results.append(MainActor.assumeIsolated { largeSyntheticWorkbookColdViewportScroll() })
+    results.append(MainActor.assumeIsolated { largeSheetScrollRegionBudgets() })
     results.append(MainActor.assumeIsolated { kpiWorkbookMultiSheetScroll() })
     results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
     results.append(editorSpellChecking())
@@ -5986,11 +5987,32 @@ enum BugBashRunner {
     let vm = SpreadsheetViewModel(workbook: workbook)
     let regionA = simulateViewportPaint(vm: vm, minRow: 0, maxRow: 35, minCol: 0, maxCol: 11)
     let regionB = simulateViewportPaint(vm: vm, minRow: 420, maxRow: 455, minCol: 0, maxCol: 11)
-    guard regionA < 1.2, regionB < 1.2 else {
+    guard regionA < 0.2, regionB < 0.2 else {
       return Result(
         name: name,
         passed: false,
         detail: String(format: "with snapshots A %.2fs B %.2fs", regionA, regionB)
+      )
+    }
+
+    var formulaCells = 0
+    var missingSnapshots = 0
+    let snapSheet = workbook.activeSheet
+    for row in 420...455 {
+      for col in 0...11 {
+        let address = CellAddress(row: row, col: col)
+        guard FormulaSyntax.isFormula(snapSheet.cell(at: address).raw) else { continue }
+        formulaCells += 1
+        if snapSheet.cell(at: address).importedFormulaResult == nil {
+          missingSnapshots += 1
+        }
+      }
+    }
+    guard formulaCells > 0, missingSnapshots == 0 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "snapshots missing \(missingSnapshots)/\(formulaCells) in cold band"
       )
     }
 
@@ -6003,17 +6025,48 @@ enum BugBashRunner {
       minCol: 0,
       maxCol: 11
     )
-    guard slowRegion > max(0.35, regionB * 4) else {
+    guard slowRegion < 0.2 else {
       return Result(
         name: name,
         passed: false,
-        detail: String(format: "slow path %.2fs vs fast %.2fs (guard)", slowRegion, regionB)
+        detail: String(format: "without snapshots cold region %.2fs", slowRegion)
+      )
+    }
+    guard slowRegion + 0.000_5 >= regionB else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "snapshots path faster than no-snapshot (%.2fs vs %.2fs)", regionB, slowRegion)
       )
     }
     return Result(
       name: name,
       passed: true,
-      detail: String(format: "snapshots A %.2fs B %.2fs; eval guard %.2fs", regionA, regionB, slowRegion)
+      detail: String(format: "snapshots A %.2fs B %.2fs; no-snapshot %.2fs", regionA, regionB, slowRegion)
+    )
+  }
+
+  /// Synthetic large sheet: scroll strip ~50ms, cold region ~200ms (not a warm repeat).
+  @MainActor
+  private static func largeSheetScrollRegionBudgets() -> Result {
+    let name = "large sheet scroll region budgets"
+    let sheet = syntheticLargeFormulaSheet(name: "Data", seedImportedSnapshots: true)
+    let workbook = Workbook(sheets: [sheet])
+    let warmVM = SpreadsheetViewModel(workbook: workbook)
+    _ = simulateViewportPaint(vm: warmVM, minRow: 0, maxRow: 35, minCol: 0, maxCol: 11)
+    let tick = simulateViewportPaint(vm: warmVM, minRow: 36, maxRow: 38, minCol: 0, maxCol: 11)
+    guard tick < 0.05 else {
+      return Result(name: name, passed: false, detail: String(format: "scroll strip %.2fs", tick))
+    }
+    let coldVM = SpreadsheetViewModel(workbook: workbook)
+    let region = simulateViewportPaint(vm: coldVM, minRow: 420, maxRow: 455, minCol: 0, maxCol: 11)
+    guard region < 0.2 else {
+      return Result(name: name, passed: false, detail: String(format: "cold region %.2fs", region))
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: String(format: "tick %.2fs region %.2fs", tick, region)
     )
   }
 
@@ -6046,12 +6099,15 @@ enum BugBashRunner {
 
       let ytdTop = simulateViewportPaint(vm: vm, minRow: 0, maxRow: 39, minCol: 0, maxCol: 11)
       let ytdDeep = simulateViewportPaint(vm: vm, minRow: 500, maxRow: 539, minCol: 0, maxCol: 11)
-      guard ytdTop < 4, ytdDeep < 4 else {
-        return Result(
-          name: name,
-          passed: false,
-          detail: String(format: "YTD top %.2fs deep %.2fs", ytdTop, ytdDeep)
-        )
+      guard ytdTop < 0.2 else {
+        return Result(name: name, passed: false, detail: String(format: "YTD top %.2fs", ytdTop))
+      }
+      let ytdTick = simulateViewportPaint(vm: vm, minRow: 40, maxRow: 42, minCol: 0, maxCol: 11)
+      guard ytdTick < 0.05 else {
+        return Result(name: name, passed: false, detail: String(format: "YTD scroll strip %.2fs", ytdTick))
+      }
+      guard ytdDeep < 0.2 else {
+        return Result(name: name, passed: false, detail: String(format: "YTD deep %.2fs", ytdDeep))
       }
 
       guard let marchIndex = imported.sheets.firstIndex(where: { $0.name == "March" }) else {
@@ -6060,7 +6116,7 @@ enum BugBashRunner {
       vm.selectSheet(at: marchIndex)
       drainMainQueue()
       let marchCold = simulateViewportPaint(vm: vm, minRow: 120, maxRow: 159, minCol: 0, maxCol: 11)
-      guard marchCold < 4 else {
+      guard marchCold < 0.2 else {
         return Result(name: name, passed: false, detail: String(format: "March cold %.2fs", marchCold))
       }
 
@@ -6070,7 +6126,7 @@ enum BugBashRunner {
       vm.selectSheet(at: juneIndex)
       drainMainQueue()
       let juneScroll = simulateViewportPaint(vm: vm, minRow: 200, maxRow: 239, minCol: 0, maxCol: 11)
-      guard juneScroll < 4 else {
+      guard juneScroll < 0.2 else {
         return Result(name: name, passed: false, detail: String(format: "June scroll %.2fs", juneScroll))
       }
 
