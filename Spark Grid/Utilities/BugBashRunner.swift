@@ -1,4 +1,5 @@
 import AppKit
+import CoreXLSX
 import Foundation
 import SwiftUI
 
@@ -3323,7 +3324,7 @@ enum BugBashRunner {
     for offset in 0..<120 {
       let row = 109 + offset
       cells[CellAddress(row: row, col: 0)] = offset.isMultiple(of: 3) ? "agent-1" : "other"
-      cells[CellAddress(row: row, col: 2)] = "x"
+      cells[CellAddress(row: row, col: 2)] = offset.isMultiple(of: 3) ? "agent-1" : "other"
       cells[CellAddress(row: row, col: 11)] = offset.isMultiple(of: 2) ? "UNIQUE" : "ORIGINAL"
     }
     let summaryAddr = CellAddress(row: 5, col: 4)
@@ -3363,10 +3364,14 @@ enum BugBashRunner {
     cells[CellAddress(row: 5, col: 0)] = "k"
     for row in 10..<30 {
       cells[CellAddress(row: row, col: 0)] = row < 15 ? "k" : "z"
-      cells[CellAddress(row: row, col: 1)] = "=1/0"
-      cells[CellAddress(row: row, col: 2)] = "UNIQUE"
+      if row < 15 {
+        cells[CellAddress(row: row, col: 2)] = "k"
+      } else {
+        cells[CellAddress(row: row, col: 2)] = "=1/0"
+      }
+      cells[CellAddress(row: row, col: 11)] = "UNIQUE"
     }
-    let formula = "=COUNTIFS($B$11:$B$29,$A6,$C$11:$C$29,\"UNIQUE\")"
+    let formula = "=COUNTIFS($C$11:$C$29,$A6,$L$11:$L$29,\"UNIQUE\")"
     let value = evalFormula(formula, cells: cells)
     guard case .number(let count) = value, count == 5 else {
       return Result(
@@ -3385,8 +3390,9 @@ enum BugBashRunner {
     cells[CellAddress(row: 5, col: 0)] = "k"
     for row in 10..<810 {
       cells[CellAddress(row: row, col: 0)] = "k"
-      cells[CellAddress(row: row, col: 1)] = "=SUM($A$1:$A$50)"
+      cells[CellAddress(row: row, col: 1)] = "k"
       cells[CellAddress(row: row, col: 2)] = "UNIQUE"
+      cells[CellAddress(row: row, col: 3)] = "=SUM($A$1:$A$50)"
     }
     for row in 0..<50 {
       cells[CellAddress(row: row, col: 0)] = "1"
@@ -5896,6 +5902,31 @@ enum BugBashRunner {
     }
   }
 
+  private static func excelCachedNumericValue(
+    url: URL,
+    sheetName: String,
+    address: CellAddress
+  ) -> Double? {
+    guard let data = try? Data(contentsOf: url),
+          let file = try? XLSXFile(data: data),
+          let workbook = try? file.parseWorkbooks().first,
+          let paths = try? file.parseWorksheetPathsAndNames(workbook: workbook),
+          let worksheetPath = paths.first(where: {
+            ($0.0 ?? "").caseInsensitiveCompare(sheetName) == .orderedSame
+          })?.1,
+          let worksheet = try? file.parseWorksheet(at: worksheetPath),
+          let rows = worksheet.data?.rows
+    else { return nil }
+    let target = address.a1
+    for row in rows {
+      for cell in row.cells where cell.reference?.description == target {
+        guard let raw = cell.value else { return nil }
+        return Double(raw)
+      }
+    }
+    return nil
+  }
+
   /// Optional KPI workbook: June sheet viewport + scroll displayValue must stay interactive.
   @MainActor
   private static func kpiWorkbookJuneViewScroll() -> Result {
@@ -5956,6 +5987,25 @@ enum BugBashRunner {
           )
         )
       }
+
+      for row in 5...61 {
+        for col in 4...5 {
+          let addr = CellAddress(row: row, col: col)
+          guard FormulaSyntax.isFormula(vm.activeSheet.cell(at: addr).raw) else { continue }
+          guard let cached = excelCachedNumericValue(url: url, sheetName: "June", address: addr) else {
+            continue
+          }
+          let value = vm.displayValue(at: addr)
+          guard case .number(let actual) = value, abs(actual - cached) < 0.000_001 else {
+            return Result(
+              name: name,
+              passed: false,
+              detail: "\(addr.a1) got \(value.displayString) cached \(cached)"
+            )
+          }
+        }
+      }
+
       guard snapshotGrid(sheet: vm.activeSheet) != nil else {
         return Result(name: name, passed: false, detail: "grid snapshot failed")
       }

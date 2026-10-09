@@ -236,8 +236,12 @@ struct FormulaLexer {
     }
 
     let upper = text.uppercased()
-    if upper == "TRUE" { return .boolean(true) }
-    if upper == "FALSE" { return .boolean(false) }
+    if upper == "TRUE" || upper == "FALSE" {
+      if nextNonWhitespaceIsOpenParen() {
+        return .identifier(upper)
+      }
+      return .boolean(upper == "TRUE")
+    }
     if A1Reference.isValidAddressToken(text) {
       return .cellRef(text)
     }
@@ -288,6 +292,14 @@ struct FormulaLexer {
       throw FormulaParseError.expectedToken("cell reference")
     }
     return .cellRef("\(sheetName)!\(left)")
+  }
+
+  private func nextNonWhitespaceIsOpenParen() -> Bool {
+    var i = index
+    while i < chars.count, chars[i].isWhitespace {
+      i += 1
+    }
+    return i < chars.count && chars[i] == "("
   }
 
   private mutating func skipWhitespace() {
