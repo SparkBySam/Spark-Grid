@@ -82,8 +82,12 @@ final class SpreadsheetGridNSView: NSView {
     override var isFlipped: Bool { true }
   }
 
-  /// Paints frozen rows and columns after the chart layer. The grid's own
-  /// `draw` runs before subviews, so a chart would otherwise cover the panes.
+  /// Paints one frozen pane after the chart layer. The grid's own `draw` runs
+  /// before subviews, so a chart would otherwise cover the panes.
+  ///
+  /// The frame is only that pane. A full-bounds overlay clears the scrollable
+  /// body as well, and the layer snapshot keeps those pixels as black, so a
+  /// merged fill that scrolled out from under the header disappears.
   private final class FrozenPaneOverlayView: NSView {
     weak var grid: SpreadsheetGridNSView?
     override var isFlipped: Bool { true }
@@ -92,8 +96,18 @@ final class SpreadsheetGridNSView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-      NSGraphicsContext.current?.cgContext.clear(dirtyRect)
-      grid?.drawFrozenPanesCoveringCharts(in: dirtyRect)
+      guard let grid, bounds.width > 0.5, bounds.height > 0.5 else { return }
+      guard let ctx = NSGraphicsContext.current else { return }
+      let local = bounds.intersection(dirtyRect)
+      guard !local.isNull else { return }
+      // Clear only this pane. Grid points are in the superview's coordinates.
+      ctx.cgContext.clear(local)
+      ctx.saveGraphicsState()
+      let origin = convert(.zero, to: grid)
+      ctx.cgContext.translateBy(x: -origin.x, y: -origin.y)
+      NSBezierPath(rect: convert(bounds, to: grid)).addClip()
+      grid.drawFrozenPanesCoveringCharts(in: convert(dirtyRect, to: grid))
+      ctx.restoreGraphicsState()
     }
   }
 
@@ -106,15 +120,24 @@ final class SpreadsheetGridNSView: NSView {
     view.clipsToBounds = true
     return view
   }()
-  /// Above the chart (z 5) and below the cell editor (z 8).
-  private let frozenPaneOverlay: FrozenPaneOverlayView = {
+  /// Above the chart (z 5) and below the cell editor (z 8). One view per pane
+  /// rectangle: frozen header, then frozen columns. Neither covers the body.
+  private let frozenPaneOverlays: [FrozenPaneOverlayView] = [
+    SpreadsheetGridNSView.makeFrozenPaneOverlay(),
+    SpreadsheetGridNSView.makeFrozenPaneOverlay(),
+  ]
+
+  private static func makeFrozenPaneOverlay() -> FrozenPaneOverlayView {
     let view = FrozenPaneOverlayView()
     view.wantsLayer = true
     view.layer?.backgroundColor = NSColor.clear.cgColor
     view.layer?.zPosition = 6
     view.layer?.isOpaque = false
+    view.layer?.contentsFormat = .RGBA8Uint
+    view.clipsToBounds = true
     return view
-  }()
+  }
+
   private var isPropagatingDisplay = false
   private var chartHosts: [UUID: OnSheetChartHost] = [:]
   private var chartHostSnapshots: [UUID: ChartHostSnapshot] = [:]
@@ -186,7 +209,9 @@ final class SpreadsheetGridNSView: NSView {
   private func displayFrozenPaneOverlay() {
     guard !isPropagatingDisplay else { return }
     isPropagatingDisplay = true
-    frozenPaneOverlay.needsDisplay = true
+    for overlay in frozenPaneOverlays {
+      overlay.needsDisplay = true
+    }
     isPropagatingDisplay = false
   }
 
@@ -228,8 +253,10 @@ final class SpreadsheetGridNSView: NSView {
     layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     configureEditor()
     addSubview(chartLayerView, positioned: .below, relativeTo: editor)
-    frozenPaneOverlay.grid = self
-    addSubview(frozenPaneOverlay, positioned: .above, relativeTo: chartLayerView)
+    for overlay in frozenPaneOverlays {
+      overlay.grid = self
+      addSubview(overlay, positioned: .above, relativeTo: chartLayerView)
+    }
   }
 
   override func layout() {
@@ -1058,7 +1085,7 @@ final class SpreadsheetGridNSView: NSView {
 
     // 2. Frozen panes redrawn on top so scrolled content cannot bleed through.
     //    Subviews paint after this, so the chart layer still covers these cells.
-    //    FrozenPaneOverlayView paints the same panes again above the chart.
+    //    Pane-sized overlays paint the same panes again above the chart.
     if frozenRowCount() > 0 || frozenColumnCount() > 0 {
       if let ctx = NSGraphicsContext.current {
         ctx.saveGraphicsState()
@@ -1842,10 +1869,22 @@ final class SpreadsheetGridNSView: NSView {
     // Full cell viewport, not the scrollable inset. Host frames then move
     // with the anchor cells, including the part that slides under a freeze.
     chartLayerView.frame = contentRect
-    if frozenPaneOverlay.frame != bounds {
-      frozenPaneOverlay.frame = bounds
+    let panes = frozenPaneCoverRects()
+    for (index, overlay) in frozenPaneOverlays.enumerated() {
+      let rect = index < panes.count ? panes[index] : .zero
+      let hide = rect.width < 0.5 || rect.height < 0.5
+      if hide {
+        overlay.isHidden = true
+        if overlay.frame != .zero {
+          overlay.frame = .zero
+        }
+      } else {
+        overlay.isHidden = false
+        if overlay.frame != rect {
+          overlay.frame = rect
+        }
+      }
     }
-    frozenPaneOverlay.isHidden = frozenRowCount() == 0 && frozenColumnCount() == 0
     guard let viewModel else {
       removeChartHosts()
       return
