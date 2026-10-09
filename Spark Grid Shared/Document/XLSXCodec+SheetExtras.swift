@@ -662,11 +662,11 @@ extension XLSXCodec {
   /// `nil` omits the element. `true` is `<b/>`. `false` is `<b val="0"/>`.
   private static func dxfToggleXML(_ element: String, _ value: Bool?) -> String {
     switch value {
-    case true:
+    case .some(true):
       return "<\(element)/>"
-    case false:
+    case .some(false):
       return #"<\#(element) val="0"/>"#
-    case nil:
+    case .none:
       return ""
     }
   }

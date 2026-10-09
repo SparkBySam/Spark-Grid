@@ -3822,6 +3822,11 @@ enum BugBashRunner {
     func fail(_ detail: String) -> Result {
       Result(name: name, passed: false, detail: detail)
     }
+    // A bold element ends at `b`: `<b/>`, `<b val="0"/>`, `<x14:b/>`.
+    // `<bgColor` and `<x14:bgColor` share the prefix `<b` / `<x14:b` and are fill.
+    func writesBoldTag(_ xml: String) -> Bool {
+      xml.range(of: #"<(?:x14:)?b(?:\s|/|>)"#, options: .regularExpression) != nil
+    }
 
     let fill = byteColor(245, 199, 199)
     let text = byteColor(153, 0, 16)
@@ -3964,8 +3969,20 @@ enum BugBashRunner {
       let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [plain]))
       let styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") ?? ""
       let worksheet = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
-      if styles.contains("<b/>") || styles.contains("<b ") || worksheet.contains("<x14:b") {
+      if !writesBoldTag("<b/>")
+        || !writesBoldTag(#"<b val="0"/>"#)
+        || !writesBoldTag("<x14:b/>")
+        || !writesBoldTag(#"<x14:b val="0"/>"#)
+        || writesBoldTag(#"<x14:bgColor rgb="FF"/>"#)
+        || writesBoldTag(#"<bgColor rgb="FF"/>"#)
+      {
+        return fail("bold tag scan missed an explicit bold element")
+      }
+      if writesBoldTag(styles) || writesBoldTag(worksheet) {
         return fail("unspecified bold was written into the dxf")
+      }
+      if !styles.contains("<bgColor") || !worksheet.contains("<x14:bgColor") {
+        return fail("fill was removed from the dxf")
       }
       let imported = try XLSXCodec.importWorkbook(from: data)
       guard let style = imported.activeSheet.conditionalFormats.first?.style else {
