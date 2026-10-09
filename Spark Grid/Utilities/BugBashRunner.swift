@@ -79,6 +79,8 @@ enum BugBashRunner {
     results.append(lookupFormulas())
     results.append(formulaFunctionPicker())
     results.append(excelFormatCodes())
+    results.append(MainActor.assumeIsolated { cellFormatApplyCloses() })
+    results.append(MainActor.assumeIsolated { customFormatPasteStaysInField() })
     results.append(definedNamesResolve())
     results.append(MainActor.assumeIsolated { nameManagerEditsSheet() })
     results.append(MainActor.assumeIsolated { cellFormatCodeEditsSheet() })
@@ -3552,7 +3554,11 @@ enum BugBashRunner {
     guard let noon = octoberEighth2026() else {
       return Result(name: name, passed: false, detail: "date components")
     }
+    guard let afternoon = utcDate(year: 2026, month: 10, day: 8, hour: 17, minute: 52, second: 0) else {
+      return Result(name: name, passed: false, detail: "date components")
+    }
     let serial = ExcelDate.serial(from: noon)
+    let afternoonSerial = ExcelDate.serialWithTime(from: afternoon)
     let dates: [(String, String)] = [
       (shown(serial, code: "dd/mm/yyyy"), "08/10/2026"),
       (shown(serial, code: "d-mmm-yy"), "8-Oct-26"),
@@ -3561,6 +3567,9 @@ enum BugBashRunner {
       (shown(serial, code: "d \"of\" mmm yyyy"), "8 of Oct 2026"),
       (shown(0.75, code: "h:mm"), "18:00"),
       (shown(0.75, code: "h:mm AM/PM"), "6:00 PM"),
+      (shown(afternoonSerial, code: "h:mm AM/PM"), "5:52 PM"),
+      (shown(afternoonSerial, code: "h:mm"), "17:52"),
+      (shown(afternoonSerial, code: "m/d/yyyy h:mm AM/PM"), "10/8/2026 5:52 PM"),
       (shown(0.75, code: "h:mm \"AM\""), "18:00 AM"),
       (shown(0.75, code: "h\"h\" mm\"m\""), "18h 00m"),
       (shown(1.5, code: "[h]:mm:ss"), "36:00:00"),
@@ -3787,6 +3796,153 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "delete left Revenue in use")
     }
     return Result(name: name, passed: true, detail: "add, retarget, rename, unresolved formula, delete")
+  }
+
+  private static func cellFormatApplyCloses() -> Result {
+    let name = "cell format apply closes"
+    let apply = CellFormatPanel.result(for: .apply)
+    if !apply.storesDraft || !apply.closes {
+      return Result(name: name, passed: false, detail: "apply stores \(apply.storesDraft) closes \(apply.closes)")
+    }
+    let close = CellFormatPanel.result(for: .close)
+    if close.storesDraft || !close.closes {
+      return Result(name: name, passed: false, detail: "close stores \(close.storesDraft) closes \(close.closes)")
+    }
+    let away = CellFormatPanel.result(for: .clickAway)
+    if away.storesDraft || away.closes {
+      return Result(name: name, passed: false, detail: "click away stores \(away.storesDraft) closes \(away.closes)")
+    }
+
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "1.5"), at: .origin)
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    viewModel.selection = .origin
+    var closed = false
+    CellFormatPanel.perform(.apply, store: {
+      viewModel.setFormatCode("[h]:mm:ss")
+    }, close: {
+      closed = true
+    })
+    let cell = viewModel.activeSheet.cell(at: .origin)
+    if !closed || cell.raw != "1.5" || cell.format?.formatCode != "[h]:mm:ss" {
+      return Result(name: name, passed: false, detail: "apply raw \(cell.raw) closed \(closed)")
+    }
+    if viewModel.displayString(at: .origin) != "36:00:00" {
+      return Result(name: name, passed: false, detail: "elapsed \(viewModel.displayString(at: .origin))")
+    }
+
+    var storedOnClose = false
+    var closedWithoutStore = false
+    CellFormatPanel.perform(.close, store: { storedOnClose = true }, close: { closedWithoutStore = true })
+    if storedOnClose || !closedWithoutStore {
+      return Result(name: name, passed: false, detail: "close stored \(storedOnClose) closed \(closedWithoutStore)")
+    }
+    var storedOnClick = false
+    var closedOnClick = false
+    CellFormatPanel.perform(.clickAway, store: { storedOnClick = true }, close: { closedOnClick = true })
+    if storedOnClick || closedOnClick {
+      return Result(name: name, passed: false, detail: "click away stored \(storedOnClick) closed \(closedOnClick)")
+    }
+    return Result(name: name, passed: true, detail: "apply stores and closes; close and click-away do not store")
+  }
+
+  /// ⌘V while the format field is editing inserts into the field. The cell keeps its value.
+  private static func customFormatPasteStaysInField() -> Result {
+    let name = "custom format paste stays in field"
+    let field = CellFormatCodeTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+    field.stringValue = ""
+    let window = SpellCheckWindow(
+      contentRect: field.frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = field
+    window.setFrameOrigin(NSPoint(x: -4200, y: -4200))
+    window.makeKeyAndOrderFront(nil)
+    defer {
+      window.makeFirstResponder(nil)
+      window.contentView = nil
+      window.orderOut(nil)
+      window.close()
+    }
+
+    let board = NSPasteboard.general
+    let previous = board.string(forType: .string)
+    board.clearContents()
+    board.setString("[h]:mm:ss", forType: .string)
+    defer {
+      board.clearContents()
+      if let previous {
+        board.setString(previous, forType: .string)
+      }
+    }
+
+    guard window.makeFirstResponder(field) else {
+      return Result(name: name, passed: false, detail: "format field did not focus")
+    }
+    if field.currentEditor() == nil {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    guard field.isInterceptingPaste, CellFormatCodePaste.editingField === field else {
+      return Result(name: name, passed: false, detail: "paste shortcut was not captured")
+    }
+
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "1.5"), at: .origin)
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    viewModel.selection = .origin
+
+    guard let event = commandVEvent(window: window) else {
+      return Result(name: name, passed: false, detail: "could not build paste event")
+    }
+    if CellFormatCodePaste.handleKeyDown(event) != nil || field.liveText != "[h]:mm:ss" {
+      return Result(name: name, passed: false, detail: "field text \(field.liveText)")
+    }
+    if viewModel.activeSheet.cell(at: .origin).raw != "1.5" {
+      return Result(name: name, passed: false, detail: "paste wrote \(viewModel.activeSheet.cell(at: .origin).raw)")
+    }
+    viewModel.setFormatCode("[h]:mm:ss")
+    if viewModel.displayString(at: .origin) != "36:00:00" || viewModel.activeSheet.cell(at: .origin).raw != "1.5" {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "elapsed \(viewModel.displayString(at: .origin)) raw \(viewModel.activeSheet.cell(at: .origin).raw)"
+      )
+    }
+    SpreadsheetPaste.perform(on: viewModel)
+    if viewModel.activeSheet.cell(at: .origin).raw != "1.5" {
+      return Result(name: name, passed: false, detail: "menu paste wrote the cell")
+    }
+
+    window.makeFirstResponder(nil)
+    if field.isInterceptingPaste || CellFormatCodePaste.editingField != nil {
+      return Result(name: name, passed: false, detail: "paste stayed captured after the field resigned")
+    }
+    if CellFormatCodePaste.handleKeyDown(event) == nil {
+      return Result(name: name, passed: false, detail: "paste shortcut was swallowed after resign")
+    }
+    SpreadsheetPaste.perform(on: viewModel)
+    if viewModel.activeSheet.cell(at: .origin).raw != "[h]:mm:ss" {
+      return Result(name: name, passed: false, detail: "grid paste \(viewModel.activeSheet.cell(at: .origin).raw)")
+    }
+    return Result(name: name, passed: true, detail: "focused paste stays in the field; grid paste still writes the cell")
+  }
+
+  private static func commandVEvent(window: NSWindow) -> NSEvent? {
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: .command,
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "v",
+      charactersIgnoringModifiers: "v",
+      isARepeat: false,
+      keyCode: 9
+    )
   }
 
   private static func cellFormatCodeEditsSheet() -> Result {

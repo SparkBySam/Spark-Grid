@@ -26,7 +26,7 @@ struct SpreadsheetCommands: Commands {
       Button("Copy") { viewModel?.copySelectionToPasteboard() }
         .keyboardShortcut(settings.keyEquivalent(for: .copy), modifiers: settings.eventModifiers(for: .copy))
         .disabled(viewModel == nil)
-      Button("Paste") { viewModel?.pasteFromPasteboard() }
+      Button("Paste") { SpreadsheetPaste.perform(on: viewModel) }
         .keyboardShortcut(settings.keyEquivalent(for: .paste), modifiers: settings.eventModifiers(for: .paste))
         .disabled(viewModel == nil)
 

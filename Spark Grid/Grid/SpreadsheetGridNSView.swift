@@ -4006,7 +4006,7 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   @objc private func handleMenuPaste(_ sender: Any?) {
-    viewModel?.pasteFromPasteboard()
+    SpreadsheetPaste.perform(on: viewModel)
     syncDisplay()
   }
 
@@ -4307,7 +4307,7 @@ final class SpreadsheetGridNSView: NSView {
       return true
     }
     if settings.matches(.paste, event: event) {
-      viewModel?.pasteFromPasteboard()
+      SpreadsheetPaste.perform(on: viewModel)
       syncDisplay()
       return true
     }
