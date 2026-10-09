@@ -550,7 +550,7 @@ extension FormulaEvaluator {
 
   // MARK: - Ranges and arrays
 
-  private func resolvedExpr(_ expr: FormulaExpr) -> FormulaExpr {
+  func resolvedExpr(_ expr: FormulaExpr) -> FormulaExpr {
     if case .namedRange(let name) = expr, let resolved = namedRangeLookup(name) {
       return resolved
     }
