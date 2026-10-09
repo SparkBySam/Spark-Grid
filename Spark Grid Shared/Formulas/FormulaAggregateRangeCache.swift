@@ -63,7 +63,7 @@ private struct CompositeSumIndexKey: Hashable {
   var sumRangeKey: AggregateRangeKey
 }
 
-private struct AggregateSumBucket {
+struct AggregateSumBucket {
   var count: Int = 0
   var sum: Double = 0
 }
