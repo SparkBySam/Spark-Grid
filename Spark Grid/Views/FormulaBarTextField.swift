@@ -464,6 +464,7 @@ final class FormulaBarContainerView: NSView {
 final class FormulaBarNSTextView: NSTextView {
   private var isReplacingString = false
   private var isApplyingSpellPolicy = false
+  private var isClaimingFocus = false
   private var spellCheckSyncPending = false
 
   override var acceptsFirstResponder: Bool { true }
@@ -481,9 +482,22 @@ final class FormulaBarNSTextView: NSTextView {
       isAutomaticSpellingCorrectionEnabled = false
       isGrammarCheckingEnabled = false
       super.string = newValue
+      restoreAssignedString(newValue)
       applySpellPolicy()
       isReplacingString = false
     }
+  }
+
+  /// Automatic correction can rewrite a misspelling while the string is replaced.
+  /// Put the assigned characters back so prose such as `recieve` can be underlined.
+  private func restoreAssignedString(_ newValue: String) {
+    guard super.string != newValue, let storage = textStorage else { return }
+    isApplyingSpellPolicy = true
+    let length = (storage.string as NSString).length
+    storage.beginEditing()
+    storage.replaceCharacters(in: NSRange(location: 0, length: length), with: newValue)
+    storage.endEditing()
+    isApplyingSpellPolicy = false
   }
 
   override func didChangeText() {
@@ -507,8 +521,37 @@ final class FormulaBarNSTextView: NSTextView {
 
   private func applySpellPolicy() {
     guard !isApplyingSpellPolicy else { return }
+    // Spell checking marks the focused editor. Take focus only when nobody else has it,
+    // so mirroring text into the bar does not steal the grid.
+    if !isClaimingFocus, let window, window.firstResponder == nil {
+      isClaimingFocus = true
+      window.makeFirstResponder(self)
+      isClaimingFocus = false
+    }
     isApplyingSpellPolicy = true
-    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    EditorSpellCheck.apply(
+      to: self,
+      text: string,
+      refresh: EditorSpellCheck.shouldCheck(string)
+    )
+    isApplyingSpellPolicy = false
+  }
+
+  override func checkText(
+    in range: NSRange,
+    types checkingTypes: NSTextCheckingTypes,
+    options: [NSSpellChecker.OptionKey: Any] = [:]
+  ) {
+    // A formula is not checked. Prose still gets a spelling underline if `super`
+    // returns before the system mark is on the layout manager.
+    guard EditorSpellCheck.shouldCheck(string) else { return }
+    super.checkText(in: range, types: checkingTypes, options: options)
+    guard !isApplyingSpellPolicy else { return }
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.markSystemSpelling(
+      on: self,
+      language: EditorSpellCheck.spellingLanguage(in: options)
+    )
     isApplyingSpellPolicy = false
   }
 

@@ -4535,7 +4535,27 @@ final class CellFieldEditor: NSTextView {
     super.didChangeText()
     isHandlingTextChange = false
     isApplyingSpellPolicy = true
-    EditorSpellCheck.apply(to: self, text: string, refresh: false)
+    EditorSpellCheck.apply(
+      to: self,
+      text: string,
+      refresh: EditorSpellCheck.shouldCheck(string)
+    )
+    isApplyingSpellPolicy = false
+  }
+
+  override func checkText(
+    in range: NSRange,
+    types checkingTypes: NSTextCheckingTypes,
+    options: [NSSpellChecker.OptionKey: Any] = [:]
+  ) {
+    guard EditorSpellCheck.shouldCheck(string) else { return }
+    super.checkText(in: range, types: checkingTypes, options: options)
+    guard !isApplyingSpellPolicy else { return }
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.markSystemSpelling(
+      on: self,
+      language: EditorSpellCheck.spellingLanguage(in: options)
+    )
     isApplyingSpellPolicy = false
   }
 
