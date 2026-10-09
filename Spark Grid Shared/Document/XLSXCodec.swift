@@ -56,6 +56,12 @@ enum XLSXCodec {
           clipTextStyleIndexes: clipTextStyleIndexes
         )
         expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
+        importFormulaCachedValues(
+          into: &sheet,
+          archiveData: archiveData,
+          worksheetPath: path,
+          sharedStrings: sharedStrings
+        )
         importColumnWidths(from: worksheet, into: &sheet)
         importRowHeights(from: worksheet, into: &sheet)
         importFreezePanes(from: worksheet, into: &sheet)
@@ -254,6 +260,57 @@ enum XLSXCodec {
     }
   }
 
+  /// CoreXLSX often omits cached `<v>` on formula cells; read it from sheet XML (same scan as shared formulas).
+  private static func importFormulaCachedValues(
+    into sheet: inout Sheet,
+    archiveData: Data,
+    worksheetPath: String,
+    sharedStrings: SharedStrings?
+  ) {
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
+    forEachCellElement(in: xml) { attrs, body in
+      guard body.contains("<f") else { return }
+      guard let ref = xmlAttribute(attrs, named: "r")?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !ref.isEmpty,
+            let address = address(fromA1: ref)
+      else { return }
+      guard let cached = formulaCachedValueFromCellXML(
+        attrs: attrs,
+        body: body,
+        sharedStrings: sharedStrings
+      ) else { return }
+      var cell = sheet.cell(at: address)
+      guard FormulaSyntax.isFormula(cell.raw) else { return }
+      cell.importedFormulaResult = cached
+      sheet.setCell(cell, at: address)
+    }
+  }
+
+  private static func formulaCachedValueFromCellXML(
+    attrs: String,
+    body: String,
+    sharedStrings: SharedStrings?
+  ) -> String? {
+    guard let vOpen = body.range(of: "<v>"),
+          let vClose = body.range(of: "</v>", range: vOpen.upperBound..<body.endIndex)
+    else { return nil }
+    let raw = decodeXMLEntities(String(body[vOpen.upperBound..<vClose.lowerBound]))
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty else { return nil }
+    let cellType = xmlAttribute(attrs, named: "t")?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if cellType == "s" || cellType == "sharedString" {
+      if let index = Int(raw), let text = sharedString(at: index, in: sharedStrings) {
+        return text
+      }
+    }
+    return raw
+  }
+
+  private static func sharedString(at index: Int, in table: SharedStrings?) -> String? {
+    guard let table, index >= 0, index < table.items.count else { return nil }
+    return table.items[index].text
+  }
+
   private static func sharedFormulaTag(in cellBody: String) -> String? {
     var search = cellBody.startIndex
     while search < cellBody.endIndex {
@@ -351,6 +408,9 @@ enum XLSXCodec {
         let raw = cellRawValue(cell, sharedStrings: sharedStrings)
         guard !raw.isEmpty || cell.styleIndex != nil else { continue }
         var model = Cell(raw: raw)
+        if let cached = importedFormulaResult(from: cell, sharedStrings: sharedStrings) {
+          model.importedFormulaResult = cached
+        }
         if let styles, let format = cellFormat(
           from: cell,
           styles: styles,
@@ -435,6 +495,23 @@ enum XLSXCodec {
       }
     }
     return indexes
+  }
+
+  private static func importedFormulaResult(
+    from cell: CoreXLSX.Cell,
+    sharedStrings: SharedStrings?
+  ) -> String? {
+    guard let formula = cell.formula?.value, !formula.isEmpty else { return nil }
+    if cell.type == .sharedString, let sharedStrings, let text = cell.stringValue(sharedStrings) {
+      return text
+    }
+    if let inline = cell.inlineString?.text, !inline.isEmpty {
+      return inline
+    }
+    if let value = cell.value, !value.isEmpty {
+      return value
+    }
+    return nil
   }
 
   private static func cellRawValue(_ cell: CoreXLSX.Cell, sharedStrings: SharedStrings?) -> String {

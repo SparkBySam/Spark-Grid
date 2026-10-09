@@ -185,6 +185,9 @@ final class FormulaEngine {
         for dep in deps {
           dependents[dep, default: []].insert(address)
         }
+        if let snapshot = sheet.cell(at: address).importedFormulaResult {
+          valueCache[address] = CellValue.fromImportedExcel(snapshot)
+        }
       } catch {
         valueCache[address] = .error(.error)
       }

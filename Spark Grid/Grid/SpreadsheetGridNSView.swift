@@ -2556,8 +2556,9 @@ final class SpreadsheetGridNSView: NSView {
         let cell = sheet.cell(at: address)
         guard let rect = paintRect(for: address, sheet: sheet) else { continue }
         guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
-        drawCellContent(cell, at: address, rect: rect, viewModel: viewModel)
-        if let borders = viewModel.resolvedFormat(at: address)?.borders ?? cell.format?.borders,
+        let paint = viewModel.resolvedPaint(at: address)
+        drawCellContent(cell, at: address, rect: rect, viewModel: viewModel, paint: paint)
+        if let borders = paint.format?.borders ?? cell.format?.borders,
            borders.hasAny
         {
           borderItems.append((borders, rect))
@@ -2606,8 +2607,9 @@ final class SpreadsheetGridNSView: NSView {
         let cell = sheet.cell(at: address)
         guard let rect = paintRect(for: address, sheet: sheet) else { continue }
         guard dirtyRect.intersects(rect) else { continue }
-        drawCellContent(cell, at: address, rect: rect, viewModel: viewModel)
-        if let borders = viewModel.resolvedFormat(at: address)?.borders ?? cell.format?.borders,
+        let paint = viewModel.resolvedPaint(at: address)
+        drawCellContent(cell, at: address, rect: rect, viewModel: viewModel, paint: paint)
+        if let borders = paint.format?.borders ?? cell.format?.borders,
            borders.hasAny
         {
           borderItems.append((borders, rect))
@@ -2663,13 +2665,12 @@ final class SpreadsheetGridNSView: NSView {
     _ cell: Cell,
     at address: CellAddress,
     rect: NSRect,
-    viewModel: SpreadsheetViewModel
+    viewModel: SpreadsheetViewModel,
+    paint: ConditionalPaint
   ) {
     if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive {
       return
     }
-
-    let paint = viewModel.resolvedPaint(at: address)
     let paintFormat = paint.format
     let fillColor = CellFormatRenderer.fillColor(for: paintFormat)
     if let fill = fillColor {
@@ -2692,7 +2693,11 @@ final class SpreadsheetGridNSView: NSView {
     let drawFormat = paintFormat ?? cell.format ?? CellFormat()
     if !hideValue, !cell.raw.isEmpty, !drawFormat.overflowsUnclipped {
       let value = viewModel.displayValue(at: address)
-      let text = viewModel.displayString(at: address)
+      let text = CellFormatRenderer.displayText(
+        for: value,
+        format: drawFormat,
+        fallbackRaw: cell.raw
+      )
       if !text.isEmpty {
         let textRect = textDrawingRect(in: rect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
         drawPreparedText(
