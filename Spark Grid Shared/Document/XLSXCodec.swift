@@ -179,37 +179,22 @@ enum XLSXCodec {
     var masters: [Int: SharedMaster] = [:]
     var followers: [(CellAddress, Int)] = []
 
-    // Match <c r="E2"…>…<f t="shared" …>…</f> or self-closing <f …/>
-    let cellPattern = #"<c\b([^>]*)>(.*?)</c>"#
-    let cellRegex = try? NSRegularExpression(pattern: cellPattern, options: [.dotMatchesLineSeparators])
-    let nsxml = xml as NSString
-    let full = NSRange(location: 0, length: nsxml.length)
-    guard let cellRegex else { return }
+    forEachCellElement(in: xml) { attrs, body in
+      guard let ref = xmlAttribute(attrs, named: "r")?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !ref.isEmpty,
+            let address = address(fromA1: ref)
+      else { return }
 
-    for match in cellRegex.matches(in: xml, options: [], range: full) {
-      let attrs = nsxml.substring(with: match.range(at: 1))
-      let body = nsxml.substring(with: match.range(at: 2))
-      guard let rAttrRange = attrs.range(of: #"r="[^"]+""#, options: .regularExpression) else { continue }
-      let rAttr = String(attrs[rAttrRange])
-      guard let q1 = rAttr.firstIndex(of: "\""),
-            let q2 = rAttr.lastIndex(of: "\""),
-            q1 < q2
-      else { continue }
-      let ref = String(rAttr[rAttr.index(after: q1)..<q2])
-      guard let address = address(fromA1: ref) else { continue }
-
-      guard let fRange = body.range(
-        of: #"<f\b[^>]*(?:/>|>[\s\S]*?</f>)"#,
-        options: .regularExpression
-      ) else { continue }
-      let fTag = String(body[fRange])
-      guard fTag.contains(#"t="shared""#) || fTag.contains("t='shared'") else { continue }
+      guard let fTag = sharedFormulaTag(in: body) else { return }
+      guard fTag.contains(#"t="shared""#) || fTag.contains("t='shared'") else { return }
 
       var si: Int?
       if let siMatch = fTag.range(of: #"si="\d+""#, options: .regularExpression) {
         si = Int(String(fTag[siMatch]).filter(\.isNumber))
+      } else if let siMatch = fTag.range(of: #"si='\d+'"#, options: .regularExpression) {
+        si = Int(String(fTag[siMatch]).filter(\.isNumber))
       }
-      guard let sharedIndex = si else { continue }
+      guard let sharedIndex = si else { return }
 
       if let open = fTag.range(of: ">"), fTag.contains("</f>") {
         let after = fTag[open.upperBound...]
@@ -223,7 +208,7 @@ enum XLSXCodec {
             var cell = sheet.cell(at: address)
             cell.raw = raw
             sheet.setCell(cell, at: address)
-            continue
+            return
           }
         }
       }
@@ -240,6 +225,45 @@ enum XLSXCodec {
       cell.raw = adjusted
       sheet.setCell(cell, at: address)
     }
+  }
+
+  /// Linear scan for `<c …>` / `</c>` pairs. Regex over the whole worksheet XML backtracks catastrophically on large KPI sheets.
+  private static func forEachCellElement(in xml: String, body: (String, String) -> Void) {
+    var searchStart = xml.startIndex
+    while searchStart < xml.endIndex {
+      guard let open = xml.range(of: "<c", range: searchStart..<xml.endIndex) else { break }
+      let afterTagName = open.upperBound
+      guard afterTagName < xml.endIndex else { break }
+      let boundary = xml[afterTagName]
+      guard boundary == " " || boundary == ">" || boundary == "/" else {
+        searchStart = open.upperBound
+        continue
+      }
+      guard let openEnd = xml.range(of: ">", range: afterTagName..<xml.endIndex) else { break }
+      let attrs = String(xml[open.upperBound..<openEnd.lowerBound])
+      let openTag = String(xml[open.lowerBound..<openEnd.upperBound])
+      if openTag.hasSuffix("/>") {
+        body(attrs, "")
+        searchStart = openEnd.upperBound
+        continue
+      }
+      guard let close = xml.range(of: "</c>", range: openEnd.upperBound..<xml.endIndex) else { break }
+      let cellBody = String(xml[openEnd.upperBound..<close.lowerBound])
+      body(attrs, cellBody)
+      searchStart = close.upperBound
+    }
+  }
+
+  private static func sharedFormulaTag(in cellBody: String) -> String? {
+    guard let fStart = cellBody.range(of: "<f") else { return nil }
+    let tail = cellBody[fStart.lowerBound...]
+    if let selfClose = tail.range(of: "/>") {
+      return String(tail[..<selfClose.upperBound])
+    }
+    if let close = tail.range(of: "</f>") {
+      return String(tail[..<close.upperBound])
+    }
+    return nil
   }
 
   static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
