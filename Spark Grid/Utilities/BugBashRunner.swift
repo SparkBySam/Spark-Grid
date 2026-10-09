@@ -100,7 +100,8 @@ enum BugBashRunner {
     results.append(largeWorkbookOpenBaseline())
     results.append(MainActor.assumeIsolated { bdcKpiYtdLayoutOpen() })
     results.append(MainActor.assumeIsolated { bdcKpiWorkbookOpenPath() })
-    results.append(MainActor.assumeIsolated { kpiWorkbookJuneViewScroll() })
+    results.append(MainActor.assumeIsolated { largeSyntheticWorkbookColdViewportScroll() })
+    results.append(MainActor.assumeIsolated { kpiWorkbookMultiSheetScroll() })
     results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
     results.append(editorSpellChecking())
     return results
@@ -5927,10 +5928,99 @@ enum BugBashRunner {
     return nil
   }
 
-  /// Optional KPI workbook: June sheet viewport + scroll displayValue must stay interactive.
+  private static func syntheticLargeFormulaSheet(
+    name: String,
+    seedImportedSnapshots: Bool
+  ) -> Sheet {
+    var sheet = Sheet(name: name)
+    for row in 0..<40 {
+      sheet.setCell(Cell(raw: "1"), at: CellAddress(row: row, col: 0))
+    }
+    for row in 0..<900 {
+      for col in 0..<16 {
+        var cell = Cell(raw: "=SUM($A$1:$A$40)")
+        if seedImportedSnapshots {
+          cell.importedFormulaResult = "40"
+        }
+        sheet.setCell(cell, at: CellAddress(row: row, col: col))
+      }
+    }
+    return sheet
+  }
+
+  /// Simulates one grid paint pass (conditional paint + displayed value) for a viewport.
   @MainActor
-  private static func kpiWorkbookJuneViewScroll() -> Result {
-    let name = "KPI June sheet view scroll"
+  private static func simulateViewportPaint(
+    vm: SpreadsheetViewModel,
+    minRow: Int,
+    maxRow: Int,
+    minCol: Int,
+    maxCol: Int
+  ) -> TimeInterval {
+    let start = CFAbsoluteTimeGetCurrent()
+    let sheet = vm.activeSheet
+    for row in minRow...maxRow {
+      for col in minCol...maxCol {
+        let address = CellAddress(row: row, col: col)
+        if sheet.cells[address] == nil { continue }
+        if sheet.isCoveredByMerge(address), sheet.mergeAnchor(for: address) != address { continue }
+        let cell = sheet.cell(at: address)
+        guard !cell.raw.isEmpty else { continue }
+        let paint = vm.resolvedPaint(at: address)
+        let value = vm.displayValue(at: address)
+        _ = CellFormatRenderer.displayText(
+          for: value,
+          format: paint.format ?? cell.format,
+          fallbackRaw: cell.raw
+        )
+      }
+    }
+    return CFAbsoluteTimeGetCurrent() - start
+  }
+
+  /// Large in-memory workbook: cold scroll regions must stay fast when imported snapshots exist.
+  @MainActor
+  private static func largeSyntheticWorkbookColdViewportScroll() -> Result {
+    let name = "large synthetic cold viewport scroll"
+    let workbook = Workbook(sheets: [syntheticLargeFormulaSheet(name: "Data", seedImportedSnapshots: true)])
+    let vm = SpreadsheetViewModel(workbook: workbook)
+    let regionA = simulateViewportPaint(vm: vm, minRow: 0, maxRow: 35, minCol: 0, maxCol: 11)
+    let regionB = simulateViewportPaint(vm: vm, minRow: 420, maxRow: 455, minCol: 0, maxCol: 11)
+    guard regionA < 1.2, regionB < 1.2 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "with snapshots A %.2fs B %.2fs", regionA, regionB)
+      )
+    }
+
+    let slowWorkbook = Workbook(sheets: [syntheticLargeFormulaSheet(name: "Data", seedImportedSnapshots: false)])
+    let slowVM = SpreadsheetViewModel(workbook: slowWorkbook)
+    let slowRegion = simulateViewportPaint(
+      vm: slowVM,
+      minRow: 420,
+      maxRow: 455,
+      minCol: 0,
+      maxCol: 11
+    )
+    guard slowRegion > max(0.35, regionB * 4) else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "slow path %.2fs vs fast %.2fs (guard)", slowRegion, regionB)
+      )
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: String(format: "snapshots A %.2fs B %.2fs; eval guard %.2fs", regionA, regionB, slowRegion)
+    )
+  }
+
+  /// Optional KPI workbook: multiple sheets, disjoint cold viewports, June E/F vs Excel cache.
+  @MainActor
+  private static func kpiWorkbookMultiSheetScroll() -> Result {
+    let name = "KPI workbook multi-sheet scroll"
     let env = ProcessInfo.processInfo.environment
     let envPath = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     let fixturesDir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -5947,47 +6037,44 @@ enum BugBashRunner {
         fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
       )
       var imported = try XLSXCodec.importWorkbook(from: url)
-      guard let juneIndex = imported.sheets.firstIndex(where: { $0.name.caseInsensitiveCompare("June") == .orderedSame }) else {
-        return Result(name: name, passed: false, detail: "June sheet missing")
+      guard let ytdIndex = imported.sheets.firstIndex(where: { $0.name == "YTD Summary" }) else {
+        return Result(name: name, passed: false, detail: "YTD Summary missing")
       }
-      imported.activeSheetIndex = juneIndex
-      let vm = SpreadsheetViewModel(workbook: imported)
+      imported.activeSheetIndex = ytdIndex
+      var vm = SpreadsheetViewModel(workbook: imported)
       drainMainQueue()
 
-      func paintViewport(minRow: Int, maxRow: Int, minCol: Int, maxCol: Int) -> (elapsed: TimeInterval, errors: Int) {
-        let start = CFAbsoluteTimeGetCurrent()
-        var errors = 0
-        for row in minRow...maxRow {
-          for col in minCol...maxCol {
-            let value = vm.displayValue(at: CellAddress(row: row, col: col))
-            if col == 4 || col == 5, row >= 5, row <= 61 {
-              if case .error = value { errors += 1 }
-            }
-          }
-        }
-        return (CFAbsoluteTimeGetCurrent() - start, errors)
-      }
-
-      let top = paintViewport(minRow: 0, maxRow: 39, minCol: 0, maxCol: 11)
-      let scrolled = paintViewport(minRow: 180, maxRow: 219, minCol: 0, maxCol: 11)
-      guard top.errors == 0 else {
-        return Result(name: name, passed: false, detail: "\(top.errors) #ERROR! in E/F summary block (top)")
-      }
-      guard scrolled.errors == 0 else {
-        return Result(name: name, passed: false, detail: "\(scrolled.errors) #ERROR! in E/F summary block (scroll)")
-      }
-      guard top.elapsed < 6, scrolled.elapsed < 6 else {
+      let ytdTop = simulateViewportPaint(vm: vm, minRow: 0, maxRow: 39, minCol: 0, maxCol: 11)
+      let ytdDeep = simulateViewportPaint(vm: vm, minRow: 500, maxRow: 539, minCol: 0, maxCol: 11)
+      guard ytdTop < 4, ytdDeep < 4 else {
         return Result(
           name: name,
           passed: false,
-          detail: String(
-            format: "viewport top %.2fs scroll %.2fs",
-            top.elapsed,
-            scrolled.elapsed
-          )
+          detail: String(format: "YTD top %.2fs deep %.2fs", ytdTop, ytdDeep)
         )
       }
 
+      guard let marchIndex = imported.sheets.firstIndex(where: { $0.name == "March" }) else {
+        return Result(name: name, passed: false, detail: "March sheet missing")
+      }
+      vm.selectSheet(at: marchIndex)
+      drainMainQueue()
+      let marchCold = simulateViewportPaint(vm: vm, minRow: 120, maxRow: 159, minCol: 0, maxCol: 11)
+      guard marchCold < 4 else {
+        return Result(name: name, passed: false, detail: String(format: "March cold %.2fs", marchCold))
+      }
+
+      guard let juneIndex = imported.sheets.firstIndex(where: { $0.name.caseInsensitiveCompare("June") == .orderedSame }) else {
+        return Result(name: name, passed: false, detail: "June sheet missing")
+      }
+      vm.selectSheet(at: juneIndex)
+      drainMainQueue()
+      let juneScroll = simulateViewportPaint(vm: vm, minRow: 200, maxRow: 239, minCol: 0, maxCol: 11)
+      guard juneScroll < 4 else {
+        return Result(name: name, passed: false, detail: String(format: "June scroll %.2fs", juneScroll))
+      }
+
+      var juneErrors = 0
       for row in 5...61 {
         for col in 4...5 {
           let addr = CellAddress(row: row, col: col)
@@ -5996,14 +6083,18 @@ enum BugBashRunner {
             continue
           }
           let value = vm.displayValue(at: addr)
-          guard case .number(let actual) = value, abs(actual - cached) < 0.000_001 else {
+          if case .error = value { juneErrors += 1 }
+          if case .number(let actual) = value, abs(actual - cached) >= 0.000_001 {
             return Result(
               name: name,
               passed: false,
-              detail: "\(addr.a1) got \(value.displayString) cached \(cached)"
+              detail: "\(addr.a1) got \(actual) cached \(cached)"
             )
           }
         }
+      }
+      guard juneErrors == 0 else {
+        return Result(name: name, passed: false, detail: "\(juneErrors) June E/F errors")
       }
 
       guard snapshotGrid(sheet: vm.activeSheet) != nil else {
@@ -6013,9 +6104,11 @@ enum BugBashRunner {
         name: name,
         passed: true,
         detail: String(
-          format: "top %.2fs scroll %.2fs, E/F ok",
-          top.elapsed,
-          scrolled.elapsed
+          format: "YTD %.2f/%.2fs March %.2fs June %.2fs",
+          ytdTop,
+          ytdDeep,
+          marchCold,
+          juneScroll
         )
       )
     } catch {

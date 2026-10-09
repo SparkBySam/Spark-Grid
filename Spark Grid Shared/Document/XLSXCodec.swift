@@ -351,6 +351,9 @@ enum XLSXCodec {
         let raw = cellRawValue(cell, sharedStrings: sharedStrings)
         guard !raw.isEmpty || cell.styleIndex != nil else { continue }
         var model = Cell(raw: raw)
+        if let cached = importedFormulaResult(from: cell, sharedStrings: sharedStrings) {
+          model.importedFormulaResult = cached
+        }
         if let styles, let format = cellFormat(
           from: cell,
           styles: styles,
@@ -435,6 +438,23 @@ enum XLSXCodec {
       }
     }
     return indexes
+  }
+
+  private static func importedFormulaResult(
+    from cell: CoreXLSX.Cell,
+    sharedStrings: SharedStrings?
+  ) -> String? {
+    guard let formula = cell.formula?.value, !formula.isEmpty else { return nil }
+    if cell.type == .sharedString, let sharedStrings, let text = cell.stringValue(sharedStrings) {
+      return text
+    }
+    if let inline = cell.inlineString?.text, !inline.isEmpty {
+      return inline
+    }
+    if let value = cell.value, !value.isEmpty {
+      return value
+    }
+    return nil
   }
 
   private static func cellRawValue(_ cell: CoreXLSX.Cell, sharedStrings: SharedStrings?) -> String {

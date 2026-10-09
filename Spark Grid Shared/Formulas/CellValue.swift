@@ -149,6 +149,14 @@ nonisolated enum CellValue: Equatable, Sendable {
     }
   }
 
+  /// Value from an imported workbook's cached formula result (`<v>`).
+  static func fromImportedExcel(_ raw: String) -> CellValue {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return .blank }
+    if let error = FormulaError(displayCode: trimmed) { return .error(error) }
+    return fromLiteralRaw(trimmed)
+  }
+
   static func fromLiteralRaw(_ raw: String) -> CellValue {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty { return .blank }
