@@ -276,19 +276,20 @@ extension XLSXCodec {
 
   static func parseDxfBody(_ body: String, themeScheme: ThemeColorScheme) -> ConditionalFormatStyle {
     var style = ConditionalFormatStyle()
-    if body.contains("<b/>") || body.contains("<b ") || body.contains("<x14:b") {
-      style.bold = true
-    }
-    if body.contains("<i/>") || body.contains("<i ") || body.contains("<x14:i") {
-      style.italic = true
-    }
+    // `<b/>` is on. `<b val="0"/>` is off. A tag's presence is not "on" —
+    // Excel writes val="0" for an unchecked Bold box, next to the fill and text color.
+    style.bold = fontToggle(in: body, element: "b")
+    style.italic = fontToggle(in: body, element: "i")
     if let fill = firstColor(in: body, near: "bgColor", themeScheme: themeScheme)
       ?? firstColor(in: body, near: "fgColor", themeScheme: themeScheme)
       ?? firstColor(in: body, near: "patternFill", themeScheme: themeScheme)
     {
       style.fillColor = fill
     }
-    if let fontBlock = body.range(of: #"<font>[\s\S]*?</font>"#, options: .regularExpression) {
+    if let fontBlock = body.range(
+      of: #"<(?:x14:)?font\b[^>]*>[\s\S]*?</(?:x14:)?font>"#,
+      options: .regularExpression
+    ) {
       if let text = firstColor(in: String(body[fontBlock]), near: "color", themeScheme: themeScheme) {
         style.textColor = text
       }
@@ -620,8 +621,8 @@ extension XLSXCodec {
   private static func x14DxfXML(_ style: ConditionalFormatStyle) -> String {
     guard style.hasAny else { return "" }
     var font = ""
-    if style.bold == true { font += "<x14:b/>" }
-    if style.italic == true { font += "<x14:i/>" }
+    font += dxfToggleXML("x14:b", style.bold)
+    font += dxfToggleXML("x14:i", style.italic)
     if let rgb = style.textColor.map(rgbHex) {
       font += #"<x14:color rgb="FF\#(rgb)"/>"#
     }
@@ -638,8 +639,8 @@ extension XLSXCodec {
     var body = ""
     for style in dxfs {
       var font = ""
-      if style.bold == true { font += "<b/>" }
-      if style.italic == true { font += "<i/>" }
+      font += dxfToggleXML("b", style.bold)
+      font += dxfToggleXML("i", style.italic)
       if let rgb = style.textColor.map(rgbHex) {
         font += #"<color rgb="FF\#(rgb)"/>"#
       }
@@ -656,6 +657,45 @@ extension XLSXCodec {
   static func sparkChartsJSON(_ charts: [SheetChart]) -> Data? {
     guard !charts.isEmpty else { return nil }
     return try? JSONEncoder().encode(charts)
+  }
+
+  /// `nil` omits the element. `true` is `<b/>`. `false` is `<b val="0"/>`.
+  private static func dxfToggleXML(_ element: String, _ value: Bool?) -> String {
+    switch value {
+    case true:
+      return "<\(element)/>"
+    case false:
+      return #"<\#(element) val="0"/>"#
+    case nil:
+      return ""
+    }
+  }
+
+  /// Bold or italic inside a differential font. Missing means "don't change".
+  /// `val="0"` / `false` / `off` means explicitly off. Any other present tag means on.
+  private static func fontToggle(in body: String, element: String) -> Bool? {
+    let scope: String
+    if let font = body.range(
+      of: #"<(?:x14:)?font\b[^>]*>[\s\S]*?</(?:x14:)?font>"#,
+      options: .regularExpression
+    ) {
+      scope = String(body[font])
+    } else {
+      scope = body
+    }
+    let pattern = #"<(?:x14:)?\#(element)\b([^>/]*)/?\s*>"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let ns = scope as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    guard let match = regex.firstMatch(in: scope, options: [], range: full) else { return nil }
+    let attrs = match.range(at: 1).location == NSNotFound ? "" : ns.substring(with: match.range(at: 1))
+    guard let raw = attributeValue(attrs, name: "val") else { return true }
+    switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "0", "false", "off":
+      return false
+    default:
+      return true
+    }
   }
 
   internal static func rgbHex(_ color: CodableColor) -> String {

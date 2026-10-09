@@ -20,6 +20,12 @@ struct ConditionalFormattingSheet: View {
   @State private var useCustomTextColor = false
   @State private var formatBold = false
   @State private var formatItalic = false
+  /// Bold value loaded with the rule being edited. Nil while creating a rule.
+  @State private var loadedBold: Bool?
+  /// Italic value loaded with the rule. Kept when it is an explicit false.
+  @State private var loadedItalic: Bool?
+  /// True after the user clicks Bold, so check-then-uncheck is stored as off.
+  @State private var boldTouched = false
 
   // Formula
   @State private var formulaText = "=A1>100"
@@ -248,7 +254,13 @@ struct ConditionalFormattingSheet: View {
         ColorPicker("Text", selection: $textColor, supportsOpacity: false)
       }
 
-      Toggle("Bold", isOn: $formatBold)
+      Toggle("Bold", isOn: Binding(
+        get: { formatBold },
+        set: { newValue in
+          formatBold = newValue
+          boldTouched = true
+        }
+      ))
       Toggle("Italic", isOn: $formatItalic)
     }
   }
@@ -385,6 +397,7 @@ struct ConditionalFormattingSheet: View {
       } else if editingRuleID != nil {
         Button("Cancel Edit") {
           editingRuleID = nil
+          finishBoldEdit()
         }
       }
       Spacer()
@@ -465,6 +478,7 @@ struct ConditionalFormattingSheet: View {
       }
       viewModel.replaceConditionalFormats(next, actionName: "Update Conditional Format")
       editingRuleID = nil
+      finishBoldEdit()
       segment = .manage
       return
     }
@@ -479,8 +493,15 @@ struct ConditionalFormattingSheet: View {
       applied = true
     }
     if applied {
+      finishBoldEdit()
       segment = .manage
     }
+  }
+
+  private func finishBoldEdit() {
+    loadedBold = nil
+    loadedItalic = nil
+    boldTouched = false
   }
 
   private func buildRule(for range: CellRange) -> ConditionalFormatRule? {
@@ -525,14 +546,17 @@ struct ConditionalFormattingSheet: View {
   }
 
   private func buildFormatStyle() -> ConditionalFormatStyle {
-    ConditionalFormatStyle(
-      bold: formatBold ? true : nil,
-      italic: formatItalic ? true : nil,
+    let previous = editingRuleID == nil ? nil : loadedBold
+    let previousItalic = editingRuleID == nil ? nil : loadedItalic
+    let style = ConditionalFormatStyle(
+      bold: nil,
+      italic: ConditionalFormatStyle.preservedCheckbox(isOn: formatItalic, previous: previousItalic),
       textColor: useCustomTextColor
         ? CellFormatRenderer.codableColor(from: NSColor(textColor))
         : nil,
       fillColor: CellFormatRenderer.codableColor(from: NSColor(fillColor))
     )
+    return style.withBoldCheckbox(isOn: formatBold, previous: previous, touched: boldTouched)
   }
 
   private func buildColorScaleStops() -> [ColorScaleStop] {
@@ -606,7 +630,10 @@ struct ConditionalFormattingSheet: View {
   }
 
   private func loadRuleIntoForm(_ rule: ConditionalFormatRule) {
+    loadedBold = rule.style.bold
     formatBold = rule.style.bold == true
+    boldTouched = false
+    loadedItalic = rule.style.italic
     formatItalic = rule.style.italic == true
     if let fill = rule.style.fillColor, let ns = CellFormatRenderer.nsColor(fill) {
       fillColor = Color(nsColor: ns)

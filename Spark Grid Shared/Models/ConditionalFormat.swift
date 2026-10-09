@@ -48,6 +48,32 @@ struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
   var hasAny: Bool {
     bold != nil || italic != nil || textColor != nil || fillColor != nil
   }
+
+  /// Stores the Bold checkbox on this style.
+  /// On records true. Turning a stored true off records false, not nil, so the
+  /// uncheck is still off when the rule is reselected or the workbook is reopened.
+  /// A style that never set bold stays nil when the checkbox was not touched, so
+  /// an unrelated edit does not start forcing bold cells off. Fill, italic, and
+  /// text color on `self` are left in place.
+  /// Italic (and any similar checkbox) stores on as true and off as nil.
+  /// An explicit false from the file stays false, so saving Bold does not drop it.
+  static func preservedCheckbox(isOn: Bool, previous: Bool?) -> Bool? {
+    if isOn { return true }
+    if previous == false { return false }
+    return nil
+  }
+
+  func withBoldCheckbox(isOn: Bool, previous: Bool?, touched: Bool) -> ConditionalFormatStyle {
+    var copy = self
+    if isOn {
+      copy.bold = true
+    } else if previous == true || touched {
+      copy.bold = false
+    } else {
+      copy.bold = previous
+    }
+    return copy
+  }
 }
 
 struct ColorScaleStop: Codable, Equatable, Sendable {
@@ -204,6 +230,17 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
   var editsValues: Bool {
     switch self {
     case .blanks, .nonBlanks, .colorScale, .dataBar, .iconSet:
+      return false
+    default:
+      return true
+    }
+  }
+
+  /// Highlight and formula rules paint bold, italic, fill, and text color.
+  /// Color scales, data bars, and icon sets do not.
+  var usesFontStyle: Bool {
+    switch self {
+    case .colorScale, .dataBar, .iconSet:
       return false
     default:
       return true

@@ -82,6 +82,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { nameManagerEditsSheet() })
     results.append(MainActor.assumeIsolated { cellFormatCodeEditsSheet() })
     results.append(MainActor.assumeIsolated { conditionalFormatRuleEdit() })
+    results.append(MainActor.assumeIsolated { conditionalBoldUncheckPersists() })
     results.append(cellTextOverflowAndClip())
     results.append(MainActor.assumeIsolated { cellTextWrapLayout() })
     results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
@@ -3798,6 +3799,239 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: error.localizedDescription)
     }
     return Result(name: name, passed: true, detail: "custom code, text section, preset clears it")
+  }
+
+  private static func conditionalBoldUncheckPersists() -> Result {
+    let name = "conditional bold uncheck"
+    func byteColor(_ red: Int, _ green: Int, _ blue: Int) -> CodableColor {
+      CodableColor(
+        red: Double(red) / 255,
+        green: Double(green) / 255,
+        blue: Double(blue) / 255,
+        alpha: 1
+      )
+    }
+    func sameColor(_ lhs: CodableColor?, _ rhs: CodableColor?) -> Bool {
+      guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+      func byte(_ value: Double) -> Int { Int((value * 255).rounded()) }
+      return byte(lhs.red) == byte(rhs.red)
+        && byte(lhs.green) == byte(rhs.green)
+        && byte(lhs.blue) == byte(rhs.blue)
+        && byte(lhs.alpha) == byte(rhs.alpha)
+    }
+    func fail(_ detail: String) -> Result {
+      Result(name: name, passed: false, detail: detail)
+    }
+
+    let fill = byteColor(245, 199, 199)
+    let text = byteColor(153, 0, 16)
+    let otherFill = byteColor(216, 243, 220)
+    let onStyle = ConditionalFormatStyle(bold: true, italic: true, textColor: text, fillColor: fill)
+
+    if ConditionalFormatStyle.preservedCheckbox(isOn: false, previous: false) != false
+      || ConditionalFormatStyle.preservedCheckbox(isOn: true, previous: false) != true
+      || ConditionalFormatStyle.preservedCheckbox(isOn: false, previous: true) != nil
+      || ConditionalFormatStyle.preservedCheckbox(isOn: false, previous: nil) != nil
+    {
+      return fail("italic off was not kept when bold was saved")
+    }
+
+    var italicOff = onStyle
+    italicOff.italic = false
+    let boldCleared = italicOff.withBoldCheckbox(isOn: false, previous: true, touched: true)
+    if boldCleared.bold != false || boldCleared.italic != false
+      || !sameColor(boldCleared.textColor, text) || !sameColor(boldCleared.fillColor, fill)
+    {
+      return fail("unchecking bold cleared italic off or another field")
+    }
+
+    let unchecked = onStyle.withBoldCheckbox(isOn: false, previous: true, touched: false)
+    if unchecked.bold != false || unchecked.italic != true
+      || !sameColor(unchecked.textColor, text) || !sameColor(unchecked.fillColor, fill)
+    {
+      return fail("uncheck stored \(String(describing: unchecked.bold)) and dropped another field")
+    }
+    if unchecked.bold == true {
+      return fail("reselect still shows bold on")
+    }
+
+    let checkedAgain = unchecked.withBoldCheckbox(isOn: true, previous: unchecked.bold, touched: true)
+    if checkedAgain.bold != true || checkedAgain.italic != true
+      || !sameColor(checkedAgain.textColor, text) || !sameColor(checkedAgain.fillColor, fill)
+    {
+      return fail("checking bold did not save, or cleared another field")
+    }
+
+    let unspecified = ConditionalFormatStyle(italic: true, textColor: text, fillColor: fill)
+    let untouched = unspecified.withBoldCheckbox(isOn: false, previous: nil, touched: false)
+    if untouched.bold != nil || untouched.italic != true || !sameColor(untouched.fillColor, fill) {
+      return fail("an edit that leaves Bold alone forced bold \(String(describing: untouched.bold))")
+    }
+
+    var boldCell = CellFormat()
+    boldCell.bold = true
+    if unchecked.applying(to: boldCell).bold != false || unchecked.applying(to: boldCell).italic != true {
+      return fail("explicit bold off did not clear a bold cell")
+    }
+    if unspecified.applying(to: boldCell).bold != true {
+      return fail("unspecified bold cleared a bold cell")
+    }
+
+    let scheme = ThemeColorScheme()
+    let excelOff = """
+    <font><b val="0"/><i/><color rgb="FF990010"/></font><fill><patternFill patternType="solid"><bgColor rgb="FFF5C7C7"/></patternFill></fill>
+    """
+    let parsedOff = XLSXCodec.parseDxfBody(excelOff, themeScheme: scheme)
+    if parsedOff.bold != false || parsedOff.italic != true
+      || !sameColor(parsedOff.textColor, text) || !sameColor(parsedOff.fillColor, fill)
+    {
+      return fail("Excel val=0 imported as \(String(describing: parsedOff.bold)) text=\(parsedOff.textColor != nil) fill=\(parsedOff.fillColor != nil) italic=\(String(describing: parsedOff.italic))")
+    }
+    let parsedOn = XLSXCodec.parseDxfBody("<font><b/></font><fill><patternFill><bgColor rgb=\"FFF5C7C7\"/></patternFill></fill>", themeScheme: scheme)
+    if parsedOn.bold != true || !sameColor(parsedOn.fillColor, fill) {
+      return fail("bare <b/> should stay on with its fill")
+    }
+    let parsedValOn = XLSXCodec.parseDxfBody(#"<font><b val="1"/></font>"#, themeScheme: scheme)
+    if parsedValOn.bold != true {
+      return fail("val=1 should be bold")
+    }
+    let parsedFalse = XLSXCodec.parseDxfBody(#"<font><i val="0"/></font><fill><patternFill><bgColor rgb="FFF5C7C7"/></patternFill></fill>"#, themeScheme: scheme)
+    if parsedFalse.italic != false || parsedFalse.bold != nil || !sameColor(parsedFalse.fillColor, fill) {
+      return fail("italic val=0 changed bold or fill")
+    }
+    let x14Off = XLSXCodec.parseDxfBody(
+      #"<x14:font><x14:b val="0"/><x14:color rgb="FF990010"/></x14:font><x14:fill><x14:patternFill patternType="solid"><x14:bgColor rgb="FFF5C7C7"/></x14:patternFill></x14:fill>"#,
+      themeScheme: scheme
+    )
+    if x14Off.bold != false || !sameColor(x14Off.textColor, text) || !sameColor(x14Off.fillColor, fill) {
+      return fail("x14 val=0 imported as \(String(describing: x14Off.bold)) text=\(x14Off.textColor != nil) fill=\(x14Off.fillColor != nil)")
+    }
+    let fillOnly = XLSXCodec.parseDxfBody(#"<fill><patternFill><bgColor rgb="FFF5C7C7"/></patternFill></fill>"#, themeScheme: scheme)
+    if fillOnly.bold != nil || !sameColor(fillOnly.fillColor, fill) {
+      return fail("bgColor was read as bold")
+    }
+
+    let offRule = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: CellAddress(row: 3, col: 0)),
+      predicate: .greaterThan(10),
+      style: unchecked
+    )
+    let onRule = ConditionalFormatRule(
+      range: CellRange(start: CellAddress(row: 0, col: 1), end: CellAddress(row: 1, col: 1)),
+      predicate: .lessThan(5),
+      style: ConditionalFormatStyle(bold: true, textColor: text, fillColor: otherFill)
+    )
+    var sheet = Sheet(name: "Rules")
+    sheet.conditionalFormats = [offRule, onRule]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+      let styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") ?? ""
+      let worksheet = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      if !styles.contains(#"<b val="0"/>"#) || !worksheet.contains(#"<x14:b val="0"/>"#) {
+        return fail("explicit bold off was not written as val=0")
+      }
+      if !styles.contains("<b/>") && !styles.contains("<b val=\"1\"/>") {
+        return fail("checked bold was not written")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      let rules = imported.activeSheet.conditionalFormats
+      guard let off = rules.first(where: { $0.predicate == .greaterThan(10) }),
+            let on = rules.first(where: { $0.predicate == .lessThan(5) })
+      else {
+        return fail("reopen lost a rule \(rules.map(\.predicate))")
+      }
+      if off.style.bold != false || off.range.a1Label != "A1:A4" || off.style.italic != true
+        || !sameColor(off.style.textColor, text) || !sameColor(off.style.fillColor, fill)
+      {
+        return fail("reopen bold=\(String(describing: off.style.bold)) range=\(off.range.a1Label) italic=\(String(describing: off.style.italic))")
+      }
+      if on.style.bold != true || !sameColor(on.style.fillColor, otherFill) || !sameColor(on.style.textColor, text) {
+        return fail("checked rule did not survive reopen bold=\(String(describing: on.style.bold))")
+      }
+    } catch {
+      return fail(error.localizedDescription)
+    }
+
+    var plain = Sheet(name: "Plain")
+    plain.conditionalFormats = [
+      ConditionalFormatRule(
+        range: CellRange(start: .origin, end: .origin),
+        predicate: .greaterThan(1),
+        style: unspecified
+      ),
+    ]
+    do {
+      let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [plain]))
+      let styles = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/styles.xml") ?? ""
+      let worksheet = XLSXCodec.zipEntryString(archiveData: data, entryPath: "xl/worksheets/sheet1.xml") ?? ""
+      if styles.contains("<b/>") || styles.contains("<b ") || worksheet.contains("<x14:b") {
+        return fail("unspecified bold was written into the dxf")
+      }
+      let imported = try XLSXCodec.importWorkbook(from: data)
+      guard let style = imported.activeSheet.conditionalFormats.first?.style else {
+        return fail("unspecified rule missing after reopen")
+      }
+      if style.bold != nil || style.italic != true || !sameColor(style.fillColor, fill) || !sameColor(style.textColor, text) {
+        return fail("unspecified bold round-trip changed \(style)")
+      }
+    } catch {
+      return fail(error.localizedDescription)
+    }
+
+    do {
+      let encoded = try JSONEncoder().encode(unchecked)
+      let decoded = try JSONDecoder().decode(ConditionalFormatStyle.self, from: encoded)
+      if decoded.bold != false || decoded.italic != true
+        || !sameColor(decoded.textColor, text) || !sameColor(decoded.fillColor, fill)
+      {
+        return fail("document encoding dropped bold off")
+      }
+    } catch {
+      return fail(error.localizedDescription)
+    }
+
+    var editSheet = Sheet(name: "Edit")
+    let original = ConditionalFormatRule(
+      range: CellRange(start: .origin, end: CellAddress(row: 3, col: 0)),
+      predicate: .greaterThan(10),
+      style: onStyle
+    )
+    editSheet.conditionalFormats = [original]
+    let viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [editSheet]))
+    guard let current = viewModel.activeSheet.conditionalFormats.first,
+          var edited = current.edited(rangeText: "A1:A4", primary: "10", secondary: "")
+    else {
+      return fail("could not load the rule for edit")
+    }
+    edited.style = current.style.withBoldCheckbox(isOn: false, previous: current.style.bold, touched: true)
+    viewModel.replaceConditionalFormatRule(edited)
+    guard let stored = viewModel.activeSheet.conditionalFormats.first else {
+      return fail("rule disappeared after uncheck")
+    }
+    if stored.style.bold != false || stored.style.italic != true
+      || !sameColor(stored.style.textColor, text) || !sameColor(stored.style.fillColor, fill)
+      || stored.predicate != .greaterThan(10) || stored.range.a1Label != "A1:A4"
+    {
+      return fail("sheet kept bold \(String(describing: stored.style.bold)) after uncheck")
+    }
+    guard let reselected = viewModel.activeSheet.conditionalFormats.first(where: { $0.id == stored.id }) else {
+      return fail("reselect missed the rule")
+    }
+    if reselected.style.bold == true {
+      return fail("reselect shows bold on")
+    }
+    var turnedOn = reselected
+    turnedOn.style = reselected.style.withBoldCheckbox(isOn: true, previous: reselected.style.bold, touched: true)
+    viewModel.replaceConditionalFormatRule(turnedOn)
+    guard let afterCheck = viewModel.activeSheet.conditionalFormats.first else {
+      return fail("rule disappeared after check")
+    }
+    if afterCheck.style.bold != true || afterCheck.style.italic != true
+      || !sameColor(afterCheck.style.fillColor, fill) || !sameColor(afterCheck.style.textColor, text)
+    {
+      return fail("checking bold on the stored rule did not save")
+    }
+    return Result(name: name, passed: true, detail: "bold off stays off; bold on still saves; fill, italic, and text stay")
   }
 
   private static func conditionalFormatRuleEdit() -> Result {
