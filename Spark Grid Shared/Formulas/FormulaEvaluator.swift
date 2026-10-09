@@ -35,6 +35,8 @@ struct FormulaEvaluator {
   var evaluationOrigin: CellAddress?
   /// Shared range snapshots for COUNTIFS / SUMIFS-style functions (one scan per range per batch).
   var aggregateRangeCache: FormulaAggregateRangeCache?
+  /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
+  var lookupTableCache: FormulaLookupTableCache?
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {
@@ -754,6 +756,29 @@ struct FormulaEvaluator {
     guard index >= 1, index <= span else { return .error(.ref) }
 
     let resultOffset = (horizontal ? n.minRow : n.minCol) + index - 1
+    if exact, let cache = lookupTableCache {
+      let tableKey = LookupTableKey(
+        sheet: (start.sheet ?? "").lowercased(),
+        minRow: n.minRow,
+        minCol: n.minCol,
+        maxRow: n.maxRow,
+        maxCol: n.maxCol,
+        resultIndex: index,
+        horizontal: horizontal
+      )
+      if let hit = cache.exactLookup(key: tableKey, needle: needle, build: {
+        buildExactLookupMap(
+          horizontal: horizontal,
+          bounds: n,
+          start: start,
+          resultOffset: resultOffset
+        )
+      }) {
+        return hit
+      }
+      return .error(.na)
+    }
+
     var approximate: (key: Double, value: CellValue)?
     let outerStart = horizontal ? n.minCol : n.minRow
     let outerEnd = horizontal ? n.maxCol : n.maxRow
@@ -791,6 +816,39 @@ struct FormulaEvaluator {
 
     if exact { return .error(.na) }
     return approximate?.value ?? .error(.na)
+  }
+
+  private func buildExactLookupMap(
+    horizontal: Bool,
+    bounds: (minRow: Int, minCol: Int, maxRow: Int, maxCol: Int),
+    start: FormulaRef,
+    resultOffset: Int
+  ) -> [AggregateValueKey: CellValue] {
+    var map: [AggregateValueKey: CellValue] = [:]
+    let outerStart = horizontal ? bounds.minCol : bounds.minRow
+    let outerEnd = horizontal ? bounds.maxCol : bounds.maxRow
+    for position in outerStart...outerEnd {
+      let keyRef = FormulaRef(
+        sheet: start.sheet,
+        row: horizontal ? bounds.minRow : position,
+        col: horizontal ? position : bounds.minCol,
+        absRow: false,
+        absCol: false
+      )
+      let key = lookup(keyRef)
+      if case .error = key { continue }
+      guard let keyIndex = AggregateValueKey.from(cellValue: key) else { continue }
+      if map[keyIndex] != nil { continue }
+      let result = lookup(FormulaRef(
+        sheet: start.sheet,
+        row: horizontal ? resultOffset : position,
+        col: horizontal ? position : resultOffset,
+        absRow: false,
+        absCol: false
+      ))
+      map[keyIndex] = result
+    }
+    return map
   }
 
   private func valuesEqual(_ lhs: CellValue, _ rhs: CellValue) -> Bool {

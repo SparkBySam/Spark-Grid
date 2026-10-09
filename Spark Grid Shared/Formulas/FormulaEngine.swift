@@ -9,6 +9,13 @@ final class FormulaEngine {
   private var dependents: [CellAddress: Set<CellAddress>] = [:] // cell -> formulas that use it
   private var revision: Int = 0
   private let aggregateRangeCache = FormulaAggregateRangeCache()
+  private let lookupTableCache = FormulaLookupTableCache()
+  private struct IngestedFormulaTemplate {
+    var expr: FormulaExpr
+    var deps: Set<CellAddress>
+    var ranges: [CellRange]
+  }
+  private var ingestTemplateCache: [String: IngestedFormulaTemplate] = [:]
   /// Results from `recalculateEntireWorkbook` (and incremental edits), keyed by sheet name.
   private var recalculatedSheetValues: [String: [CellAddress: CellValue]] = [:]
 
@@ -94,6 +101,7 @@ final class FormulaEngine {
       return self.extent(for: sheetName ?? self.activeSheetName)
     }
     evaluator.aggregateRangeCache = aggregateRangeCache
+    evaluator.lookupTableCache = lookupTableCache
     return evaluator.evaluate(expr)
   }
 
@@ -104,6 +112,7 @@ final class FormulaEngine {
     self.workbook = workbook
     recalculatedSheetValues.removeAll(keepingCapacity: true)
     aggregateRangeCache.invalidateAll()
+    lookupTableCache.invalidateAll()
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
     for sheet in workbook.sheets {
@@ -124,6 +133,7 @@ final class FormulaEngine {
   func rebuild(workbook: Workbook, recalculate: Bool = false) {
     clearFormulaGraph()
     aggregateRangeCache.invalidateAll()
+    lookupTableCache.invalidateAll()
     self.workbook = workbook
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
@@ -151,6 +161,7 @@ final class FormulaEngine {
     foreignCache.removeAll(keepingCapacity: true)
     for address in addresses {
       aggregateRangeCache.invalidate(sheetName: activeSheetName, address: address)
+      lookupTableCache.invalidate(sheetName: activeSheetName, address: address)
     }
     var dirty: Set<CellAddress> = []
     for address in addresses {
@@ -181,12 +192,18 @@ final class FormulaEngine {
   func clear() {
     clearFormulaGraph()
     aggregateRangeCache.invalidateAll()
+    lookupTableCache.invalidateAll()
+    ingestTemplateCache.removeAll(keepingCapacity: true)
     recalculatedSheetValues.removeAll(keepingCapacity: true)
     revision &+= 1
   }
 
   private func sheetKey(_ name: String) -> String {
     name.lowercased()
+  }
+
+  private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String) -> String {
+    "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}\(formula)"
   }
 
   private func storedRecalculatedValue(sheetName: String, at address: CellAddress) -> CellValue? {
@@ -239,30 +256,44 @@ final class FormulaEngine {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if FormulaSyntax.isFormula(trimmed) {
       do {
-        let expr = try FormulaParser.parse(trimmed)
-        formulaAST[address] = expr
         let maxRow = sheet.effectiveRowCount - 1
         let maxCol = sheet.effectiveColumnCount - 1
-        let deps = FormulaDependencies.collect(
-          from: expr,
-          activeSheetName: activeSheetName,
+        let templateKey = ingestTemplateKey(
+          sheetName: activeSheetName,
           maxRow: maxRow,
           maxCol: maxCol,
-          namedRangeLookup: { [weak self] name in
-            self?.namedRangeExpr(named: name)
-          }
+          formula: trimmed
         )
-        dependencies[address] = deps
-        dependencyRanges[address] = FormulaDependencies.collectWatchedRanges(
-          from: expr,
-          activeSheetName: activeSheetName,
-          maxRow: maxRow,
-          maxCol: maxCol,
-          namedRangeLookup: { [weak self] name in
-            self?.namedRangeExpr(named: name)
-          }
-        )
-        for dep in deps {
+        let template: IngestedFormulaTemplate
+        if let cached = ingestTemplateCache[templateKey] {
+          template = cached
+        } else {
+          let expr = try FormulaParser.parse(trimmed)
+          let deps = FormulaDependencies.collect(
+            from: expr,
+            activeSheetName: activeSheetName,
+            maxRow: maxRow,
+            maxCol: maxCol,
+            namedRangeLookup: { [weak self] name in
+              self?.namedRangeExpr(named: name)
+            }
+          )
+          let ranges = FormulaDependencies.collectWatchedRanges(
+            from: expr,
+            activeSheetName: activeSheetName,
+            maxRow: maxRow,
+            maxCol: maxCol,
+            namedRangeLookup: { [weak self] name in
+              self?.namedRangeExpr(named: name)
+            }
+          )
+          template = IngestedFormulaTemplate(expr: expr, deps: deps, ranges: ranges)
+          ingestTemplateCache[templateKey] = template
+        }
+        formulaAST[address] = template.expr
+        dependencies[address] = template.deps
+        dependencyRanges[address] = template.ranges
+        for dep in template.deps {
           dependents[dep, default: []].insert(address)
         }
         if let snapshot = sheet.cell(at: address).importedFormulaResult {
@@ -282,6 +313,12 @@ final class FormulaEngine {
 
   private func literalOrEmpty(_ raw: String) -> CellValue {
     CellValue.fromLiteralRaw(raw)
+  }
+
+  private func workbookLiteral(sheet: Sheet, address: CellAddress) -> CellValue? {
+    let raw = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !FormulaSyntax.isFormula(raw) else { return nil }
+    return literalOrEmpty(raw)
   }
 
   /// Non-formula cells are read from `sheet` and refreshed in the cache.
@@ -346,6 +383,7 @@ final class FormulaEngine {
         return self.extent(for: sheetName ?? self.activeSheetName)
       }
       evaluator.aggregateRangeCache = aggregateRangeCache
+      evaluator.lookupTableCache = lookupTableCache
       valueCache[address] = evaluator.evaluate(expr)
     }
 
@@ -395,6 +433,10 @@ final class FormulaEngine {
     if let cached = foreignCache[key] {
       return cached
     }
+    if let literal = workbookLiteral(sheet: sheet, address: address) {
+      foreignCache[key] = literal
+      return literal
+    }
     let rawForStored = sheet.cell(at: address).raw
     if FormulaSyntax.isFormula(rawForStored),
        let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
@@ -405,8 +447,7 @@ final class FormulaEngine {
       return .error(.cycle)
     }
 
-    let raw = sheet.cell(at: address).raw
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard FormulaSyntax.isFormula(trimmed) else {
       let value = literalOrEmpty(trimmed)
       foreignCache[key] = value
@@ -442,6 +483,7 @@ final class FormulaEngine {
         return self.extent(for: sheetName ?? sheet.name)
       }
       evaluator.aggregateRangeCache = aggregateRangeCache
+      evaluator.lookupTableCache = lookupTableCache
       let value = evaluator.evaluate(expr)
       foreignCache[key] = value
       return value
