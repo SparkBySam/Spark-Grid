@@ -30,6 +30,12 @@ final class FormulaEngine {
     if let cached = valueCache[address] {
       return cached
     }
+    if formulaAST[address] != nil {
+      recalculate(addresses: [address], sheet: sheet)
+      if let cached = valueCache[address] {
+        return cached
+      }
+    }
     let value = literalOrEmpty(sheet.cell(at: address).raw)
     valueCache[address] = value
     return value
@@ -74,20 +80,23 @@ final class FormulaEngine {
   }
 
   /// Full rebuild for the workbook's active sheet (also enables cross-sheet lookups).
-  func rebuild(workbook: Workbook) {
+  /// When `recalculate` is false, formulas evaluate on demand via `displayValue` (faster open / sheet switch).
+  func rebuild(workbook: Workbook, recalculate: Bool = false) {
     clear()
     self.workbook = workbook
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
-    for (address, cell) in sheet.cells {
+    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
       ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
     }
-    recalculateAll(sheet: sheet)
+    if recalculate {
+      recalculateAll(sheet: sheet)
+    }
   }
 
   /// Convenience when only a single sheet is available (e.g. isolated print of one sheet).
-  func rebuild(sheet: Sheet) {
-    rebuild(workbook: Workbook(sheets: [sheet], activeSheetIndex: 0))
+  func rebuild(sheet: Sheet, recalculate: Bool = true) {
+    rebuild(workbook: Workbook(sheets: [sheet], activeSheetIndex: 0), recalculate: recalculate)
   }
 
   /// Update after one or more cells change on the active sheet.

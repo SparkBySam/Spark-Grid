@@ -255,13 +255,22 @@ enum XLSXCodec {
   }
 
   private static func sharedFormulaTag(in cellBody: String) -> String? {
-    guard let fStart = cellBody.range(of: "<f") else { return nil }
-    let tail = cellBody[fStart.lowerBound...]
-    if let selfClose = tail.range(of: "/>") {
-      return String(tail[..<selfClose.upperBound])
-    }
-    if let close = tail.range(of: "</f>") {
-      return String(tail[..<close.upperBound])
+    var search = cellBody.startIndex
+    while search < cellBody.endIndex {
+      guard let fStart = cellBody.range(of: "<f", range: search..<cellBody.endIndex) else { break }
+      let tail = cellBody[fStart.lowerBound...]
+      let head = String(tail.prefix(240))
+      guard head.contains(#"t="shared""#) || head.contains("t='shared'") else {
+        search = fStart.upperBound
+        continue
+      }
+      if let selfClose = tail.range(of: "/>") {
+        return String(tail[..<selfClose.upperBound])
+      }
+      if let close = tail.range(of: "</f>") {
+        return String(tail[..<close.upperBound])
+      }
+      return nil
     }
     return nil
   }
