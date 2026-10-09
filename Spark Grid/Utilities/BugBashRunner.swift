@@ -3976,8 +3976,6 @@ enum BugBashRunner {
 
     let board = NSPasteboard.general
     let previous = board.string(forType: .string)
-    board.clearContents()
-    board.setString("[h]:mm:ss", forType: .string)
     defer {
       board.clearContents()
       if let previous {
@@ -3994,6 +3992,24 @@ enum BugBashRunner {
     guard field.isInterceptingPaste, CellFormatCodePaste.editingField === field else {
       return Result(name: name, passed: false, detail: "paste shortcut was not captured")
     }
+    guard let editor = field.currentEditor() as? NSTextView else {
+      return Result(name: name, passed: false, detail: "format field has no editor")
+    }
+    let typedColor = NSColor(srgbRed: 0.93, green: 0.94, blue: 0.96, alpha: 1)
+    var typing = editor.typingAttributes
+    typing[.foregroundColor] = typedColor
+    editor.typingAttributes = typing
+    let blackPaste = NSAttributedString(
+      string: "[h]:mm:ss",
+      attributes: [
+        .foregroundColor: NSColor.black,
+        .font: NSFont.systemFont(ofSize: 16),
+      ]
+    )
+    board.clearContents()
+    guard board.writeObjects([blackPaste]) else {
+      return Result(name: name, passed: false, detail: "could not write colored pasteboard")
+    }
 
     var sheet = Sheet(name: "Sheet1")
     sheet.setCell(Cell(raw: "1.5"), at: .origin)
@@ -4005,6 +4021,9 @@ enum BugBashRunner {
     }
     if CellFormatCodePaste.handleKeyDown(event) != nil || field.liveText != "[h]:mm:ss" {
       return Result(name: name, passed: false, detail: "field text \(field.liveText)")
+    }
+    if let mismatch = pastedForegroundMismatch(in: field, expected: typedColor) {
+      return Result(name: name, passed: false, detail: mismatch)
     }
     if viewModel.activeSheet.cell(at: .origin).raw != "1.5" {
       return Result(name: name, passed: false, detail: "paste wrote \(viewModel.activeSheet.cell(at: .origin).raw)")
@@ -4033,7 +4052,34 @@ enum BugBashRunner {
     if viewModel.activeSheet.cell(at: .origin).raw != "[h]:mm:ss" {
       return Result(name: name, passed: false, detail: "grid paste \(viewModel.activeSheet.cell(at: .origin).raw)")
     }
-    return Result(name: name, passed: true, detail: "focused paste stays in the field; grid paste still writes the cell")
+    return Result(name: name, passed: true, detail: "focused paste stays in the field, in the typed color; grid paste still writes the cell")
+  }
+
+  /// Pasted runs must use the field's typing color, not the pasteboard's black foreground.
+  private static func pastedForegroundMismatch(in field: CellFormatCodeTextField, expected: NSColor) -> String? {
+    guard let editor = field.currentEditor() as? NSTextView, let storage = editor.textStorage, storage.length > 0 else {
+      return "pasted text has no color run"
+    }
+    var index = 0
+    while index < storage.length {
+      var run = NSRange(location: 0, length: 0)
+      let color = storage.attribute(.foregroundColor, at: index, effectiveRange: &run) as? NSColor
+      if !sameForeground(color, expected) {
+        return "paste color \(color.map { "\($0)" } ?? "nil") expected typed color"
+      }
+      let next = max(NSMaxRange(run), index + 1)
+      index = next
+    }
+    return nil
+  }
+
+  private static func sameForeground(_ lhs: NSColor?, _ rhs: NSColor) -> Bool {
+    guard let left = lhs?.usingColorSpace(.sRGB), let right = rhs.usingColorSpace(.sRGB) else { return false }
+    let slop = 0.02
+    return abs(left.redComponent - right.redComponent) < slop
+      && abs(left.greenComponent - right.greenComponent) < slop
+      && abs(left.blueComponent - right.blueComponent) < slop
+      && abs(left.alphaComponent - right.alphaComponent) < slop
   }
 
   private static func commandVEvent(window: NSWindow) -> NSEvent? {
