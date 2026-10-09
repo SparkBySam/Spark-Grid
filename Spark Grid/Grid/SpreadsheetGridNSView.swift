@@ -103,7 +103,7 @@ final class SpreadsheetGridNSView: NSView {
       // Clear only this pane. Grid points are in the superview's coordinates.
       ctx.cgContext.clear(local)
       ctx.saveGraphicsState()
-      let origin = convert(.zero, to: grid)
+      let origin = convert(CGPoint.zero, to: grid)
       ctx.cgContext.translateBy(x: -origin.x, y: -origin.y)
       NSBezierPath(rect: convert(bounds, to: grid)).addClip()
       grid.drawFrozenPanesCoveringCharts(in: convert(dirtyRect, to: grid))
