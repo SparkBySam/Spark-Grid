@@ -41,6 +41,8 @@ enum BugBashRunner {
     results.append(themeSchemeParse())
     results.append(mergeSelectionSnap())
     results.append(sharedFormulaRoundTrip())
+    results.append(sharedFormulaExpansionManyCells())
+    results.append(kpiWorkbookSharedFormulaImport())
     results.append(conditionalFormatImport())
     results.append(highlightRoundTrip())
     results.append(cfDxfExcelCompat())
@@ -137,6 +139,78 @@ enum BugBashRunner {
       if FileManager.default.fileExists(atPath: path) { return path }
     }
     return nil
+  }
+
+  /// Regression for KPI-scale worksheets: whole-sheet `<c>…</c>` regex used to hang in `expandSharedFormulas`.
+  private static func sharedFormulaExpansionManyCells() -> Result {
+    let name = "shared formula expansion many cells"
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "shared_formula_many_cells.xlsx",
+        fixturesFileName: "shared_formula_many_cells.xlsx",
+        bundleResourceName: "shared_formula_many_cells"
+      )
+      let start = CFAbsoluteTimeGetCurrent()
+      let workbook = try XLSXCodec.importWorkbook(from: url)
+      let elapsed = CFAbsoluteTimeGetCurrent() - start
+      guard elapsed < 15 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(format: "import took %.1fs", elapsed)
+        )
+      }
+      let follower = workbook.activeSheet.cell(at: CellAddress(row: 1, col: 26))
+      guard FormulaSyntax.isFormula(follower.raw) else {
+        return Result(name: name, passed: false, detail: "follower AA2 not a formula: \(follower.raw)")
+      }
+      return Result(
+        name: name,
+        passed: true,
+        detail: String(format: "3500 cells + shared follower in %.2fs", elapsed)
+      )
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  /// Optional full KPI workbook; import must finish (shared-formula expansion used to hang).
+  private static func kpiWorkbookSharedFormulaImport() -> Result {
+    let name = "KPI workbook shared formula import"
+    let env = ProcessInfo.processInfo.environment
+    let envPath = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesDir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesPath = (fixturesDir as NSString).appendingPathComponent("BDC-Digital-KPI-2026.xlsx")
+    let hasSource = (!envPath.isEmpty && FileManager.default.fileExists(atPath: envPath))
+      || (!fixturesDir.isEmpty && FileManager.default.fileExists(atPath: fixturesPath))
+    guard hasSource else {
+      return Result(name: name, passed: true, detail: "skipped (no KPI fixture source)")
+    }
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "BDC-Digital-KPI-2026.xlsx",
+        envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
+        fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
+      )
+      let start = CFAbsoluteTimeGetCurrent()
+      let workbook = try XLSXCodec.importWorkbook(from: url)
+      let elapsed = CFAbsoluteTimeGetCurrent() - start
+      let cellCount = workbook.sheets.reduce(0) { $0 + $1.cells.count }
+      guard elapsed < 300 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(format: "import took %.1fs for %d cells", elapsed, cellCount)
+        )
+      }
+      return Result(
+        name: name,
+        passed: true,
+        detail: String(format: "%d cells imported in %.1fs", cellCount, elapsed)
+      )
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
   }
 
   private static func sharedFormulaRoundTrip() -> Result {
