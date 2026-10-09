@@ -59,6 +59,8 @@ struct FormulaBarTextField: NSViewRepresentable {
     var lastAppliedKey = ""
     var appliedCaretToken = 0
     private var didBeginEditing = false
+    /// True after formula reference colors were written, so leaving a formula can restore plain text once.
+    private var showingFormulaAttributes = false
 
     init(_ parent: FormulaBarTextField) {
       self.parent = parent
@@ -74,6 +76,32 @@ struct FormulaBarTextField: NSViewRepresentable {
     func applyAttributes(force: Bool) {
       guard let textView, let storage = textView.textStorage else { return }
       let raw = textView.string
+
+      // Prose keeps the text storage stable so the system spelling underline can stick.
+      // Leaving a formula restores plain typing attributes once.
+      if EditorSpellCheck.shouldCheck(raw) {
+        let leftFormula = showingFormulaAttributes
+        if leftFormula {
+          applyPlainTypingAttributes(textView: textView, storage: storage)
+          showingFormulaAttributes = false
+        }
+        EditorSpellCheck.apply(to: textView, text: raw, refresh: leftFormula)
+        lastAppliedKey = highlightKey(for: raw)
+        return
+      }
+
+      EditorSpellCheck.apply(to: textView, text: raw, refresh: false)
+
+      // Numbers are not formulas. Leave the text alone so formula colors are not applied.
+      guard FormulaSyntax.isFormula(raw) else {
+        if showingFormulaAttributes {
+          applyPlainTypingAttributes(textView: textView, storage: storage)
+          showingFormulaAttributes = false
+        }
+        lastAppliedKey = highlightKey(for: raw)
+        return
+      }
+
       let key = highlightKey(for: raw)
       if !force, key == lastAppliedKey { return }
       guard !isApplyingAttributes else { return }
@@ -109,7 +137,42 @@ struct FormulaBarTextField: NSViewRepresentable {
       if textView.selectedRange != next {
         textView.setSelectedRange(next)
       }
+      showingFormulaAttributes = true
       lastAppliedKey = key
+    }
+
+    private func applyPlainTypingAttributes(textView: FormulaBarNSTextView, storage: NSTextStorage) {
+      guard !isApplyingAttributes else { return }
+      isApplyingAttributes = true
+      defer { isApplyingAttributes = false }
+
+      let font = textView.font
+        ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+      let color = NSColor.labelColor
+      let selected = textView.selectedRange
+      let plain = NSAttributedString(
+        string: textView.string,
+        attributes: [
+          .font: font,
+          .foregroundColor: color,
+          .backgroundColor: NSColor.clear,
+        ]
+      )
+      storage.beginEditing()
+      storage.setAttributedString(plain)
+      storage.endEditing()
+      textView.typingAttributes = [
+        .font: font,
+        .foregroundColor: color,
+        .backgroundColor: NSColor.clear,
+      ]
+      let maxLen = storage.length
+      let loc = min(selected.location, maxLen)
+      let len = min(selected.length, max(0, maxLen - loc))
+      let next = NSRange(location: loc, length: len)
+      if textView.selectedRange != next {
+        textView.setSelectedRange(next)
+      }
     }
 
     func textDidBeginEditing(_ notification: Notification) {
@@ -399,12 +462,116 @@ final class FormulaBarContainerView: NSView {
 }
 
 final class FormulaBarNSTextView: NSTextView {
+  private var isReplacingString = false
+  private var isApplyingSpellPolicy = false
+  private var isClaimingFocus = false
+  private var spellCheckSyncPending = false
+
   override var acceptsFirstResponder: Bool { true }
+
+  /// Replacing the string puts continuous checking and automatic correction back
+  /// to the text view defaults. Prose has to win after that replacement returns.
+  override var string: String {
+    get { super.string }
+    set {
+      if isReplacingString || isApplyingSpellPolicy {
+        super.string = newValue
+        return
+      }
+      isReplacingString = true
+      isAutomaticSpellingCorrectionEnabled = false
+      isGrammarCheckingEnabled = false
+      super.string = newValue
+      restoreAssignedString(newValue)
+      applySpellPolicy()
+      isReplacingString = false
+    }
+  }
+
+  /// Automatic correction can rewrite a misspelling while the string is replaced.
+  /// Put the assigned characters back so prose such as `recieve` can be underlined.
+  private func restoreAssignedString(_ newValue: String) {
+    guard super.string != newValue, let storage = textStorage else { return }
+    isApplyingSpellPolicy = true
+    let length = (storage.string as NSString).length
+    storage.beginEditing()
+    storage.replaceCharacters(in: NSRange(location: 0, length: length), with: newValue)
+    storage.endEditing()
+    isApplyingSpellPolicy = false
+  }
+
+  override func didChangeText() {
+    // Applying the policy can notify a text change. Ignore that re-entry so
+    // AppKit does not put the defaults back on top of the policy.
+    if isApplyingSpellPolicy {
+      return
+    }
+    if isReplacingString {
+      super.didChangeText()
+      return
+    }
+    isReplacingString = true
+    isAutomaticSpellingCorrectionEnabled = false
+    isGrammarCheckingEnabled = false
+    super.didChangeText()
+    isReplacingString = false
+    applySpellPolicy()
+    scheduleSpellCheckSync()
+  }
+
+  private func applySpellPolicy() {
+    guard !isApplyingSpellPolicy else { return }
+    // Spell checking marks the focused editor. Take focus only when nobody else has it,
+    // so mirroring text into the bar does not steal the grid.
+    if !isClaimingFocus, let window, window.firstResponder == nil {
+      isClaimingFocus = true
+      window.makeFirstResponder(self)
+      isClaimingFocus = false
+    }
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.apply(
+      to: self,
+      text: string,
+      refresh: EditorSpellCheck.shouldCheck(string)
+    )
+    isApplyingSpellPolicy = false
+  }
+
+  override func checkText(
+    in range: NSRange,
+    types checkingTypes: NSTextCheckingTypes,
+    options: [NSSpellChecker.OptionKey: Any] = [:]
+  ) {
+    // A formula is not checked. Prose still gets a spelling underline if `super`
+    // returns before the system mark is on the layout manager.
+    guard EditorSpellCheck.shouldCheck(string) else { return }
+    super.checkText(in: range, types: checkingTypes, options: options)
+    guard !isApplyingSpellPolicy else { return }
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.markSystemSpelling(
+      on: self,
+      language: EditorSpellCheck.spellingLanguage(in: options)
+    )
+    isApplyingSpellPolicy = false
+  }
+
+  /// A keystroke can restore the defaults after `didChangeText` returns.
+  /// Apply the same policy once more on the next turn.
+  private func scheduleSpellCheckSync() {
+    guard !spellCheckSyncPending else { return }
+    spellCheckSyncPending = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.spellCheckSyncPending = false
+      self.applySpellPolicy()
+    }
+  }
 
   override func becomeFirstResponder() -> Bool {
     let ok = super.becomeFirstResponder()
     if ok {
       isRichText = true
+      applySpellPolicy()
     }
     return ok
   }
@@ -435,6 +602,7 @@ final class FormulaBarNSTextView: NSTextView {
       return
     }
     super.insertText(insertString, replacementRange: replacementRange)
+    applySpellPolicy()
   }
 
   override func insertCompletion(

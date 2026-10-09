@@ -3097,13 +3097,24 @@ final class SpreadsheetGridNSView: NSView {
       let length = editor.stringValue.utf16.count
       fieldEditor.selectedRange = NSRange(location: length, length: 0)
     }
+    if let textView = fieldEditor as? NSTextView {
+      EditorSpellCheck.apply(to: textView, text: textView.string, refresh: true)
+    }
     applyInCellFormulaAttributes(preserveSelection: true)
     if let textView = editor.currentEditor() as? NSTextView {
       viewModel.updateFormulaHighlightFocus(atUTF16: textView.selectedRange.location)
       // Focus update may arrive before highlights exist; refresh once more next turn.
+      // Spell checking is set again because the field editor can clear it while starting.
       DispatchQueue.main.async { [weak self] in
         guard let self, self.isEditorActive else { return }
         self.lastAppliedFormulaHighlightKey = ""
+        if let textView = self.editor.currentEditor() as? NSTextView {
+          EditorSpellCheck.apply(
+            to: textView,
+            text: textView.string,
+            refresh: EditorSpellCheck.shouldCheck(textView.string)
+          )
+        }
         self.applyInCellFormulaAttributes(preserveSelection: true)
         if let textView = self.editor.currentEditor() as? NSTextView {
           self.viewModel?.updateFormulaHighlightFocus(atUTF16: textView.selectedRange.location)
@@ -4444,6 +4455,7 @@ extension SpreadsheetGridNSView: NSTextFieldDelegate {
     viewModel?.noteFormulaEditTextChanged()
     if let fieldEditor = editor.currentEditor() as? NSTextView {
       viewModel?.updateFormulaHighlightFocus(atUTF16: fieldEditor.selectedRange.location)
+      EditorSpellCheck.apply(to: fieldEditor, text: fieldEditor.string, refresh: false)
     }
     applyInCellFormulaAttributes(preserveSelection: true)
     maybeOfferFormulaCompletions()
@@ -4504,6 +4516,49 @@ final class CellEditorTextField: NSTextField {}
 
 /// Field editor that saves on the Save shortcut instead of inserting the key.
 final class CellFieldEditor: NSTextView {
+  private var isHandlingTextChange = false
+  private var isApplyingSpellPolicy = false
+
+  override func didChangeText() {
+    // Applying the policy can notify a text change. Ignore that re-entry so
+    // AppKit does not put the defaults back on top of the policy.
+    if isApplyingSpellPolicy {
+      return
+    }
+    if isHandlingTextChange {
+      super.didChangeText()
+      return
+    }
+    isHandlingTextChange = true
+    isAutomaticSpellingCorrectionEnabled = false
+    isGrammarCheckingEnabled = false
+    super.didChangeText()
+    isHandlingTextChange = false
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.apply(
+      to: self,
+      text: string,
+      refresh: EditorSpellCheck.shouldCheck(string)
+    )
+    isApplyingSpellPolicy = false
+  }
+
+  override func checkText(
+    in range: NSRange,
+    types checkingTypes: NSTextCheckingTypes,
+    options: [NSSpellChecker.OptionKey: Any] = [:]
+  ) {
+    guard EditorSpellCheck.shouldCheck(string) else { return }
+    super.checkText(in: range, types: checkingTypes, options: options)
+    guard !isApplyingSpellPolicy else { return }
+    isApplyingSpellPolicy = true
+    EditorSpellCheck.markSystemSpelling(
+      on: self,
+      language: EditorSpellCheck.spellingLanguage(in: options)
+    )
+    isApplyingSpellPolicy = false
+  }
+
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     if AppSettings.shared.matches(.save, event: event) {
       return SparkGridSaveShortcut.perform()
