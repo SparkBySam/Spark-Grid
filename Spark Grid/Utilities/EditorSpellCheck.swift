@@ -58,7 +58,7 @@ enum EditorSpellCheck {
 
     let spellLanguage = language ?? NSSpellChecker.shared.language()
     let tag = textView.spellCheckerDocumentTag
-    let mark = NSNumber(value: NSSpellingState.spelling.rawValue)
+    let mark = NSNumber(value: NSAttributedString.SpellingState.spelling.rawValue)
     var location = 0
     while location < length {
       let miss = NSSpellChecker.shared.checkSpelling(
@@ -85,7 +85,8 @@ enum EditorSpellCheck {
   static func spellingLanguage(in options: [NSSpellChecker.OptionKey: Any]) -> String? {
     for value in options.values {
       guard let orthography = value as? NSOrthography else { continue }
-      if let language = orthography.dominantLanguage, !language.isEmpty {
+      let language = orthography.dominantLanguage
+      if !language.isEmpty {
         return language
       }
     }
