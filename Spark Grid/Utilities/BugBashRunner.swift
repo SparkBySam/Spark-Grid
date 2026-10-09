@@ -5915,7 +5915,7 @@ enum BugBashRunner {
         envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
         fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
       )
-      let imported = try XLSXCodec.importWorkbook(from: url)
+      var imported = try XLSXCodec.importWorkbook(from: url)
       guard let juneIndex = imported.sheets.firstIndex(where: { $0.name.caseInsensitiveCompare("June") == .orderedSame }) else {
         return Result(name: name, passed: false, detail: "June sheet missing")
       }
