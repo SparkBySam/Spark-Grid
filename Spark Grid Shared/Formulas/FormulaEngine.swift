@@ -5,6 +5,7 @@ final class FormulaEngine {
   private var valueCache: [CellAddress: CellValue] = [:]
   private var formulaAST: [CellAddress: FormulaExpr] = [:]
   private var dependencies: [CellAddress: Set<CellAddress>] = [:] // formula -> local refs
+  private var dependencyRanges: [CellAddress: [CellRange]] = [:] // formula -> ranges read at eval
   private var dependents: [CellAddress: Set<CellAddress>] = [:] // cell -> formulas that use it
   private var revision: Int = 0
 
@@ -69,6 +70,7 @@ final class FormulaEngine {
         _ = self.displayValue(at: addr, sheet: sheet)
       })
     }
+    evaluator.evaluationOrigin = address
     evaluator.namedRangeLookup = { [weak self] name in
       self?.namedRangeExpr(named: name)
     }
@@ -110,6 +112,11 @@ final class FormulaEngine {
       if let deps = dependents[address] {
         dirty.formUnion(deps)
       }
+      for (formulaAddr, ranges) in dependencyRanges {
+        if ranges.contains(where: { $0.contains(address) }) {
+          dirty.insert(formulaAddr)
+        }
+      }
     }
     var queue = Array(dirty)
     var seen = dirty
@@ -127,6 +134,7 @@ final class FormulaEngine {
     valueCache.removeAll(keepingCapacity: true)
     formulaAST.removeAll(keepingCapacity: true)
     dependencies.removeAll(keepingCapacity: true)
+    dependencyRanges.removeAll(keepingCapacity: true)
     dependents.removeAll(keepingCapacity: true)
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
@@ -145,6 +153,7 @@ final class FormulaEngine {
       }
     }
     formulaAST.removeValue(forKey: address)
+    dependencyRanges.removeValue(forKey: address)
     valueCache.removeValue(forKey: address)
 
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -152,16 +161,27 @@ final class FormulaEngine {
       do {
         let expr = try FormulaParser.parse(trimmed)
         formulaAST[address] = expr
+        let maxRow = sheet.effectiveRowCount - 1
+        let maxCol = sheet.effectiveColumnCount - 1
         let deps = FormulaDependencies.collect(
           from: expr,
           activeSheetName: activeSheetName,
-          maxRow: sheet.effectiveRowCount - 1,
-          maxCol: sheet.effectiveColumnCount - 1,
+          maxRow: maxRow,
+          maxCol: maxCol,
           namedRangeLookup: { [weak self] name in
             self?.namedRangeExpr(named: name)
           }
         )
         dependencies[address] = deps
+        dependencyRanges[address] = FormulaDependencies.collectWatchedRanges(
+          from: expr,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          namedRangeLookup: { [weak self] name in
+            self?.namedRangeExpr(named: name)
+          }
+        )
         for dep in deps {
           dependents[dep, default: []].insert(address)
         }
@@ -234,6 +254,7 @@ final class FormulaEngine {
         guard let self else { return .blank }
         return self.resolve(ref, activeSheet: sheet, localEval: eval)
       }
+      evaluator.evaluationOrigin = address
       evaluator.namedRangeLookup = { [weak self] name in
         self?.namedRangeExpr(named: name)
       }
@@ -322,6 +343,7 @@ final class FormulaEngine {
         }
         return self.resolveForeign(sheetName: targetSheet, address: ref.address)
       }
+      evaluator.evaluationOrigin = address
       evaluator.namedRangeLookup = { [weak self] name in
         self?.namedRangeExpr(named: name)
       }

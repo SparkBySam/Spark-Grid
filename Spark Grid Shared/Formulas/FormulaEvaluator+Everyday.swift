@@ -15,6 +15,26 @@ extension FormulaEvaluator {
     var cols: Int
   }
 
+  fileprivate struct LookupMemoKey: Hashable {
+    var sheet: String?
+    var row: Int
+    var col: Int
+  }
+
+  /// Excel-style aggregates skip #VALUE! / #REF! rows instead of failing the whole formula.
+  fileprivate func lookupForAggregate(_ ref: FormulaRef, memo: inout [LookupMemoKey: CellValue]) -> CellValue {
+    let key = LookupMemoKey(sheet: ref.sheet, row: ref.row, col: ref.col)
+    if let cached = memo[key] { return cached }
+    let value = lookup(ref)
+    memo[key] = value
+    return value
+  }
+
+  fileprivate func aggregateRowError(_ value: CellValue) -> Bool {
+    if case .error = value { return true }
+    return false
+  }
+
   fileprivate enum CriteriaOp {
     case eq, ne, lt, le, gt, ge
   }
@@ -42,10 +62,11 @@ extension FormulaEvaluator {
     if case .error = criterion { return criterion }
     let test = criteriaTest(from: criterion)
     var count = 0
+    var memo: [LookupMemoKey: CellValue] = [:]
     for row in 0..<anchor.rows {
       for col in 0..<anchor.cols {
-        let value = lookup(cellRef(anchor, row: row, col: col))
-        if case .error(let error) = value { return .error(error) }
+        let value = lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
+        if aggregateRowError(value) { continue }
         if criteriaMatch(value, test) { count += 1 }
       }
     }
@@ -74,12 +95,16 @@ extension FormulaEvaluator {
       index += 2
     }
     var count = 0
+    var memo: [LookupMemoKey: CellValue] = [:]
     for row in 0..<first.rows {
       for col in 0..<first.cols {
         var matched = true
         for (anchor, test) in tests {
-          let value = lookup(cellRef(anchor, row: row, col: col))
-          if case .error(let error) = value { return .error(error) }
+          let value = lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
+          if aggregateRowError(value) {
+            matched = false
+            break
+          }
           if !criteriaMatch(value, test) {
             matched = false
             break
@@ -277,20 +302,24 @@ extension FormulaEvaluator {
     }
     var total = 0.0
     var count = 0
+    var memo: [LookupMemoKey: CellValue] = [:]
     for row in 0..<sum.rows {
       for col in 0..<sum.cols {
         var matched = true
         for (anchor, test) in tests {
-          let value = lookup(cellRef(anchor, row: row, col: col))
-          if case .error(let error) = value { return .error(error) }
+          let value = lookupForAggregate(cellRef(anchor, row: row, col: col), memo: &memo)
+          if aggregateRowError(value) {
+            matched = false
+            break
+          }
           if !criteriaMatch(value, test) {
             matched = false
             break
           }
         }
         guard matched else { continue }
-        let value = lookup(cellRef(sum, row: row, col: col))
-        if case .error(let error) = value { return .error(error) }
+        let value = lookupForAggregate(cellRef(sum, row: row, col: col), memo: &memo)
+        if aggregateRowError(value) { continue }
         guard let number = numericAddend(value) else { continue }
         total += number
         count += 1
@@ -313,13 +342,14 @@ extension FormulaEvaluator {
   ) -> CellValue {
     var total = 0.0
     var count = 0
+    var memo: [LookupMemoKey: CellValue] = [:]
     for row in 0..<criteria.rows {
       for col in 0..<criteria.cols {
-        let candidate = lookup(cellRef(criteria, row: row, col: col))
-        if case .error(let error) = candidate { return .error(error) }
+        let candidate = lookupForAggregate(cellRef(criteria, row: row, col: col), memo: &memo)
+        if aggregateRowError(candidate) { continue }
         guard criteriaMatch(candidate, test) else { continue }
-        let value = lookup(cellRef(values, row: row, col: col))
-        if case .error(let error) = value { return .error(error) }
+        let value = lookupForAggregate(cellRef(values, row: row, col: col), memo: &memo)
+        if aggregateRowError(value) { continue }
         guard let number = numericAddend(value) else { continue }
         total += number
         count += 1
@@ -520,7 +550,7 @@ extension FormulaEvaluator {
 
   // MARK: - Ranges and arrays
 
-  private func resolvedExpr(_ expr: FormulaExpr) -> FormulaExpr {
+  func resolvedExpr(_ expr: FormulaExpr) -> FormulaExpr {
     if case .namedRange(let name) = expr, let resolved = namedRangeLookup(name) {
       return resolved
     }

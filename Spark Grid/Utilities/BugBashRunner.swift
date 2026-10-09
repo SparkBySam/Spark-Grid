@@ -1,4 +1,5 @@
 import AppKit
+import CoreXLSX
 import Foundation
 import SwiftUI
 
@@ -78,6 +79,9 @@ enum BugBashRunner {
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
     results.append(everydayFormulas())
+    results.append(kpiJuneStyleCountifs())
+    results.append(countifsSkipsErrorRows())
+    results.append(countifsRangeDependencyBudget())
     results.append(nowAndTodayUseLocalTime())
     results.append(lookupFormulas())
     results.append(formulaFunctionPicker())
@@ -96,6 +100,7 @@ enum BugBashRunner {
     results.append(largeWorkbookOpenBaseline())
     results.append(MainActor.assumeIsolated { bdcKpiYtdLayoutOpen() })
     results.append(MainActor.assumeIsolated { bdcKpiWorkbookOpenPath() })
+    results.append(MainActor.assumeIsolated { kpiWorkbookJuneViewScroll() })
     results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
     results.append(editorSpellChecking())
     return results
@@ -3311,12 +3316,128 @@ enum BugBashRunner {
     )
   }
 
+  private static func kpiJuneStyleCountifs() -> Result {
+    let name = "KPI June COUNTIFS COLUMN CHAR"
+    var cells: [CellAddress: String] = [:]
+    let keyRow = 29
+    cells[CellAddress(row: keyRow, col: 0)] = "agent-1"
+    for offset in 0..<120 {
+      let row = 109 + offset
+      cells[CellAddress(row: row, col: 0)] = offset.isMultiple(of: 3) ? "agent-1" : "other"
+      cells[CellAddress(row: row, col: 2)] = offset.isMultiple(of: 3) ? "agent-1" : "other"
+      cells[CellAddress(row: row, col: 11)] = offset.isMultiple(of: 2) ? "UNIQUE" : "ORIGINAL"
+    }
+    let summaryAddr = CellAddress(row: 5, col: 4)
+    let columnAddr = CellAddress(row: 5, col: 4)
+    let cases: [(String, CellAddress, CellValue)] = [
+      (
+        "=COUNTIFS($C$110:$C$229,$A30,$L$110:$L$229,\"UNIQUE\")+COUNTIFS($C$110:$C$229,$A30,$L$110:$L$229,\"ORIGINAL\")",
+        summaryAddr,
+        .number(40)
+      ),
+      ("=COLUMN()", columnAddr, .number(5)),
+      ("=CHAR(10)", CellAddress(row: 6, col: 4), .string("\n")),
+      ("=TRUE()", CellAddress(row: 7, col: 4), .bool(true)),
+    ]
+    for (formula, address, expected) in cases {
+      var merged = cells
+      merged[address] = formula
+      let value = evalFormula(formula, cells: merged, at: address)
+      if !sameCellValue(value, expected) {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "\(formula) at \(address.a1) got \(value.displayString) expected \(expected.displayString)"
+        )
+      }
+      if case .error = value {
+        return Result(name: name, passed: false, detail: "\(formula) errored at \(address.a1)")
+      }
+    }
+    return Result(name: name, passed: true, detail: "June-style COUNTIFS + COLUMN/CHAR/TRUE")
+  }
+
+  /// COUNTIFS must not fail when individual data rows evaluate to #DIV/0! (KPI daily columns).
+  private static func countifsSkipsErrorRows() -> Result {
+    let name = "COUNTIFS skips error rows"
+    var cells: [CellAddress: String] = [:]
+    cells[CellAddress(row: 5, col: 0)] = "k"
+    for row in 10..<30 {
+      cells[CellAddress(row: row, col: 0)] = row < 15 ? "k" : "z"
+      if row < 15 {
+        cells[CellAddress(row: row, col: 2)] = "k"
+      } else {
+        cells[CellAddress(row: row, col: 2)] = "=1/0"
+      }
+      cells[CellAddress(row: row, col: 11)] = "UNIQUE"
+    }
+    let formula = "=COUNTIFS($C$11:$C$29,$A6,$L$11:$L$29,\"UNIQUE\")"
+    let value = evalFormula(formula, cells: cells)
+    guard case .number(let count) = value, count == 5 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "\(formula) got \(value.displayString)"
+      )
+    }
+    return Result(name: name, passed: true, detail: "counted matching rows with errors skipped")
+  }
+
+  /// Regression: multi-cell range refs must not fan into the dependency graph (KPI June lag).
+  private static func countifsRangeDependencyBudget() -> Result {
+    let name = "COUNTIFS range dependency budget"
+    var cells: [CellAddress: String] = [:]
+    cells[CellAddress(row: 5, col: 0)] = "k"
+    for row in 10..<810 {
+      cells[CellAddress(row: row, col: 0)] = "k"
+      cells[CellAddress(row: row, col: 1)] = "k"
+      cells[CellAddress(row: row, col: 2)] = "UNIQUE"
+      cells[CellAddress(row: row, col: 3)] = "=SUM($A$1:$A$50)"
+    }
+    for row in 0..<50 where row != 5 {
+      cells[CellAddress(row: row, col: 0)] = "1"
+    }
+    let formula = "=COUNTIFS($B$11:$B$809,$A6,$C$11:$C$809,\"UNIQUE\")"
+    let resultAddr = CellAddress(row: 5, col: 4)
+    cells[resultAddr] = formula
+    var sheet = Sheet(name: "Sheet1")
+    for (address, raw) in cells {
+      sheet.setCell(Cell(raw: raw), at: address)
+    }
+    let engine = FormulaEngine()
+    let workbook = Workbook(sheets: [sheet])
+    engine.rebuild(workbook: workbook, recalculate: false)
+    let start = CFAbsoluteTimeGetCurrent()
+    let value = engine.displayValue(at: resultAddr, sheet: sheet)
+    let elapsed = CFAbsoluteTimeGetCurrent() - start
+    guard case .number(let count) = value, count == 799 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "value \(value.displayString) in \(String(format: "%.2fs", elapsed))"
+      )
+    }
+    guard elapsed < 2.5 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "displayValue took %.2fs (range deps fan-in)", elapsed)
+      )
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: String(format: "799 matches in %.2fs", elapsed)
+    )
+  }
+
   private static func everydayFormulas() -> Result {
     let name = "everyday formulas"
     let wanted = [
       "SUMIF", "AVERAGEIF", "COUNTIF", "SUMIFS", "COUNTIFS", "AVERAGEIFS",
       "COUNTBLANK", "SUMPRODUCT", "IFNA", "IFS", "NOT", "UPPER", "LOWER",
       "MID", "SUBSTITUTE", "TEXTJOIN", "ROUNDUP", "ROUNDDOWN", "NOW",
+      "CHAR", "COLUMN", "TRUE",
     ]
     let missing = wanted.filter { !FormulaFunctions.all.contains($0) }
     if !missing.isEmpty {
@@ -3674,12 +3795,15 @@ enum BugBashRunner {
     return lhs == rhs
   }
 
-  private static func evalFormula(_ formula: String, cells: [CellAddress: String]) -> CellValue {
+  private static func evalFormula(
+    _ formula: String,
+    cells: [CellAddress: String],
+    at result: CellAddress = CellAddress(row: 40, col: 0)
+  ) -> CellValue {
     var sheet = Sheet(name: "Sheet1")
     for (address, raw) in cells {
       sheet.setCell(Cell(raw: raw), at: address)
     }
-    let result = CellAddress(row: 40, col: 0)
     sheet.setCell(Cell(raw: formula), at: result)
     let engine = FormulaEngine()
     let workbook = Workbook(sheets: [sheet])
@@ -5773,6 +5897,127 @@ enum BugBashRunner {
         return Result(name: name, passed: false, detail: "grid snapshot failed")
       }
       return Result(name: name, passed: true, detail: "import, VM, and first draw ok")
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  private static func excelCachedNumericValue(
+    url: URL,
+    sheetName: String,
+    address: CellAddress
+  ) -> Double? {
+    guard let data = try? Data(contentsOf: url),
+          let file = try? XLSXFile(data: data),
+          let workbook = try? file.parseWorkbooks().first,
+          let paths = try? file.parseWorksheetPathsAndNames(workbook: workbook),
+          let worksheetPath = paths.first(where: {
+            ($0.0 ?? "").caseInsensitiveCompare(sheetName) == .orderedSame
+          })?.1,
+          let worksheet = try? file.parseWorksheet(at: worksheetPath),
+          let rows = worksheet.data?.rows
+    else { return nil }
+    let target = address.a1
+    for row in rows {
+      for cell in row.cells where cell.reference.description == target {
+        guard let raw = cell.value else { return nil }
+        return Double(raw)
+      }
+    }
+    return nil
+  }
+
+  /// Optional KPI workbook: June sheet viewport + scroll displayValue must stay interactive.
+  @MainActor
+  private static func kpiWorkbookJuneViewScroll() -> Result {
+    let name = "KPI June sheet view scroll"
+    let env = ProcessInfo.processInfo.environment
+    let envPath = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesDir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let fixturesPath = (fixturesDir as NSString).appendingPathComponent("BDC-Digital-KPI-2026.xlsx")
+    let hasSource = (!envPath.isEmpty && FileManager.default.fileExists(atPath: envPath))
+      || (!fixturesDir.isEmpty && FileManager.default.fileExists(atPath: fixturesPath))
+    guard hasSource else {
+      return Result(name: name, passed: true, detail: "skipped (no KPI fixture source)")
+    }
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "BDC-Digital-KPI-2026.xlsx",
+        envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
+        fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
+      )
+      var imported = try XLSXCodec.importWorkbook(from: url)
+      guard let juneIndex = imported.sheets.firstIndex(where: { $0.name.caseInsensitiveCompare("June") == .orderedSame }) else {
+        return Result(name: name, passed: false, detail: "June sheet missing")
+      }
+      imported.activeSheetIndex = juneIndex
+      let vm = SpreadsheetViewModel(workbook: imported)
+      drainMainQueue()
+
+      func paintViewport(minRow: Int, maxRow: Int, minCol: Int, maxCol: Int) -> (elapsed: TimeInterval, errors: Int) {
+        let start = CFAbsoluteTimeGetCurrent()
+        var errors = 0
+        for row in minRow...maxRow {
+          for col in minCol...maxCol {
+            let value = vm.displayValue(at: CellAddress(row: row, col: col))
+            if col == 4 || col == 5, row >= 5, row <= 61 {
+              if case .error = value { errors += 1 }
+            }
+          }
+        }
+        return (CFAbsoluteTimeGetCurrent() - start, errors)
+      }
+
+      let top = paintViewport(minRow: 0, maxRow: 39, minCol: 0, maxCol: 11)
+      let scrolled = paintViewport(minRow: 180, maxRow: 219, minCol: 0, maxCol: 11)
+      guard top.errors == 0 else {
+        return Result(name: name, passed: false, detail: "\(top.errors) #ERROR! in E/F summary block (top)")
+      }
+      guard scrolled.errors == 0 else {
+        return Result(name: name, passed: false, detail: "\(scrolled.errors) #ERROR! in E/F summary block (scroll)")
+      }
+      guard top.elapsed < 6, scrolled.elapsed < 6 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(
+            format: "viewport top %.2fs scroll %.2fs",
+            top.elapsed,
+            scrolled.elapsed
+          )
+        )
+      }
+
+      for row in 5...61 {
+        for col in 4...5 {
+          let addr = CellAddress(row: row, col: col)
+          guard FormulaSyntax.isFormula(vm.activeSheet.cell(at: addr).raw) else { continue }
+          guard let cached = excelCachedNumericValue(url: url, sheetName: "June", address: addr) else {
+            continue
+          }
+          let value = vm.displayValue(at: addr)
+          guard case .number(let actual) = value, abs(actual - cached) < 0.000_001 else {
+            return Result(
+              name: name,
+              passed: false,
+              detail: "\(addr.a1) got \(value.displayString) cached \(cached)"
+            )
+          }
+        }
+      }
+
+      guard snapshotGrid(sheet: vm.activeSheet) != nil else {
+        return Result(name: name, passed: false, detail: "grid snapshot failed")
+      }
+      return Result(
+        name: name,
+        passed: true,
+        detail: String(
+          format: "top %.2fs scroll %.2fs, E/F ok",
+          top.elapsed,
+          scrolled.elapsed
+        )
+      )
     } catch {
       return Result(name: name, passed: false, detail: error.localizedDescription)
     }
