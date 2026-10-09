@@ -91,8 +91,12 @@ enum FormulaFunctionCatalog {
     FormulaFunctionEntry(name: "SUBSTITUTE", kind: .text, arguments: "text, old_text, new_text, [instance_num]"),
     FormulaFunctionEntry(name: "TEXT", kind: .text, arguments: "value, format_text"),
     FormulaFunctionEntry(name: "TEXTJOIN", kind: .text, arguments: "delimiter, ignore_empty, text1, ..."),
+    FormulaFunctionEntry(name: "CHAR", kind: .text, arguments: "number"),
     FormulaFunctionEntry(name: "TRIM", kind: .text, arguments: "text"),
     FormulaFunctionEntry(name: "UPPER", kind: .text, arguments: "text"),
+
+    FormulaFunctionEntry(name: "COLUMN", kind: .lookup, arguments: "[reference]"),
+    FormulaFunctionEntry(name: "TRUE", kind: .logical, arguments: ""),
 
     FormulaFunctionEntry(name: "HLOOKUP", kind: .lookup, arguments: "lookup_value, table_array, row_index_num, [range_lookup]"),
     FormulaFunctionEntry(name: "INDEX", kind: .lookup, arguments: "array, row_num, [column_num]"),

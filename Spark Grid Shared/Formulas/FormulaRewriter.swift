@@ -9,7 +9,8 @@ enum FormulaFunctions {
     "IF", "IFERROR", "IFNA", "IFS", "AND", "OR", "NOT",
     "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN",
     "LEN", "LEFT", "RIGHT", "MID", "TRIM", "UPPER", "LOWER",
-    "SUBSTITUTE", "TEXTJOIN", "CONCAT", "CONCATENATE", "TEXT",
+    "SUBSTITUTE", "TEXTJOIN", "CONCAT", "CONCATENATE", "TEXT", "CHAR",
+    "COLUMN", "TRUE",
     "XLOOKUP", "XMATCH", "VLOOKUP", "HLOOKUP", "INDEX", "MATCH",
     "TODAY", "NOW", "DATE", "YEAR", "MONTH", "DAY",
   ].sorted()

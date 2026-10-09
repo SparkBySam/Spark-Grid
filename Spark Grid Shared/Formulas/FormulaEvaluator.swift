@@ -31,6 +31,8 @@ struct FormulaEvaluator {
   var namedRangeLookup: NamedRangeLookup = { _ in nil }
   /// Defaults to a modest grid so open ranges don't explode when extent isn't wired.
   var sheetExtent: SheetExtentLookup = { _ in (maxRow: 999, maxCol: 25) }
+  /// Cell being evaluated (`COLUMN()` / `ROW()` with no argument).
+  var evaluationOrigin: CellAddress?
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {
@@ -352,9 +354,44 @@ struct FormulaEvaluator {
       guard args.isEmpty else { return .error(.value) }
       let clock = ExcelDate.wallClock()
       return .number(ExcelDate.localSerialWithTime(from: clock.date, timeZone: clock.timeZone))
+    case "COLUMN":
+      return evalCOLUMN(args)
+    case "CHAR":
+      return evalCHAR(args)
+    case "TRUE":
+      guard args.isEmpty else { return .error(.value) }
+      return .bool(true)
     default:
       return .error(.name)
     }
+  }
+
+  private func evalCOLUMN(_ args: [FormulaExpr]) -> CellValue {
+    if args.isEmpty {
+      guard let origin = evaluationOrigin else { return .error(.value) }
+      return .number(Double(origin.col + 1))
+    }
+    guard args.count == 1 else { return .error(.value) }
+    switch resolvedExpr(args[0]) {
+    case .cellRef(let ref):
+      guard !ref.isColOpen else { return .error(.value) }
+      return .number(Double(ref.col + 1))
+    case .range(let start, let end):
+      guard !start.isColOpen, !end.isColOpen, start.col == end.col else { return .error(.value) }
+      return .number(Double(start.col + 1))
+    default:
+      return .error(.value)
+    }
+  }
+
+  private func evalCHAR(_ args: [FormulaExpr]) -> CellValue {
+    guard args.count == 1 else { return .error(.value) }
+    let value = evaluate(args[0])
+    if case .error = value { return value }
+    guard let number = value.asNumber else { return .error(.value) }
+    let code = Int(number.rounded(.towardZero))
+    guard code >= 0, let scalar = Unicode.Scalar(code) else { return .error(.value) }
+    return .string(String(Character(scalar)))
   }
 
   private func logicalJoin(_ args: [FormulaExpr], requireAll: Bool) -> CellValue {
@@ -876,6 +913,109 @@ struct FormulaEvaluator {
 }
 
 enum FormulaDependencies {
+  /// Sheet-local ranges referenced by a formula (for invalidation when cells inside change).
+  static func collectWatchedRanges(
+    from expr: FormulaExpr,
+    activeSheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    namedRangeLookup: (String) -> FormulaExpr? = { _ in nil }
+  ) -> [CellRange] {
+    var ranges: [CellRange] = []
+    collectWatchedRanges(
+      expr,
+      activeSheetName: activeSheetName,
+      maxRow: maxRow,
+      maxCol: maxCol,
+      namedRangeLookup: namedRangeLookup,
+      into: &ranges
+    )
+    return ranges
+  }
+
+  private static func collectWatchedRanges(
+    _ expr: FormulaExpr,
+    activeSheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    namedRangeLookup: (String) -> FormulaExpr?,
+    into ranges: inout [CellRange]
+  ) {
+    switch expr {
+    case .number, .string, .boolean, .error:
+      break
+    case .namedRange(let name):
+      if let resolved = namedRangeLookup(name) {
+        collectWatchedRanges(
+          resolved,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          namedRangeLookup: namedRangeLookup,
+          into: &ranges
+        )
+      }
+    case .cellRef:
+      break
+    case .range(let start, let end):
+      if start.isOnSheet(activeSheetName) {
+        let n = A1Reference.resolvedBounds(
+          start: start,
+          end: end,
+          maxRow: maxRow,
+          maxCol: maxCol
+        )
+        let rows = n.maxRow - n.minRow + 1
+        let cols = n.maxCol - n.minCol + 1
+        if rows * cols > 1 {
+          ranges.append(
+            CellRange(
+              start: CellAddress(row: n.minRow, col: n.minCol),
+              end: CellAddress(row: n.maxRow, col: n.maxCol)
+            )
+          )
+        }
+      }
+    case .unary(_, let inner):
+      collectWatchedRanges(
+        inner,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        namedRangeLookup: namedRangeLookup,
+        into: &ranges
+      )
+    case .binary(_, let lhs, let rhs):
+      collectWatchedRanges(
+        lhs,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        namedRangeLookup: namedRangeLookup,
+        into: &ranges
+      )
+      collectWatchedRanges(
+        rhs,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        namedRangeLookup: namedRangeLookup,
+        into: &ranges
+      )
+    case .call(_, let args):
+      for arg in args {
+        collectWatchedRanges(
+          arg,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          namedRangeLookup: namedRangeLookup,
+          into: &ranges
+        )
+      }
+    }
+  }
+
   /// Local (same-sheet) dependencies for the active sheet's dependency graph.
   static func collect(
     from expr: FormulaExpr,
@@ -930,10 +1070,13 @@ enum FormulaDependencies {
           maxRow: maxRow,
           maxCol: maxCol
         )
-        for row in n.minRow...n.maxRow {
-          for col in n.minCol...n.maxCol {
-            deps.insert(CellAddress(row: row, col: col))
-          }
+        let rows = n.maxRow - n.minRow + 1
+        let cols = n.maxCol - n.minCol + 1
+        // Multi-cell ranges (COUNTIFS criteria ranges, etc.) are read via lookup at
+        // evaluate time. Listing every cell as a dependency forces recalc of the
+        // entire range before each summary formula (KPI June sheet).
+        if rows * cols == 1 {
+          deps.insert(CellAddress(row: n.minRow, col: n.minCol))
         }
       }
     case .unary(_, let expr):
