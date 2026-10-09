@@ -11,39 +11,39 @@ enum WorkbookFingerprint {
   }
 
   private static func update(hasher: inout SHA256, workbook: Workbook) {
-    hashInt(hasher: &hasher, workbook.activeSheetIndex)
-    hashNamedRanges(hasher: &hasher, workbook.namedRanges)
+    hashInt(hasher: &hasher, value: workbook.activeSheetIndex)
+    hashNamedRanges(hasher: &hasher, ranges: workbook.namedRanges)
     for sheet in workbook.sheets {
-      hashSheet(hasher: &hasher, sheet)
+      hashSheet(hasher: &hasher, sheet: sheet)
     }
   }
 
   private static func hashSheet(hasher: inout SHA256, sheet: Sheet) {
-    hashString(hasher: &hasher, sheet.id.uuidString)
-    hashString(hasher: &hasher, sheet.name)
-    hashInt(hasher: &hasher, sheet.frozenRows)
-    hashInt(hasher: &hasher, sheet.frozenColumns)
-    hashOptionalInt(hasher: &hasher, sheet.gridRowCount)
-    hashOptionalInt(hasher: &hasher, sheet.gridColumnCount)
+    hashString(hasher: &hasher, value: sheet.id.uuidString)
+    hashString(hasher: &hasher, value: sheet.name)
+    hashInt(hasher: &hasher, value: sheet.frozenRows)
+    hashInt(hasher: &hasher, value: sheet.frozenColumns)
+    hashOptionalInt(hasher: &hasher, value: sheet.gridRowCount)
+    hashOptionalInt(hasher: &hasher, value: sheet.gridColumnCount)
 
     for key in sheet.columnWidths.keys.sorted() {
-      hashInt(hasher: &hasher, key)
-      hashCGFloat(hasher: &hasher, sheet.columnWidths[key] ?? 0)
+      hashInt(hasher: &hasher, value: key)
+      hashCGFloat(hasher: &hasher, value: sheet.columnWidths[key] ?? 0)
     }
     for key in sheet.rowHeights.keys.sorted() {
-      hashInt(hasher: &hasher, key)
-      hashCGFloat(hasher: &hasher, sheet.rowHeights[key] ?? 0)
+      hashInt(hasher: &hasher, value: key)
+      hashCGFloat(hasher: &hasher, value: sheet.rowHeights[key] ?? 0)
     }
 
     for merge in sheet.mergedRanges {
-      hashCellAddress(hasher: &hasher, merge.start)
-      hashCellAddress(hasher: &hasher, merge.end)
+      hashCellAddress(hasher: &hasher, address: merge.start)
+      hashCellAddress(hasher: &hasher, address: merge.end)
     }
 
-    hashConditionalFormats(hasher: &hasher, sheet.conditionalFormats)
-    hashAutoFilter(hasher: &hasher, sheet.autoFilter)
-    hashCharts(hasher: &hasher, sheet.charts)
-    hashImages(hasher: &hasher, sheet.images)
+    hashConditionalFormats(hasher: &hasher, rules: sheet.conditionalFormats)
+    hashAutoFilter(hasher: &hasher, filter: sheet.autoFilter)
+    hashCharts(hasher: &hasher, charts: sheet.charts)
+    hashImages(hasher: &hasher, images: sheet.images)
 
     for address in sheet.cells.keys.sorted() {
       hashCell(hasher: &hasher, address: address, cell: sheet.cells[address] ?? Cell())
@@ -51,10 +51,10 @@ enum WorkbookFingerprint {
   }
 
   private static func hashCell(hasher: inout SHA256, address: CellAddress, cell: Cell) {
-    hashCellAddress(hasher: &hasher, address)
-    hashString(hasher: &hasher, cell.raw)
+    hashCellAddress(hasher: &hasher, address: address)
+    hashString(hasher: &hasher, value: cell.raw)
     if let format = cell.format {
-      hashCellFormat(hasher: &hasher, format)
+      hashCellFormat(hasher: &hasher, format: format)
     } else {
       hasher.update(Data([0]))
     }
@@ -69,7 +69,7 @@ enum WorkbookFingerprint {
 
   private static func hashNamedRanges(hasher: inout SHA256, ranges: [String: NamedRange]) {
     for key in ranges.keys.sorted() {
-      hashString(hasher: &hasher, key)
+      hashString(hasher: &hasher, value: key)
       if let encoded = try? JSONEncoder().encode(ranges[key]) {
         hasher.update(encoded)
       }
@@ -105,17 +105,17 @@ enum WorkbookFingerprint {
 
   private static func hashImages(hasher: inout SHA256, images: [SheetImage]) {
     for image in images {
-      hashInt(hasher: &hasher, image.anchorRow)
-      hashInt(hasher: &hasher, image.anchorCol)
-      hashInt(hasher: &hasher, image.widthEMU)
-      hashInt(hasher: &hasher, image.heightEMU)
+      hashInt(hasher: &hasher, value: image.anchorRow)
+      hashInt(hasher: &hasher, value: image.anchorCol)
+      hashInt(hasher: &hasher, value: image.widthEMU)
+      hashInt(hasher: &hasher, value: image.heightEMU)
       hasher.update(image.imageData)
     }
   }
 
   private static func hashCellAddress(hasher: inout SHA256, address: CellAddress) {
-    hashInt(hasher: &hasher, address.row)
-    hashInt(hasher: &hasher, address.col)
+    hashInt(hasher: &hasher, value: address.row)
+    hashInt(hasher: &hasher, value: address.col)
   }
 
   private static func hashString(hasher: inout SHA256, value: String) {
@@ -135,7 +135,7 @@ enum WorkbookFingerprint {
       return
     }
     hasher.update(Data([1]))
-    hashInt(hasher: &hasher, value)
+    hashInt(hasher: &hasher, value: value)
   }
 
   private static func hashCGFloat(hasher: inout SHA256, value: CGFloat) {
