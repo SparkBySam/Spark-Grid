@@ -3394,7 +3394,7 @@ enum BugBashRunner {
       cells[CellAddress(row: row, col: 2)] = "UNIQUE"
       cells[CellAddress(row: row, col: 3)] = "=SUM($A$1:$A$50)"
     }
-    for row in 0..<50 {
+    for row in 0..<50 where row != 5 {
       cells[CellAddress(row: row, col: 0)] = "1"
     }
     let formula = "=COUNTIFS($B$11:$B$809,$A6,$C$11:$C$809,\"UNIQUE\")"
