@@ -3492,8 +3492,8 @@ enum BugBashRunner {
         detail: String(format: "%d formulas full recalc %.2fs", formulaCount, recalc)
       )
     }
-    guard let sample = engine.displayValue(at: CellAddress(row: 0, col: 4), sheet: workbook.sheets[0]),
-          case .number(let count) = sample, count > 0 else {
+    let sample = engine.displayValue(at: CellAddress(row: 0, col: 4), sheet: workbook.sheets[0])
+    guard case .number(let count) = sample, count > 0 else {
       return Result(name: name, passed: false, detail: "sample COUNTIFS empty after recalc")
     }
     return Result(
