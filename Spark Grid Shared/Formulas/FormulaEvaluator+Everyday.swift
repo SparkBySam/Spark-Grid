@@ -1341,6 +1341,25 @@ extension FormulaEvaluator {
     }
   }
 
+  /// Excel `TRUE` / `TRUE()` / `FALSE` / `FALSE()` in formula text (e.g. TEXTJOIN ignore flag).
+  private func stripExcelBoolLiteral(_ expr: FormulaExpr) -> Bool? {
+    switch stripUnwrap(expr) {
+    case .boolean(let flag):
+      return flag
+    case .call(let name, let args) where name.uppercased() == "TRUE" && args.isEmpty:
+      return true
+    case .call(let name, let args) where name.uppercased() == "FALSE" && args.isEmpty:
+      return false
+    default:
+      return nil
+    }
+  }
+
+  /// One KPI `IF(…="","",…)` guard handled per strip row (matches `fastIFBlankEquality` accounting).
+  private func recordIfBlankStripGuardHandled() {
+    recalcProfile?.ifBlankEqualityFastHits += 1
+  }
+
   private func stripBlankEqualityGuardRef(_ condition: FormulaExpr) -> FormulaRef? {
     guard case .binary(.eq, let lhs, let rhs) = stripUnwrap(condition) else { return nil }
     if stripIsStaticEmptyLiteral(rhs), let ref = stripFormulaCellRef(lhs) { return ref }
@@ -1489,12 +1508,10 @@ extension FormulaEvaluator {
     prepareForCellEvaluation(origin: origin)
     let guardCell = shiftedRef(guardRef, master: master, origin: origin)
     if stripValueIsBlankForIfGuard(lookup(guardCell)) {
-      recalcProfile?.ifBlankEqualityFastHits += 1
       sink(origin, .string(""))
       recalcProfile?.ifStripCountifsRows += 1
       return
     }
-    recalcProfile?.ifBlankEqualityFastHits += 1
     let pickCell = shiftedRef(plan.pickRef, master: master, origin: origin)
     let pickValue = lookup(pickCell)
     let usePickBranch = !stripValueIsBlankForIfGuard(pickValue)
@@ -1546,7 +1563,7 @@ extension FormulaEvaluator {
       return nil
     }
     guard case .string(let delimiter) = stripUnwrap(args[0]) else { return nil }
-    guard case .boolean(let ignoreEmpty) = stripUnwrap(args[1]) else { return nil }
+    guard let ignoreEmpty = stripExcelBoolLiteral(args[1]) else { return nil }
     guard let joinA = stripFormulaCellRef(args[2]), let joinB = stripFormulaCellRef(args[3]) else { return nil }
     guard stripRefSameShapeAs(joinA, other: guardA), stripRefSameShapeAs(joinB, other: guardB) else { return nil }
     return ColumnTextJoinPlan(joinRefA: joinA, joinRefB: joinB, delimiter: delimiter, ignoreEmpty: ignoreEmpty)
@@ -1612,7 +1629,7 @@ extension FormulaEvaluator {
     keyRef: FormulaRef
   ) -> (prefixStartRow: Int, keyCol: Int)? {
     guard case .range(let start, let end) = resolvedExpr(rangeExpr) else { return nil }
-    guard start.absRow, !end.absRow, start.col == end.col else { return nil }
+    guard start.absRow, start.absCol, !end.absRow, !end.absCol, start.col == end.col else { return nil }
     guard let critRef = stripFormulaCellRef(criterion), stripRefSameShapeAs(critRef, other: keyRef) else { return nil }
     guard critRef.col == end.col else { return nil }
     return (start.row, start.col)
@@ -1762,13 +1779,12 @@ extension FormulaEvaluator {
     var altCounts = seedDuplicatePrefixCounts(arm: plan.altArm, throughRow: master.row - 1, master: master)
     for origin in members {
       prepareForCellEvaluation(origin: origin)
+      recordIfBlankStripGuardHandled()
       if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-        recalcProfile?.ifBlankEqualityFastHits += 1
         sink(origin, .string(""))
         recalcProfile?.ifStripDupStatusRows += 1
         continue
       }
-      recalcProfile?.ifBlankEqualityFastHits += 1
       let pickValue = lookup(shiftedRef(plan.pickRef, master: master, origin: origin))
       if !stripValueIsBlankForIfGuard(pickValue) {
         emitDuplicateStatusArmRow(
@@ -2041,13 +2057,13 @@ extension FormulaEvaluator {
     case .andBothBlank(let left, let right):
       if let textJoinPlan = makeColumnTextJoinPlan(branchExpr, guardA: left, guardB: right) {
         for origin in members {
+          prepareForCellEvaluation(origin: origin)
+          recordIfBlankStripGuardHandled()
           if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-            recalcProfile?.ifBlankEqualityFastHits += 1
             sink(origin, .string(""))
             recalcProfile?.ifStripTextJoinRows += 1
             continue
           }
-          recalcProfile?.ifBlankEqualityFastHits += 1
           emitColumnTextJoinRow(plan: textJoinPlan, master: master, origin: origin, sink: sink)
         }
         return true
@@ -2067,18 +2083,24 @@ extension FormulaEvaluator {
       if let vlookupPlan = makeColumnIFERRORVlookupPlan(branchExpr, master: master) {
         for origin in members {
           prepareForCellEvaluation(origin: origin)
+          recordIfBlankStripGuardHandled()
           if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-            recalcProfile?.ifBlankEqualityFastHits += 1
             sink(origin, .string(""))
             continue
           }
-          recalcProfile?.ifBlankEqualityFastHits += 1
           emitColumnIFERRORVlookupRow(plan: vlookupPlan, master: master, origin: origin, sink: sink)
         }
         return true
       }
       if let countifPickPlan = makeColumnCountifPickPlan(branchExpr, guardRef: guardRef, master: master) {
         for origin in members {
+          prepareForCellEvaluation(origin: origin)
+          recordIfBlankStripGuardHandled()
+          if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+            sink(origin, .string(""))
+            recalcProfile?.ifStripCountifsRows += 1
+            continue
+          }
           emitColumnCountifPickRow(
             plan: countifPickPlan,
             guardRef: guardRef,
@@ -2093,12 +2115,11 @@ extension FormulaEvaluator {
          let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
         for origin in members {
           prepareForCellEvaluation(origin: origin)
+          recordIfBlankStripGuardHandled()
           if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-            recalcProfile?.ifBlankEqualityFastHits += 1
             sink(origin, .string(""))
             continue
           }
-          recalcProfile?.ifBlankEqualityFastHits += 1
           emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
           recalcProfile?.ifStripCountifsRows += 1
         }
@@ -2110,12 +2131,11 @@ extension FormulaEvaluator {
     )
     for origin in members {
       prepareForCellEvaluation(origin: origin)
+      recordIfBlankStripGuardHandled()
       if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-        recalcProfile?.ifBlankEqualityFastHits += 1
         sink(origin, .string(""))
         continue
       }
-      recalcProfile?.ifBlankEqualityFastHits += 1
       if !evaluateColumnBranchShape(
         master: master,
         origin: origin,
