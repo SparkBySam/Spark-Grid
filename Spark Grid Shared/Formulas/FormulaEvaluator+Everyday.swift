@@ -1665,7 +1665,7 @@ extension FormulaEvaluator {
     else { return nil }
     guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE") else { return nil }
     guard let prefix = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
-          let (fixedAnchor, fixedCrit) = stripCountifRangeCriterion(countifArgs[0]),
+          let (fixedAnchor, fixedCrit) = stripCountifRangeCriterion(countifExpr),
           stripRefSameCellAs(fixedCrit, keyRef: keyRef)
     else { return nil }
     guard fixedAnchor.col == prefix.keyCol else { return nil }
@@ -1788,18 +1788,18 @@ extension FormulaEvaluator {
     if prefixReject != "dup.prefix.ok" {
       return prefix + String(prefixReject.dropFirst(4))
     }
-    let countifReject = diagnoseStripCountifRangeCriterionReject(countifArgs[0])
+    let countifReject = diagnoseStripCountifRangeCriterionReject(countifExpr)
     if countifReject != "dup.countif.ok" {
       return prefix + String(countifReject.dropFirst(4))
     }
-    guard let (_, fixedCrit) = stripCountifRangeCriterion(countifArgs[0]) else {
+    guard let (_, fixedCrit) = stripCountifRangeCriterion(countifExpr) else {
       return prefix + "countifRange"
     }
     guard stripRefSameCellAs(fixedCrit, keyRef: keyRef) else {
       return prefix + "fixedCritKeyCell"
     }
     guard let growing = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
-          let (fixedAnchor, _) = stripCountifRangeCriterion(countifArgs[0])
+          let (fixedAnchor, _) = stripCountifRangeCriterion(countifExpr)
     else {
       return prefix + "prefixOrCountif"
     }
