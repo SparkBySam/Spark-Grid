@@ -45,6 +45,10 @@ final class FormulaRecalcProfile {
   var ifStripBranchTree: Int = 0
   /// Non-blank rows via IF-blank + COUNTIFS column kernel (one snapshot per strip).
   var ifStripCountifsRows: Int = 0
+  /// KPI **G** column `TEXTJOIN` strip rows.
+  var ifStripTextJoinRows: Int = 0
+  /// KPI **L** column duplicate-status strip rows.
+  var ifStripDupStatusRows: Int = 0
   var ifStripPlanMiss: [String: Int] = [:]
 
   func recordIfStripPlanMiss(_ reason: String) {
@@ -106,6 +110,8 @@ final class FormulaRecalcProfile {
     ifStripVlkNA += other.ifStripVlkNA
     ifStripBranchTree += other.ifStripBranchTree
     ifStripCountifsRows += other.ifStripCountifsRows
+    ifStripTextJoinRows += other.ifStripTextJoinRows
+    ifStripDupStatusRows += other.ifStripDupStatusRows
     for (reason, count) in other.ifStripPlanMiss {
       ifStripPlanMiss[reason, default: 0] += count
     }
@@ -148,7 +154,7 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d | eval %@",
+      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d textJoinStrip %d dupStrip %d | eval %@",
       totalSeconds,
       ingestSeconds,
       ingestBulkSheetWallPeakSeconds,
@@ -176,6 +182,8 @@ final class FormulaRecalcProfile {
       iferrorVlookupFastHits,
       ifStripHits,
       ifStripCountifsRows,
+      ifStripTextJoinRows,
+      ifStripDupStatusRows,
       topEval.isEmpty ? "—" : topEval
     ) + ifStripMissSummary() + sheetPhaseWallSummary()
   }

@@ -1249,7 +1249,7 @@ extension FormulaEvaluator {
       return evaluateColumnIFBlankStrip(
         master: master,
         members: members,
-        guardRef: ifBlank.guardRef,
+        ifGuard: ifBlank.ifGuard,
         branch: ifBlank.branch,
         sink: sink
       )
@@ -1269,8 +1269,13 @@ extension FormulaEvaluator {
     return false
   }
 
+  private enum IFBlankGuard {
+    case single(FormulaRef)
+    case andBothBlank(FormulaRef, FormulaRef)
+  }
+
   private struct IFBlankBranch {
-    var guardRef: FormulaRef
+    var ifGuard: IFBlankGuard
     var branch: FormulaExpr
   }
 
@@ -1282,8 +1287,49 @@ extension FormulaEvaluator {
   private func unpackIFBlankBranch(_ expr: FormulaExpr) -> IFBlankBranch? {
     guard case .call(let name, let args) = expr, name.uppercased() == "IF", args.count == 3 else { return nil }
     guard stripIsStaticEmptyLiteral(args[1]) else { return nil }
-    guard let guardRef = stripBlankEqualityGuardRef(args[0]) else { return nil }
-    return IFBlankBranch(guardRef: guardRef, branch: args[2])
+    if let guardRef = stripBlankEqualityGuardRef(args[0]) {
+      return IFBlankBranch(ifGuard: .single(guardRef), branch: args[2])
+    }
+    if let pair = stripAndBothBlankGuardRefs(args[0]) {
+      return IFBlankBranch(ifGuard: .andBothBlank(pair.0, pair.1), branch: args[2])
+    }
+    return nil
+  }
+
+  private func stripAndBothBlankGuardRefs(_ condition: FormulaExpr) -> (FormulaRef, FormulaRef)? {
+    guard case .call(let name, let args) = stripUnwrap(condition), name.uppercased() == "AND", args.count == 2 else {
+      return nil
+    }
+    guard let left = stripBlankEqualityGuardRef(args[0]),
+          let right = stripBlankEqualityGuardRef(args[1])
+    else { return nil }
+    return (left, right)
+  }
+
+  private func ifBlankGuardIsActive(
+    _ ifGuard: IFBlankGuard,
+    master: CellAddress,
+    origin: CellAddress
+  ) -> Bool {
+    switch ifGuard {
+    case .single(let ref):
+      let cell = shiftedRef(ref, master: master, origin: origin)
+      return stripValueIsBlankForIfGuard(lookup(cell))
+    case .andBothBlank(let left, let right):
+      let leftCell = shiftedRef(left, master: master, origin: origin)
+      let rightCell = shiftedRef(right, master: master, origin: origin)
+      return stripValueIsBlankForIfGuard(lookup(leftCell))
+        && stripValueIsBlankForIfGuard(lookup(rightCell))
+    }
+  }
+
+  private func singleGuardRef(_ ifGuard: IFBlankGuard) -> FormulaRef? {
+    switch ifGuard {
+    case .single(let ref):
+      return ref
+    case .andBothBlank:
+      return nil
+    }
   }
 
   private func stripIsStaticEmptyLiteral(_ expr: FormulaExpr) -> Bool {
@@ -1350,11 +1396,19 @@ extension FormulaEvaluator {
 
   private func diagnoseIfStripBranchKernelMiss(
     _ branch: FormulaExpr,
-    guardRef: FormulaRef,
+    ifGuard: IFBlankGuard,
     master: CellAddress
   ) -> String {
-    if makeColumnCountifPickPlan(branch, guardRef: guardRef, master: master) != nil {
-      return "countifPickUnexpected"
+    switch ifGuard {
+    case .andBothBlank(let left, let right):
+      if makeColumnTextJoinPlan(branch, guardA: left, guardB: right) != nil { return "textJoinUnexpected" }
+      if makeColumnDuplicateStatusPlan(branch, pickRef: left, altRef: right, master: master) != nil {
+        return "dupStatusUnexpected"
+      }
+    case .single(let ref):
+      if makeColumnCountifPickPlan(branch, guardRef: ref, master: master) != nil {
+        return "countifPickUnexpected"
+      }
     }
     if let kernel = stripCountifsKernelExpr(branch) {
       return makeColumnCOUNTIFSPlan(kernel, master: master) == nil ? "countifsPlan" : "countifsUnexpected"
@@ -1473,6 +1527,271 @@ extension FormulaEvaluator {
     }
     sink(origin, .number(Double(matches)))
     recalcProfile?.ifStripCountifsRows += 1
+  }
+
+  /// `TEXTJOIN(" ",TRUE(),E,F)` on KPI month **G** columns (after `IF(AND(E="",F=""),"",…)`).
+  private struct ColumnTextJoinPlan {
+    var joinRefA: FormulaRef
+    var joinRefB: FormulaRef
+    var delimiter: String
+    var ignoreEmpty: Bool
+  }
+
+  private func makeColumnTextJoinPlan(
+    _ branch: FormulaExpr,
+    guardA: FormulaRef,
+    guardB: FormulaRef
+  ) -> ColumnTextJoinPlan? {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "TEXTJOIN", args.count == 4 else {
+      return nil
+    }
+    guard case .string(let delimiter) = stripUnwrap(args[0]) else { return nil }
+    guard case .boolean(let ignoreEmpty) = stripUnwrap(args[1]) else { return nil }
+    guard let joinA = stripFormulaCellRef(args[2]), let joinB = stripFormulaCellRef(args[3]) else { return nil }
+    guard stripRefSameShapeAs(joinA, guardA), stripRefSameShapeAs(joinB, guardB) else { return nil }
+    return ColumnTextJoinPlan(joinRefA: joinA, joinRefB: joinB, delimiter: delimiter, ignoreEmpty: ignoreEmpty)
+  }
+
+  private func emitColumnTextJoinRow(
+    plan: ColumnTextJoinPlan,
+    master: CellAddress,
+    origin: CellAddress,
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    prepareForCellEvaluation(origin: origin)
+    let left = lookup(shiftedRef(plan.joinRefA, master: master, origin: origin))
+    let right = lookup(shiftedRef(plan.joinRefB, master: master, origin: origin))
+    if case .error(let error) = left {
+      sink(origin, .error(error))
+      recalcProfile?.ifStripTextJoinRows += 1
+      return
+    }
+    if case .error(let error) = right {
+      sink(origin, .error(error))
+      recalcProfile?.ifStripTextJoinRows += 1
+      return
+    }
+    var parts: [String] = []
+    for value in [left, right] {
+      if plan.ignoreEmpty && isBlankForCount(value) { continue }
+      parts.append(value.asString)
+    }
+    sink(origin, .string(parts.joined(separator: plan.delimiter)))
+    recalcProfile?.ifStripTextJoinRows += 1
+  }
+
+  /// One arm of KPI **L** duplicate-status (`DUPLICATE` / `ORIGINAL` / `UNIQUE`).
+  private struct DuplicateStatusArmPlan {
+    var keyCol: Int
+    var prefixStartRow: Int
+    var fixedValues: [CellValue]
+    var fixedRangeKey: AggregateRangeKey
+  }
+
+  private struct ColumnDuplicateStatusPlan {
+    var pickRef: FormulaRef
+    var altRef: FormulaRef
+    var pickArm: DuplicateStatusArmPlan
+    var altArm: DuplicateStatusArmPlan
+  }
+
+  private func stripStaticLabel(_ expr: FormulaExpr, _ label: String) -> Bool {
+    guard case .string(let text) = stripUnwrap(expr) else { return false }
+    return text.caseInsensitiveCompare(label) == .orderedSame
+  }
+
+  private func stripCountGreaterThanOneExpr(_ expr: FormulaExpr) -> FormulaExpr? {
+    guard case .binary(.gt, let lhs, let rhs) = stripUnwrap(expr) else { return nil }
+    guard case .number(let number) = stripUnwrap(rhs), number == 1 else { return nil }
+    return stripUnwrap(lhs)
+  }
+
+  private func stripGrowingCountifsPrefix(
+    _ rangeExpr: FormulaExpr,
+    criterion: FormulaExpr,
+    keyRef: FormulaRef
+  ) -> (prefixStartRow: Int, keyCol: Int)? {
+    guard case .range(let start, let end) = resolvedExpr(rangeExpr) else { return nil }
+    guard start.absRow, !end.absRow, start.col == end.col else { return nil }
+    guard let critRef = stripFormulaCellRef(criterion), stripRefSameShapeAs(critRef, keyRef) else { return nil }
+    guard critRef.col == end.col else { return nil }
+    return (start.row, start.col)
+  }
+
+  private func parseDuplicateStatusArm(
+    _ expr: FormulaExpr,
+    keyRef: FormulaRef,
+    master: CellAddress
+  ) -> DuplicateStatusArmPlan? {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "IF", args.count == 3 else {
+      return nil
+    }
+    guard let countifsExpr = stripCountGreaterThanOneExpr(args[0]),
+          case .call(let countifsName, let countifsArgs) = countifsExpr,
+          countifsName.uppercased() == "COUNTIFS",
+          countifsArgs.count == 2
+    else { return nil }
+    guard stripStaticLabel(args[1], "DUPLICATE") else { return nil }
+    guard case .call(let innerName, let innerArgs) = stripUnwrap(args[2]),
+          innerName.uppercased() == "IF",
+          innerArgs.count == 3
+    else { return nil }
+    guard let countifExpr = stripCountGreaterThanOneExpr(innerArgs[0]),
+          case .call(let countifName, let countifArgs) = countifExpr,
+          countifName.uppercased() == "COUNTIF",
+          countifArgs.count == 2
+    else { return nil }
+    guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE") else { return nil }
+    guard let prefix = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
+          let (fixedAnchor, fixedCrit) = stripCountifRangeCriterion(countifArgs[0]),
+          stripRefSameShapeAs(fixedCrit, keyRef)
+    else { return nil }
+    guard fixedAnchor.col == prefix.keyCol else { return nil }
+
+    prepareForCellEvaluation(origin: master)
+    var memo: [LookupMemoKey: CellValue] = [:]
+    let fixedValues = snapshotValues(anchor: fixedAnchor, memo: &memo)
+    return DuplicateStatusArmPlan(
+      keyCol: prefix.keyCol,
+      prefixStartRow: prefix.prefixStartRow,
+      fixedValues: fixedValues,
+      fixedRangeKey: aggregateRangeKey(for: fixedAnchor)
+    )
+  }
+
+  private func makeColumnDuplicateStatusPlan(
+    _ branch: FormulaExpr,
+    pickRef: FormulaRef,
+    altRef: FormulaRef,
+    master: CellAddress
+  ) -> ColumnDuplicateStatusPlan? {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
+      return nil
+    }
+    guard let branchPick = stripNotEmptyPickRef(args[0]), stripRefSameShapeAs(branchPick, pickRef) else { return nil }
+    guard let pickArm = parseDuplicateStatusArm(args[1], keyRef: pickRef, master: master),
+          let altArm = parseDuplicateStatusArm(args[2], keyRef: altRef, master: master)
+    else { return nil }
+    return ColumnDuplicateStatusPlan(
+      pickRef: pickRef,
+      altRef: altRef,
+      pickArm: pickArm,
+      altArm: altArm
+    )
+  }
+
+  private func stripAggregateValueKey(_ value: CellValue) -> AggregateValueKey? {
+    if case .error = value { return nil }
+    return lookupKeyForCriterion(value, test: criteriaTest(from: value))
+  }
+
+  private func seedDuplicatePrefixCounts(
+    arm: DuplicateStatusArmPlan,
+    throughRow: Int,
+    master: CellAddress
+  ) -> [AggregateValueKey: Int] {
+    var counts: [AggregateValueKey: Int] = [:]
+    guard throughRow >= arm.prefixStartRow else { return counts }
+    for row in arm.prefixStartRow...throughRow {
+      let origin = CellAddress(row: row, col: master.col)
+      prepareForCellEvaluation(origin: origin)
+      let ref = FormulaRef(sheet: nil, row: row, col: arm.keyCol, absRow: false, absCol: false)
+      let value = lookup(ref)
+      if let key = stripAggregateValueKey(value) {
+        counts[key, default: 0] += 1
+      }
+    }
+    return counts
+  }
+
+  private func emitDuplicateStatusArmRow(
+    arm: DuplicateStatusArmPlan,
+    keyRef: FormulaRef,
+    master: CellAddress,
+    origin: CellAddress,
+    prefixCounts: inout [AggregateValueKey: Int],
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    let value = lookup(shiftedRef(keyRef, master: master, origin: origin))
+    if case .error = value {
+      sink(origin, value)
+      return
+    }
+    guard let key = stripAggregateValueKey(value) else {
+      sink(origin, .string("UNIQUE"))
+      return
+    }
+    prefixCounts[key, default: 0] += 1
+    if prefixCounts[key]! > 1 {
+      sink(origin, .string("DUPLICATE"))
+      return
+    }
+    let test = criteriaTest(from: value)
+    if let cache = aggregateRangeCache,
+       criteriaSupportsIndexLookup(test),
+       let lookupKey = lookupKeyForCriterion(value, test: test) {
+      let full = cache.countForCriteria(
+        rangeKeys: [arm.fixedRangeKey],
+        criteriaKeys: [lookupKey],
+        supplyColumns: { [arm.fixedValues] }
+      )
+      sink(origin, .string(full > 1 ? "ORIGINAL" : "UNIQUE"))
+      return
+    }
+    var matches = 0
+    for cell in arm.fixedValues {
+      if aggregateRowError(cell) { continue }
+      if criteriaMatch(cell, test) { matches += 1 }
+    }
+    sink(origin, .string(matches > 1 ? "ORIGINAL" : "UNIQUE"))
+  }
+
+  private func evaluateColumnDuplicateStatusStrip(
+    master: CellAddress,
+    members: [CellAddress],
+    ifGuard: IFBlankGuard,
+    branch: FormulaExpr,
+    pickRef: FormulaRef,
+    altRef: FormulaRef,
+    sink: (CellAddress, CellValue) -> Void
+  ) -> Bool {
+    guard let plan = makeColumnDuplicateStatusPlan(branch, pickRef: pickRef, altRef: altRef, master: master) else {
+      return false
+    }
+    var pickCounts = seedDuplicatePrefixCounts(arm: plan.pickArm, throughRow: master.row - 1, master: master)
+    var altCounts = seedDuplicatePrefixCounts(arm: plan.altArm, throughRow: master.row - 1, master: master)
+    for origin in members {
+      prepareForCellEvaluation(origin: origin)
+      if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+        recalcProfile?.ifBlankEqualityFastHits += 1
+        sink(origin, .string(""))
+        recalcProfile?.ifStripDupStatusRows += 1
+        continue
+      }
+      recalcProfile?.ifBlankEqualityFastHits += 1
+      let pickValue = lookup(shiftedRef(plan.pickRef, master: master, origin: origin))
+      if !stripValueIsBlankForIfGuard(pickValue) {
+        emitDuplicateStatusArmRow(
+          arm: plan.pickArm,
+          keyRef: plan.pickRef,
+          master: master,
+          origin: origin,
+          prefixCounts: &pickCounts,
+          sink: sink
+        )
+      } else {
+        emitDuplicateStatusArmRow(
+          arm: plan.altArm,
+          keyRef: plan.altRef,
+          master: master,
+          origin: origin,
+          prefixCounts: &altCounts,
+          sink: sink
+        )
+      }
+      recalcProfile?.ifStripDupStatusRows += 1
+    }
+    return true
   }
 
   private struct ColumnCOUNTIFSPlan {
@@ -1713,60 +2032,85 @@ extension FormulaEvaluator {
   private func evaluateColumnIFBlankStrip(
     master: CellAddress,
     members: [CellAddress],
-    guardRef: FormulaRef,
+    ifGuard: IFBlankGuard,
     branch: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
     let branchExpr = stripUnwrap(branch)
-    if let vlookupPlan = makeColumnIFERRORVlookupPlan(branchExpr, master: master) {
-      for origin in members {
-        prepareForCellEvaluation(origin: origin)
-        let guardCell = shiftedRef(guardRef, master: master, origin: origin)
-        if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+    switch ifGuard {
+    case .andBothBlank(let left, let right):
+      if let textJoinPlan = makeColumnTextJoinPlan(branchExpr, guardA: left, guardB: right) {
+        for origin in members {
+          if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+            recalcProfile?.ifBlankEqualityFastHits += 1
+            sink(origin, .string(""))
+            recalcProfile?.ifStripTextJoinRows += 1
+            continue
+          }
           recalcProfile?.ifBlankEqualityFastHits += 1
-          sink(origin, .string(""))
-          continue
+          emitColumnTextJoinRow(plan: textJoinPlan, master: master, origin: origin, sink: sink)
         }
-        recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnIFERRORVlookupRow(plan: vlookupPlan, master: master, origin: origin, sink: sink)
+        return true
       }
-      return true
-    }
-    if let countifPickPlan = makeColumnCountifPickPlan(branchExpr, guardRef: guardRef, master: master) {
-      for origin in members {
-        emitColumnCountifPickRow(
-          plan: countifPickPlan,
-          guardRef: guardRef,
-          master: master,
-          origin: origin,
-          sink: sink
-        )
+      if evaluateColumnDuplicateStatusStrip(
+        master: master,
+        members: members,
+        ifGuard: ifGuard,
+        branch: branchExpr,
+        pickRef: left,
+        altRef: right,
+        sink: sink
+      ) {
+        return true
       }
-      return true
-    }
-    if let countifsExpr = stripCountifsKernelExpr(branchExpr),
-       let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
-      for origin in members {
-        prepareForCellEvaluation(origin: origin)
-        let guardCell = shiftedRef(guardRef, master: master, origin: origin)
-        if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+    case .single(let guardRef):
+      if let vlookupPlan = makeColumnIFERRORVlookupPlan(branchExpr, master: master) {
+        for origin in members {
+          prepareForCellEvaluation(origin: origin)
+          if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+            recalcProfile?.ifBlankEqualityFastHits += 1
+            sink(origin, .string(""))
+            continue
+          }
           recalcProfile?.ifBlankEqualityFastHits += 1
-          sink(origin, .string(""))
-          continue
+          emitColumnIFERRORVlookupRow(plan: vlookupPlan, master: master, origin: origin, sink: sink)
         }
-        recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
-        recalcProfile?.ifStripCountifsRows += 1
+        return true
       }
-      return true
+      if let countifPickPlan = makeColumnCountifPickPlan(branchExpr, guardRef: guardRef, master: master) {
+        for origin in members {
+          emitColumnCountifPickRow(
+            plan: countifPickPlan,
+            guardRef: guardRef,
+            master: master,
+            origin: origin,
+            sink: sink
+          )
+        }
+        return true
+      }
+      if let countifsExpr = stripCountifsKernelExpr(branchExpr),
+         let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
+        for origin in members {
+          prepareForCellEvaluation(origin: origin)
+          if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+            recalcProfile?.ifBlankEqualityFastHits += 1
+            sink(origin, .string(""))
+            continue
+          }
+          recalcProfile?.ifBlankEqualityFastHits += 1
+          emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
+          recalcProfile?.ifStripCountifsRows += 1
+        }
+        return true
+      }
     }
     recalcProfile?.recordIfStripPlanMiss(
-      diagnoseIfStripBranchKernelMiss(branchExpr, guardRef: guardRef, master: master)
+      diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifGuard, master: master)
     )
     for origin in members {
       prepareForCellEvaluation(origin: origin)
-      let guardCell = shiftedRef(guardRef, master: master, origin: origin)
-      if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+      if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
         recalcProfile?.ifBlankEqualityFastHits += 1
         sink(origin, .string(""))
         continue
@@ -1775,7 +2119,7 @@ extension FormulaEvaluator {
       if !evaluateColumnBranchShape(
         master: master,
         origin: origin,
-        guardRef: guardRef,
+        ifGuard: ifGuard,
         branch: branchExpr,
         sink: sink
       ) {
@@ -1788,7 +2132,7 @@ extension FormulaEvaluator {
   private func evaluateColumnBranchShape(
     master: CellAddress,
     origin: CellAddress,
-    guardRef: FormulaRef,
+    ifGuard: IFBlankGuard,
     branch: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
@@ -1800,7 +2144,8 @@ extension FormulaEvaluator {
       emitColumnIFERRORVlookupRow(plan: plan, master: master, origin: origin, sink: sink)
       return true
     }
-    if let pickPlan = makeColumnCountifPickPlan(branch, guardRef: guardRef, master: master) {
+    if case .single(let guardRef) = ifGuard,
+       let pickPlan = makeColumnCountifPickPlan(branch, guardRef: guardRef, master: master) {
       emitColumnCountifPickRow(
         plan: pickPlan,
         guardRef: guardRef,
