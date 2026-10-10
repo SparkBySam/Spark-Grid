@@ -102,6 +102,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { bdcKpiWorkbookOpenPath() })
     results.append(MainActor.assumeIsolated { largeSyntheticWorkbookColdViewportScroll() })
     results.append(MainActor.assumeIsolated { largeSheetScrollRegionBudgets() })
+    results.append(MainActor.assumeIsolated { liveScrollTickMovesCellsWithoutPainting() })
     results.append(MainActor.assumeIsolated { kpiWorkbookMultiSheetScroll() })
     results.append(MainActor.assumeIsolated { conditionalFormatPaste() })
     results.append(editorSpellChecking())
@@ -6044,6 +6045,161 @@ enum BugBashRunner {
       passed: true,
       detail: String(format: "snapshots A %.2fs B %.2fs; no-snapshot %.2fs", regionA, regionB, slowRegion)
     )
+  }
+
+  /// A trackpad tick must move painted cells by shifting bitmaps. It must not
+  /// visit cells, measure text, rebuild a plane, or redraw header labels.
+  @MainActor
+  private static func liveScrollTickMovesCellsWithoutPainting() -> Result {
+    let name = "live scroll tick moves cells without painting"
+    let header = SpreadsheetGridNSView.baseHeaderSize
+    let rowH = Workbook.defaultRowHeight
+    let colW = Workbook.defaultColumnWidth
+    func painted(_ color: CodableColor) -> Cell {
+      var format = CellFormat()
+      format.fillColor = color
+      return Cell(raw: "", format: format)
+    }
+    var sheet = Sheet(name: "Scroll", frozenRows: 2, frozenColumns: 1)
+    for row in 0..<36 {
+      for col in 0..<8 {
+        sheet.setCell(Cell(raw: "r\(row)c\(col)"), at: CellAddress(row: row, col: col))
+      }
+    }
+    let red = CodableColor(red: 0.95, green: 0.05, blue: 0.05, alpha: 1)
+    let green = CodableColor(red: 0.05, green: 0.85, blue: 0.1, alpha: 1)
+    let blue = CodableColor(red: 0.05, green: 0.15, blue: 0.95, alpha: 1)
+    sheet.setCell(painted(green), at: CellAddress(row: 0, col: 3))
+    sheet.setCell(painted(blue), at: CellAddress(row: 6, col: 0))
+    sheet.setCell(painted(red), at: CellAddress(row: 6, col: 3))
+
+    let frame = NSRect(x: 0, y: 0, width: 820, height: 520)
+    let grid = SpreadsheetGridNSView(frame: frame)
+    let window = NSWindow(
+      contentRect: frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = grid
+    window.setFrameOrigin(NSPoint(x: -4000, y: -4000))
+    window.orderFrontRegardless()
+    window.setContentSize(frame.size)
+    grid.frame = frame
+    grid.viewModel = SpreadsheetViewModel(workbook: Workbook(sheets: [sheet]))
+    grid.layoutSubtreeIfNeeded()
+    grid.needsDisplay = true
+    grid.display()
+    grid.testingWarmScrollPlanes()
+    grid.testingResetScrollCounters()
+    let scrollX: CGFloat = 40
+    let scrollY: CGFloat = rowH
+    grid.testingApplyScroll(dx: scrollX, dy: scrollY)
+
+    func point(row: Int, col: Int) -> NSPoint {
+      let x = header + CGFloat(col) * colW + colW / 2 - (col < 1 ? 0 : scrollX)
+      let y = header + CGFloat(row) * rowH + rowH / 2 - (row < 2 ? 0 : scrollY)
+      return NSPoint(x: x, y: y)
+    }
+    let redNow = point(row: 6, col: 3)
+    let redBefore = NSPoint(x: redNow.x + scrollX, y: redNow.y + scrollY)
+    let greenNow = point(row: 0, col: 3)
+    let blueNow = point(row: 6, col: 0)
+
+    guard grid.testingScrollSurfacesPresented,
+          grid.liveScrollCellVisits == 0,
+          grid.liveScrollTextPaints == 0,
+          grid.liveScrollPlaneBuilds == 0,
+          grid.liveScrollHeaderDraws == 0
+    else {
+      window.orderOut(nil)
+      window.close()
+      return Result(
+        name: name,
+        passed: false,
+        detail: "surfaces \(grid.testingScrollSurfacesPresented) visits \(grid.liveScrollCellVisits) text \(grid.liveScrollTextPaints) builds \(grid.liveScrollPlaneBuilds) headers \(grid.liveScrollHeaderDraws)"
+      )
+    }
+
+    guard let snap = bitmapOfGrid(grid) else {
+      window.orderOut(nil)
+      window.close()
+      return Result(name: name, passed: false, detail: "snapshot failed")
+    }
+    window.orderOut(nil)
+    window.close()
+
+    func isRed(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.redComponent > 0.7 && rgb.greenComponent < 0.25 && rgb.blueComponent < 0.25
+    }
+    func isGreen(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.greenComponent > 0.55 && rgb.redComponent < 0.25 && rgb.blueComponent < 0.3
+    }
+    func isBlue(_ color: NSColor) -> Bool {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return false }
+      return rgb.blueComponent > 0.7 && rgb.redComponent < 0.25 && rgb.greenComponent < 0.35
+    }
+    func describe(_ color: NSColor) -> String {
+      guard let rgb = color.usingColorSpace(.deviceRGB) else { return "nil" }
+      return String(format: "%.2f,%.2f,%.2f", rgb.redComponent, rgb.greenComponent, rgb.blueComponent)
+    }
+    let fromTop = [true, false].first { isRed(snap.color(at: redNow, fromTop: $0)) }
+    guard let fromTop else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "red did not move top \(describe(snap.color(at: redNow, fromTop: true))) bottom \(describe(snap.color(at: redNow, fromTop: false)))"
+      )
+    }
+    guard !isRed(snap.color(at: redBefore, fromTop: fromTop)) else {
+      return Result(name: name, passed: false, detail: "red stayed at the pre-scroll point")
+    }
+    guard isGreen(snap.color(at: greenNow, fromTop: fromTop)) else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "frozen header fill \(describe(snap.color(at: greenNow, fromTop: fromTop)))"
+      )
+    }
+    guard isBlue(snap.color(at: blueNow, fromTop: fromTop)) else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "frozen column fill \(describe(snap.color(at: blueNow, fromTop: fromTop)))"
+      )
+    }
+    return Result(name: name, passed: true, detail: "tick moved bitmaps visits 0 text 0")
+  }
+
+  @MainActor
+  private static func bitmapOfGrid(_ grid: SpreadsheetGridNSView) -> GridSnapshot? {
+    let scale = max(1, grid.window?.backingScaleFactor ?? 2)
+    let pixelsWide = Int((grid.bounds.width * scale).rounded())
+    let pixelsHigh = Int((grid.bounds.height * scale).rounded())
+    guard let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: pixelsWide,
+      pixelsHigh: pixelsHigh,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ), let gfx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+    rep.size = grid.bounds.size
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = gfx
+    let cg = gfx.cgContext
+    cg.translateBy(x: 0, y: CGFloat(pixelsHigh))
+    cg.scaleBy(x: scale, y: -scale)
+    grid.layer?.render(in: cg)
+    NSGraphicsContext.restoreGraphicsState()
+    return GridSnapshot(image: rep, pointScale: scale, chartAboveFrozenPane: false)
   }
 
   /// Synthetic large sheet: scroll strip ~50ms, cold region ~200ms (not a warm repeat).

@@ -36,8 +36,6 @@ final class SpreadsheetGridNSView: NSView {
   private var cachedRowLayoutKey = ""
   private var cachedWrappedRowHeights: [Int: CGFloat] = [:]
   private var cachedWrappedRowKey = ""
-  private var rowsWithWrapText = Set<Int>()
-  private var wrapRowIndexKey = ""
   private struct CellPaintCacheEntry {
     var paint: ConditionalPaint
     var value: CellValue
@@ -45,6 +43,77 @@ final class SpreadsheetGridNSView: NSView {
   }
   private var cellPaintCache: [CellAddress: CellPaintCacheEntry] = [:]
   private var cellPaintCacheKey = ""
+  /// How far past the viewport a scroll plane is rasterized, in points.
+  /// A tick inside this margin blits the plane; it does not redraw cell text.
+  static let liveScrollOverscan: CGFloat = 280
+  private var contentRectOverride: NSRect?
+  private var rasterTarget: RasterTarget?
+  private var suppressSelectionWash = false
+  private struct ScrollPlane {
+    var key: String
+    /// Scroll origin whose visible pane was captured with `cacheDisplay`.
+    var exactScroll: CGPoint
+    var contentOrigin: CGPoint
+    var viewRect: NSRect
+    var exactCells: NSImage
+    var cells: NSImage
+    var overflow: NSImage
+    var skipGridlines: Bool
+    var scrollsX: Bool
+    var scrollsY: Bool
+
+    func matchesExact(scroll: CGPoint) -> Bool {
+      let dx = scrollsX ? abs(scroll.x - exactScroll.x) : 0
+      let dy = scrollsY ? abs(scroll.y - exactScroll.y) : 0
+      return dx < 0.01 && dy < 0.01
+    }
+
+    func covers(scroll: CGPoint, pane: NSRect) -> Bool {
+      let dx = scrollsX ? scroll.x - contentOrigin.x : 0
+      let dy = scrollsY ? scroll.y - contentOrigin.y : 0
+      let dest = NSRect(
+        x: viewRect.origin.x - dx,
+        y: viewRect.origin.y - dy,
+        width: viewRect.width,
+        height: viewRect.height
+      )
+      return dest.minX <= pane.minX + 0.5
+        && dest.minY <= pane.minY + 0.5
+        && dest.maxX >= pane.maxX - 0.5
+        && dest.maxY >= pane.maxY - 0.5
+    }
+
+    func destination(scroll: CGPoint) -> NSRect {
+      let dx = scrollsX ? scroll.x - contentOrigin.x : 0
+      let dy = scrollsY ? scroll.y - contentOrigin.y : 0
+      return NSRect(
+        x: viewRect.origin.x - dx,
+        y: viewRect.origin.y - dy,
+        width: viewRect.width,
+        height: viewRect.height
+      )
+    }
+  }
+  private enum RasterTarget {
+    case bodyCells
+    case bodyOverflow
+    case bodyComposite
+    case frozenCells
+    case frozenOverflow
+    case frozenComposite
+    case columnHeaders
+    case rowHeaders
+  }
+  private var bodyPlane: ScrollPlane?
+  private var frozenTopPlane: ScrollPlane?
+  private var frozenLeftPlane: ScrollPlane?
+  private var frozenCornerPlane: ScrollPlane?
+  private(set) var liveScrollCellVisits = 0
+  private(set) var liveScrollTextPaints = 0
+  private(set) var liveScrollPlaneBuilds = 0
+  private(set) var liveScrollHeaderDraws = 0
+  private(set) var liveScrollMaxRow = -1
+  var testingScrollSurfacesPresented: Bool { scrollSurfacesPresented }
   /// Previous selection dirty region — avoids full-grid redraws on click/drag.
   private var lastSelectionDirtyRect: NSRect = .null
   private let editor = CellEditorTextField()
@@ -106,6 +175,9 @@ final class SpreadsheetGridNSView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
       guard let grid, bounds.width > 0.5, bounds.height > 0.5 else { return }
+      // Scroll ticks move subviews of this overlay. Drawing would wipe the
+      // corner that those subviews do not cover and would repaint cell text.
+      if grid.scrollSurfacesPresented || grid.isAdjustingScrollSurfaces { return }
       guard let ctx = NSGraphicsContext.current else { return }
       let local = bounds.intersection(dirtyRect)
       guard !local.isNull else { return }
@@ -120,6 +192,47 @@ final class SpreadsheetGridNSView: NSView {
       NSBezierPath(rect: convert(bounds, to: grid)).addClip()
       grid.drawFrozenPanesCoveringCharts(in: convert(dirtyRect, to: grid))
       ctx.restoreGraphicsState()
+    }
+  }
+
+  /// Clips a pre-rasterized cell or header image. Scrolling moves the image
+  /// view; it does not redraw the grid.
+  private final class ScrollClipView: NSView {
+    let surface = ScrollSurfaceView()
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override init(frame frameRect: NSRect) {
+      super.init(frame: frameRect)
+      wantsLayer = true
+      clipsToBounds = true
+      layer?.masksToBounds = true
+      surface.wantsLayer = true
+      surface.layerContentsRedrawPolicy = .onSetNeedsDisplay
+      addSubview(surface)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+  }
+
+  /// Draws its bitmap once. Later frame changes only move the layer.
+  private final class ScrollSurfaceView: NSView {
+    var image: NSImage?
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { image != nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+      guard let image else { return }
+      image.draw(
+        in: bounds,
+        from: NSRect(origin: .zero, size: image.size),
+        operation: .sourceOver,
+        fraction: 1,
+        respectFlipped: true,
+        hints: [.interpolation: NSImageInterpolation.none]
+      )
     }
   }
 
@@ -149,6 +262,18 @@ final class SpreadsheetGridNSView: NSView {
     view.clipsToBounds = true
     return view
   }
+
+  private let bodyScrollClip = ScrollClipView(frame: .zero)
+  private let columnHeaderScrollClip = ScrollClipView(frame: .zero)
+  private let rowHeaderScrollClip = ScrollClipView(frame: .zero)
+  private let frozenCornerScrollClip = ScrollClipView(frame: .zero)
+  private let frozenTopScrollClip = ScrollClipView(frame: .zero)
+  private let frozenLeftScrollClip = ScrollClipView(frame: .zero)
+  private var columnHeaderPlane: ScrollPlane?
+  private var rowHeaderPlane: ScrollPlane?
+  private var scrollSurfacesPresented = false
+  private var isAdjustingScrollSurfaces = false
+  private var scrollPlanePrefetchScheduled = false
 
   private var isPropagatingDisplay = false
   private var chartHosts: [UUID: OnSheetChartHost] = [:]
@@ -206,16 +331,37 @@ final class SpreadsheetGridNSView: NSView {
   override var needsDisplay: Bool {
     get { super.needsDisplay }
     set {
+      if !newValue {
+        super.needsDisplay = false
+        return
+      }
+      if !isAdjustingScrollSurfaces, scrollSurfacesPresented {
+        hideScrollSurfaces()
+      }
       super.needsDisplay = newValue
-      if newValue {
+      if !scrollSurfacesPresented, !isAdjustingScrollSurfaces {
         displayFrozenPaneOverlay()
       }
     }
   }
 
   override func setNeedsDisplay(_ invalidRect: NSRect) {
-    super.setNeedsDisplay(invalidRect)
-    displayFrozenPaneOverlay()
+    var rect = invalidRect
+    if !isAdjustingScrollSurfaces, scrollSurfacesPresented, rectOverlapsCellArea(invalidRect) {
+      // The scrolling bitmaps were covering a stale parent layer. Repaint the
+      // whole view at the current scroll before those bitmaps go away.
+      hideScrollSurfaces()
+      rect = bounds
+    }
+    super.setNeedsDisplay(rect)
+    if !scrollSurfacesPresented, !isAdjustingScrollSurfaces {
+      displayFrozenPaneOverlay()
+    }
+  }
+
+  private func rectOverlapsCellArea(_ rect: NSRect) -> Bool {
+    let hit = rect.intersection(contentRect)
+    return !hit.isNull && hit.width > 0.5 && hit.height > 0.5
   }
 
   private func displayFrozenPaneOverlay() {
@@ -228,7 +374,8 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private var contentRect: NSRect {
-    NSRect(
+    if let contentRectOverride { return contentRectOverride }
+    return NSRect(
       x: headerSize,
       y: headerSize,
       width: max(0, bounds.width - headerSize),
@@ -262,6 +409,7 @@ final class SpreadsheetGridNSView: NSView {
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
+    layerContentsRedrawPolicy = .onSetNeedsDisplay
     layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     configureEditor()
     addSubview(chartLayerView, positioned: .below, relativeTo: editor)
@@ -269,6 +417,18 @@ final class SpreadsheetGridNSView: NSView {
       overlay.grid = self
       addSubview(overlay, positioned: .above, relativeTo: chartLayerView)
     }
+    bodyScrollClip.layer?.zPosition = 1
+    columnHeaderScrollClip.layer?.zPosition = 20
+    rowHeaderScrollClip.layer?.zPosition = 21
+    bodyScrollClip.isHidden = true
+    columnHeaderScrollClip.isHidden = true
+    rowHeaderScrollClip.isHidden = true
+    frozenCornerScrollClip.isHidden = true
+    frozenTopScrollClip.isHidden = true
+    frozenLeftScrollClip.isHidden = true
+    addSubview(bodyScrollClip, positioned: .below, relativeTo: chartLayerView)
+    addSubview(columnHeaderScrollClip)
+    addSubview(rowHeaderScrollClip)
   }
 
   override func layout() {
@@ -380,48 +540,28 @@ final class SpreadsheetGridNSView: NSView {
     )
   }
 
-  private func refreshWrapRowIndexIfNeeded(viewModel: SpreadsheetViewModel, sheet: Sheet) {
-    let key = "\(viewModel.contentRevision)|\(sheet.id.uuidString)"
-    guard key != wrapRowIndexKey else { return }
-    wrapRowIndexKey = key
-    rowsWithWrapText.removeAll(keepingCapacity: true)
-    for (address, cell) in sheet.cells {
-      guard cell.format?.textDisplay == .wrap else { continue }
-      if sheet.isCoveredByMerge(address) { continue }
-      rowsWithWrapText.insert(address.row)
-    }
-  }
-
   private func wrappedRowHeights(viewModel: SpreadsheetViewModel, sheet: Sheet) -> [Int: CGFloat] {
     let key = "\(viewModel.contentRevision)|\(zoomScale)"
     if key == cachedWrappedRowKey { return cachedWrappedRowHeights }
-    refreshWrapRowIndexIfNeeded(viewModel: viewModel, sheet: sheet)
     let zoom = zoomScale
-    var heights: [Int: CGFloat] = [:]
-    for row in rowsWithWrapText {
-      let needed = CellTextLayout.wrappedRowHeight(
-        row: row,
-        sheet: sheet,
-        defaultRowHeight: Self.defaultRowHeight,
-        defaultColumnWidth: Self.defaultColumnWidth,
-        zoom: zoom,
-        columnWidth: { sheet.columnWidth(for: $0, default: Self.defaultColumnWidth) },
-        displayText: { viewModel.displayString(at: $0) },
-        extraWidthInset: { address in
-          var extra: CGFloat = 0
-          if viewModel.resolvedPaint(at: address).icon != nil {
-            extra += 14 * zoom
-          }
-          if viewModel.isFilterHeaderCell(row: address.row, col: address.col) {
-            extra += 14 * zoom
-          }
-          return extra
+    let heights = CellTextLayout.wrappedRowHeights(
+      sheet: sheet,
+      defaultRowHeight: Self.defaultRowHeight,
+      defaultColumnWidth: Self.defaultColumnWidth,
+      zoom: zoom,
+      columnWidth: { sheet.columnWidth(for: $0, default: Self.defaultColumnWidth) },
+      displayText: { viewModel.displayString(at: $0) },
+      extraWidthInset: { address in
+        var extra: CGFloat = 0
+        if viewModel.resolvedPaint(at: address).icon != nil {
+          extra += 14 * zoom
         }
-      )
-      if needed > 0 {
-        heights[row] = needed
+        if viewModel.isFilterHeaderCell(row: address.row, col: address.col) {
+          extra += 14 * zoom
+        }
+        return extra
       }
-    }
+    )
     cachedWrappedRowHeights = heights
     cachedWrappedRowKey = key
     return heights
@@ -510,55 +650,17 @@ final class SpreadsheetGridNSView: NSView {
     cachedWrappedRowKey = ""
     cellPaintCache.removeAll(keepingCapacity: true)
     cellPaintCacheKey = ""
+    invalidateScrollPlanes()
   }
 
-  /// Strips of content newly exposed after a scroll delta (AppKit draw only these).
-  private func scrollExposureDirtyRects(from previousOrigin: CGPoint) -> [NSRect] {
-    let delta = CGPoint(x: scrollOrigin.x - previousOrigin.x, y: scrollOrigin.y - previousOrigin.y)
-    if delta == .zero { return [] }
-    let content = contentRect
-    var rects: [NSRect] = []
-    if delta.y > 0.5 {
-      rects.append(
-        NSRect(
-          x: content.minX,
-          y: max(content.minY, content.maxY - delta.y - 2),
-          width: content.width,
-          height: min(content.height, delta.y + 4)
-        )
-      )
-    } else if delta.y < -0.5 {
-      let strip = -delta.y
-      rects.append(
-        NSRect(
-          x: content.minX,
-          y: content.minY,
-          width: content.width,
-          height: min(content.height, strip + 4)
-        )
-      )
-    }
-    if delta.x > 0.5 {
-      rects.append(
-        NSRect(
-          x: max(content.minX, content.maxX - delta.x - 2),
-          y: content.minY,
-          width: min(content.width, delta.x + 4),
-          height: content.height
-        )
-      )
-    } else if delta.x < -0.5 {
-      let strip = -delta.x
-      rects.append(
-        NSRect(
-          x: content.minX,
-          y: content.minY,
-          width: min(content.width, strip + 4),
-          height: content.height
-        )
-      )
-    }
-    return rects
+  private func invalidateScrollPlanes() {
+    bodyPlane = nil
+    frozenTopPlane = nil
+    frozenLeftPlane = nil
+    frozenCornerPlane = nil
+    columnHeaderPlane = nil
+    rowHeaderPlane = nil
+    hideScrollSurfaces()
   }
 
   private func columnOffsets() -> [CGFloat] {
@@ -772,7 +874,10 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func isCellRectInContentArea(_ rect: NSRect) -> Bool {
-    rect.maxX > headerSize
+    if let area = contentRectOverride {
+      return rect.intersects(area)
+    }
+    return rect.maxX > headerSize
       && rect.maxY > headerSize
       && rect.minX < bounds.width
       && rect.minY < bounds.height
@@ -1173,11 +1278,630 @@ final class SpreadsheetGridNSView: NSView {
 
   // MARK: - Drawing
 
+  private func scrollPlaneKey() -> String {
+    let appearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "d" : "l"
+    let sheetID = viewModel?.activeSheet.id.uuidString ?? ""
+    let selection = viewModel?.selectionRevision ?? 0
+    let highlights = viewModel?.formulaHighlightRevision ?? 0
+    return "\(viewModel?.contentRevision ?? -1)|\(selection)|\(highlights)|\(zoomScale)|\(sheetID)|\(appearance)|\(frozenRowCount())|\(frozenColumnCount())|\(rasterScale)"
+  }
+
+  private var rasterScale: CGFloat {
+    max(1, window?.backingScaleFactor ?? 2)
+  }
+
+  private struct PlaneCoverage {
+    var origin: CGPoint
+    var viewRect: NSRect
+  }
+
+  /// Extra rows and columns live in the same image as the viewport so a short
+  /// scroll only moves that image.
+  private func expandedCoverage(scroll: CGPoint, pane: NSRect, scrollsX: Bool, scrollsY: Bool) -> PlaneCoverage {
+    let overscan = Self.liveScrollOverscan
+    var origin = scroll
+    var size = pane.size
+    if scrollsX {
+      let lead = min(overscan, max(0, origin.x))
+      origin.x -= lead
+      size.width += lead + overscan
+    }
+    if scrollsY {
+      let lead = min(overscan, max(0, origin.y))
+      origin.y -= lead
+      size.height += lead + overscan
+    }
+    return PlaneCoverage(origin: origin, viewRect: NSRect(origin: pane.origin, size: size))
+  }
+
+  private func contentRect(coveringScrollable rect: NSRect) -> NSRect {
+    let frozenW = max(0, rect.minX - headerSize)
+    let frozenH = max(0, rect.minY - headerSize)
+    return NSRect(
+      x: headerSize,
+      y: headerSize,
+      width: max(1, frozenW + rect.width),
+      height: max(1, frozenH + rect.height)
+    )
+  }
+
+  private func invalidateScrollSurfaces() {
+    var rects = [scrollableCellsClipRect()]
+    if frozenRowCount() > 0 {
+      rects.append(frozenTopStripClipRect())
+      if frozenColumnCount() > 0 {
+        rects.append(frozenCellsClipRect())
+      }
+    }
+    if frozenColumnCount() > 0 {
+      rects.append(frozenLeftStripClipRect())
+    }
+    rects.append(NSRect(x: 0, y: 0, width: bounds.width, height: headerSize))
+    rects.append(NSRect(x: 0, y: 0, width: headerSize, height: bounds.height))
+    for rect in rects where rect.width > 0.5 && rect.height > 0.5 {
+      setNeedsDisplay(rect.intersection(bounds))
+    }
+  }
+
+  private func drawRasterStack(_ target: RasterTarget, in dirtyRect: NSRect) {
+    switch target {
+    case .bodyCells:
+      NSColor.windowBackgroundColor.setFill()
+      dirtyRect.fill()
+      NSGraphicsContext.saveGraphicsState()
+      NSBezierPath(rect: scrollableCellsClipRect()).addClip()
+      drawCells(in: dirtyRect)
+      NSGraphicsContext.restoreGraphicsState()
+    case .bodyOverflow:
+      NSGraphicsContext.current?.cgContext.clear(dirtyRect)
+      drawScrollableOverflowText(in: dirtyRect)
+    case .bodyComposite:
+      NSColor.windowBackgroundColor.setFill()
+      dirtyRect.fill()
+      NSGraphicsContext.saveGraphicsState()
+      NSBezierPath(rect: scrollableCellsClipRect()).addClip()
+      drawCells(in: dirtyRect)
+      if !visibleRegionIsMostlyBordered() {
+        drawGridLines(in: dirtyRect)
+      }
+      drawScrollableOverflowText(in: dirtyRect)
+      drawSelection(in: dirtyRect)
+      drawFormulaReferenceHighlights(in: dirtyRect)
+      drawImages(in: dirtyRect)
+      NSGraphicsContext.restoreGraphicsState()
+    case .frozenCells:
+      NSColor.windowBackgroundColor.setFill()
+      dirtyRect.fill()
+      fillFrozenPaneBackgrounds(in: dirtyRect)
+      drawFrozenCells(in: dirtyRect)
+    case .frozenOverflow:
+      NSGraphicsContext.current?.cgContext.clear(dirtyRect)
+      drawFrozenOverflowText(in: dirtyRect)
+    case .frozenComposite:
+      NSColor.windowBackgroundColor.setFill()
+      dirtyRect.fill()
+      fillFrozenPaneBackgrounds(in: dirtyRect)
+      drawFrozenCells(in: dirtyRect)
+      if !visibleRegionIsMostlyBordered() {
+        drawFrozenGridLines(in: dirtyRect)
+      }
+      drawFrozenOverflowText(in: dirtyRect)
+      drawSelection(in: dirtyRect)
+      drawFormulaReferenceHighlights(in: dirtyRect)
+      drawImages(in: dirtyRect)
+    case .columnHeaders:
+      drawScrollingHeaderPlane(columns: true, in: dirtyRect)
+    case .rowHeaders:
+      drawScrollingHeaderPlane(columns: false, in: dirtyRect)
+    }
+  }
+
+  private func captureManual(
+    viewRect: NSRect,
+    scroll: CGPoint,
+    contentOverride: NSRect?,
+    target: RasterTarget,
+    suppressWash: Bool
+  ) -> NSImage? {
+    let savedScroll = scrollOrigin
+    let savedOverride = contentRectOverride
+    let savedTarget = rasterTarget
+    let savedWash = suppressSelectionWash
+    scrollOrigin = scroll
+    contentRectOverride = contentOverride
+    rasterTarget = target
+    suppressSelectionWash = suppressWash
+    defer {
+      scrollOrigin = savedScroll
+      contentRectOverride = savedOverride
+      rasterTarget = savedTarget
+      suppressSelectionWash = savedWash
+    }
+    return renderManual(viewRect: viewRect) {
+      self.drawRasterStack(target, in: viewRect)
+    }
+  }
+
+  /// Flipped point-space bitmap so cell drawing matches `isFlipped`.
+  private func renderManual(viewRect: NSRect, draw: () -> Void) -> NSImage? {
+    let size = viewRect.size
+    guard size.width > 1, size.height > 1 else { return nil }
+    let scale = rasterScale
+    let pixelsWide = max(1, Int((size.width * scale).rounded(.up)))
+    let pixelsHigh = max(1, Int((size.height * scale).rounded(.up)))
+    guard let rep = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: pixelsWide,
+      pixelsHigh: pixelsHigh,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ) else { return nil }
+    rep.size = size
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    guard let base = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+    base.imageInterpolation = .none
+    let cg = base.cgContext
+    cg.translateBy(x: 0, y: size.height)
+    cg.scaleBy(x: 1, y: -1)
+    cg.translateBy(x: -viewRect.origin.x, y: -viewRect.origin.y)
+    let flipped = NSGraphicsContext(cgContext: cg, flipped: true)
+    flipped.imageInterpolation = .none
+    NSGraphicsContext.current = flipped
+    draw()
+    let image = NSImage(size: size)
+    image.addRepresentation(rep)
+    return image
+  }
+
+  private func ensureBodyPlane() -> ScrollPlane? {
+    let pane = scrollableCellsClipRect()
+    guard pane.width > 1, pane.height > 1, viewModel != nil else { return nil }
+    let key = scrollPlaneKey()
+    if let existing = bodyPlane, existing.key == key, existing.covers(scroll: scrollOrigin, pane: pane) {
+      return existing
+    }
+    let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: true, scrollsY: true)
+    let override = contentRect(coveringScrollable: coverage.viewRect)
+    guard let image = captureManual(
+      viewRect: coverage.viewRect,
+      scroll: coverage.origin,
+      contentOverride: override,
+      target: .bodyComposite,
+      suppressWash: false
+    ) else { return nil }
+    let plane = ScrollPlane(
+      key: key,
+      exactScroll: scrollOrigin,
+      contentOrigin: coverage.origin,
+      viewRect: coverage.viewRect,
+      exactCells: image,
+      cells: image,
+      overflow: image,
+      skipGridlines: true,
+      scrollsX: true,
+      scrollsY: true
+    )
+    bodyPlane = plane
+    liveScrollPlaneBuilds += 1
+    return plane
+  }
+
+  private func ensureFrozenPlane(
+    existing: ScrollPlane?,
+    pane: NSRect,
+    scrollsX: Bool,
+    scrollsY: Bool,
+    assign: (ScrollPlane) -> Void
+  ) -> ScrollPlane? {
+    guard pane.width > 1, pane.height > 1, viewModel != nil else { return nil }
+    let key = scrollPlaneKey()
+    if let existing, existing.key == key, existing.covers(scroll: scrollOrigin, pane: pane) {
+      return existing
+    }
+    let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: scrollsX, scrollsY: scrollsY)
+    let manualScroll = CGPoint(
+      x: scrollsX ? coverage.origin.x : scrollOrigin.x,
+      y: scrollsY ? coverage.origin.y : scrollOrigin.y
+    )
+    let override = NSRect(
+      x: headerSize,
+      y: headerSize,
+      width: max(bounds.width - headerSize, coverage.viewRect.maxX - headerSize),
+      height: max(bounds.height - headerSize, coverage.viewRect.maxY - headerSize)
+    )
+    guard let image = captureManual(
+      viewRect: coverage.viewRect,
+      scroll: manualScroll,
+      contentOverride: override,
+      target: .frozenComposite,
+      suppressWash: false
+    ) else { return nil }
+    let plane = ScrollPlane(
+      key: key,
+      exactScroll: scrollOrigin,
+      contentOrigin: coverage.origin,
+      viewRect: coverage.viewRect,
+      exactCells: image,
+      cells: image,
+      overflow: image,
+      skipGridlines: true,
+      scrollsX: scrollsX,
+      scrollsY: scrollsY
+    )
+    assign(plane)
+    liveScrollPlaneBuilds += 1
+    return plane
+  }
+
+  private func scrollingColumnHeaderPane() -> NSRect {
+    let left = frozenColumnCount() > 0 ? frozenColumnBoundaryX() : headerSize
+    return NSRect(x: left, y: 0, width: max(0, bounds.width - left), height: headerSize)
+  }
+
+  private func scrollingRowHeaderPane() -> NSRect {
+    let top = frozenRowCount() > 0 ? frozenRowBoundaryY() : headerSize
+    return NSRect(x: 0, y: top, width: headerSize, height: max(0, bounds.height - top))
+  }
+
+  private func ensureColumnHeaderPlane() -> ScrollPlane? {
+    ensureHeaderPlane(
+      existing: columnHeaderPlane,
+      pane: scrollingColumnHeaderPane(),
+      scrollsX: true,
+      scrollsY: false,
+      target: .columnHeaders,
+      assign: { self.columnHeaderPlane = $0 }
+    )
+  }
+
+  private func ensureRowHeaderPlane() -> ScrollPlane? {
+    ensureHeaderPlane(
+      existing: rowHeaderPlane,
+      pane: scrollingRowHeaderPane(),
+      scrollsX: false,
+      scrollsY: true,
+      target: .rowHeaders,
+      assign: { self.rowHeaderPlane = $0 }
+    )
+  }
+
+  private func ensureHeaderPlane(
+    existing: ScrollPlane?,
+    pane: NSRect,
+    scrollsX: Bool,
+    scrollsY: Bool,
+    target: RasterTarget,
+    assign: (ScrollPlane) -> Void
+  ) -> ScrollPlane? {
+    guard pane.width > 1, pane.height > 1, viewModel != nil else { return nil }
+    let key = scrollPlaneKey()
+    if let existing, existing.key == key, existing.covers(scroll: scrollOrigin, pane: pane) {
+      return existing
+    }
+    let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: scrollsX, scrollsY: scrollsY)
+    let manualScroll = CGPoint(
+      x: scrollsX ? coverage.origin.x : scrollOrigin.x,
+      y: scrollsY ? coverage.origin.y : scrollOrigin.y
+    )
+    guard let image = captureManual(
+      viewRect: coverage.viewRect,
+      scroll: manualScroll,
+      contentOverride: contentRect(coveringScrollable: coverage.viewRect),
+      target: target,
+      suppressWash: true
+    ) else { return nil }
+    let plane = ScrollPlane(
+      key: key,
+      exactScroll: scrollOrigin,
+      contentOrigin: coverage.origin,
+      viewRect: coverage.viewRect,
+      exactCells: image,
+      cells: image,
+      overflow: image,
+      skipGridlines: true,
+      scrollsX: scrollsX,
+      scrollsY: scrollsY
+    )
+    assign(plane)
+    liveScrollPlaneBuilds += 1
+    return plane
+  }
+
+  /// Labels for the scrolling header bands. Frozen labels stay in the view's
+  /// last paint because they do not move.
+  private func drawScrollingHeaderPlane(columns: Bool, in dirtyRect: NSRect) {
+    let headerFill = NSColor.controlBackgroundColor
+    let headerText = NSColor.secondaryLabelColor
+    let selectionFill = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12)
+    let accent = NSColor.controlAccentColor
+    let gridLine = headerLineColor()
+    let attrs: [NSAttributedString.Key: Any] = [
+      .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+      .foregroundColor: headerText,
+    ]
+    let isSheetSelection = viewModel?.selectionAxis == .sheet
+    headerFill.setFill()
+    dirtyRect.fill()
+    if columns {
+      let frozenCols = frozenColumnCount()
+      guard let cols = optionalRange(visibleColumnRange(), atOrAfter: frozenCols) else { return }
+      for col in cols {
+        let rect = columnHeaderRect(for: col)
+        guard dirtyRect.intersects(rect), rect.width > 0.5 else { continue }
+        let selected = !isSheetSelection && (viewModel?.isColumnInSelection(col) ?? false)
+        if !isSheetSelection {
+          (selected ? selectionFill : headerFill).setFill()
+          rect.intersection(dirtyRect).fill()
+        }
+        let label = A1Notation.columnLabel(for: col) as NSString
+        let size = label.size(withAttributes: attrs)
+        label.draw(
+          at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+          withAttributes: attrs
+        )
+        if selected {
+          accent.setStroke()
+          let border = NSBezierPath()
+          border.lineWidth = 2
+          border.move(to: NSPoint(x: rect.minX + 0.5, y: rect.maxY - 1))
+          border.line(to: NSPoint(x: rect.maxX - 0.5, y: rect.maxY - 1))
+          border.stroke()
+        }
+        gridLine.setStroke()
+        NSBezierPath.strokeLine(from: NSPoint(x: rect.maxX, y: rect.minY), to: NSPoint(x: rect.maxX, y: rect.maxY))
+      }
+    } else {
+      let frozenRows = frozenRowCount()
+      guard let rows = optionalRange(visibleRowRange(), atOrAfter: frozenRows) else { return }
+      for row in rows where rowHeight(at: row) > 0.5 {
+        let rect = rowHeaderRect(for: row)
+        guard dirtyRect.intersects(rect), rect.height > 0.5 else { continue }
+        let selected = !isSheetSelection && (viewModel?.isRowInSelection(row) ?? false)
+        if !isSheetSelection {
+          (selected ? selectionFill : headerFill).setFill()
+          rect.intersection(dirtyRect).fill()
+        }
+        let label = "\(row + 1)" as NSString
+        let size = label.size(withAttributes: attrs)
+        label.draw(
+          at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+          withAttributes: attrs
+        )
+        if selected {
+          accent.setStroke()
+          let border = NSBezierPath()
+          border.lineWidth = 2
+          border.move(to: NSPoint(x: rect.maxX - 1, y: rect.minY + 0.5))
+          border.line(to: NSPoint(x: rect.maxX - 1, y: rect.maxY - 0.5))
+          border.stroke()
+        }
+        gridLine.setStroke()
+        NSBezierPath.strokeLine(from: NSPoint(x: rect.minX, y: rect.maxY), to: NSPoint(x: rect.maxX, y: rect.maxY))
+      }
+    }
+  }
+
+  private func optionalRange(_ range: ClosedRange<Int>, atOrAfter lower: Int) -> ClosedRange<Int>? {
+    let first = max(range.lowerBound, lower)
+    guard first <= range.upperBound else { return nil }
+    return first...range.upperBound
+  }
+
+  private func buildScrollPlanesIfNeeded() {
+    _ = ensureBodyPlane()
+    _ = ensureColumnHeaderPlane()
+    _ = ensureRowHeaderPlane()
+    _ = ensureFrozenScrollPlanes()
+  }
+
+  private func ensureFrozenScrollPlanes() -> (corner: ScrollPlane?, top: ScrollPlane?, left: ScrollPlane?) {
+    let cornerPane = frozenCellsClipRect()
+    let topPane = frozenTopStripClipRect()
+    let leftPane = frozenLeftStripClipRect()
+    let corner = frozenRowCount() > 0 && frozenColumnCount() > 0 && cornerPane.width > 1 && cornerPane.height > 1
+      ? ensureFrozenPlane(
+        existing: frozenCornerPlane,
+        pane: cornerPane,
+        scrollsX: false,
+        scrollsY: false,
+        assign: { self.frozenCornerPlane = $0 }
+      )
+      : nil
+    let top = frozenRowCount() > 0 && topPane.width > 1 && topPane.height > 1
+      ? ensureFrozenPlane(
+        existing: frozenTopPlane,
+        pane: topPane,
+        scrollsX: true,
+        scrollsY: false,
+        assign: { self.frozenTopPlane = $0 }
+      )
+      : nil
+    let left = frozenColumnCount() > 0 && leftPane.width > 1 && leftPane.height > 1
+      ? ensureFrozenPlane(
+        existing: frozenLeftPlane,
+        pane: leftPane,
+        scrollsX: false,
+        scrollsY: true,
+        assign: { self.frozenLeftPlane = $0 }
+      )
+      : nil
+    return (corner, top, left)
+  }
+
+  private func scheduleScrollPlanePrefetch() {
+    guard rasterTarget == nil, !scrollPlanePrefetchScheduled, window != nil, viewModel != nil else { return }
+    let key = scrollPlaneKey()
+    if bodyPlane?.key == key, columnHeaderPlane?.key == key, rowHeaderPlane?.key == key {
+      return
+    }
+    scrollPlanePrefetchScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.scrollPlanePrefetchScheduled = false
+      guard self.rasterTarget == nil, !self.scrollSurfacesPresented, self.window != nil else { return }
+      self.buildScrollPlanesIfNeeded()
+    }
+  }
+
+  private func hideScrollSurfaces() {
+    scrollSurfacesPresented = false
+    bodyScrollClip.isHidden = true
+    columnHeaderScrollClip.isHidden = true
+    rowHeaderScrollClip.isHidden = true
+    frozenCornerScrollClip.isHidden = true
+    frozenTopScrollClip.isHidden = true
+    frozenLeftScrollClip.isHidden = true
+  }
+
+  /// Move already-rasterized panes. Returns false when a pane has to be painted
+  /// into the view instead.
+  private func applyScrollSurfaces() -> Bool {
+    guard viewModel != nil, bounds.width > 2, bounds.height > 2 else { return false }
+    isAdjustingScrollSurfaces = true
+    defer { isAdjustingScrollSurfaces = false }
+
+    let bodyPaneRect = scrollableCellsClipRect()
+    let columnPane = scrollingColumnHeaderPane()
+    let rowPane = scrollingRowHeaderPane()
+    guard let body = ensureBodyPlane(), body.covers(scroll: scrollOrigin, pane: bodyPaneRect),
+          let columns = ensureColumnHeaderPlane(), columns.covers(scroll: scrollOrigin, pane: columnPane),
+          let rows = ensureRowHeaderPlane(), rows.covers(scroll: scrollOrigin, pane: rowPane)
+    else {
+      hideScrollSurfaces()
+      return false
+    }
+    let frozen = ensureFrozenScrollPlanes()
+    let topPane = frozenTopStripClipRect()
+    let leftPane = frozenLeftStripClipRect()
+    let cornerPane = frozenCellsClipRect()
+    if frozenRowCount() > 0, topPane.height > 1, frozen.top?.covers(scroll: scrollOrigin, pane: topPane) != true {
+      hideScrollSurfaces()
+      return false
+    }
+    if frozenColumnCount() > 0, leftPane.width > 1, frozen.left?.covers(scroll: scrollOrigin, pane: leftPane) != true {
+      hideScrollSurfaces()
+      return false
+    }
+    if frozenRowCount() > 0, frozenColumnCount() > 0, cornerPane.width > 1,
+       frozen.corner?.covers(scroll: scrollOrigin, pane: cornerPane) != true {
+      hideScrollSurfaces()
+      return false
+    }
+
+    installScrollClip(bodyScrollClip, plane: body, frame: bodyPaneRect, superview: self)
+    installScrollClip(columnHeaderScrollClip, plane: columns, frame: columnPane, superview: self)
+    installScrollClip(rowHeaderScrollClip, plane: rows, frame: rowPane, superview: self)
+    installFrozenScrollClips(frozen)
+    scrollSurfacesPresented = true
+    needsDisplay = false
+    return true
+  }
+
+  private func installScrollClip(
+    _ clip: ScrollClipView,
+    plane: ScrollPlane,
+    frame: NSRect,
+    superview: NSView
+  ) {
+    if clip.superview !== superview {
+      superview.addSubview(clip)
+    }
+    if clip.frame != frame {
+      clip.frame = frame
+    }
+    if superview !== self {
+      superview.clipsToBounds = true
+    }
+    placeScrollSurface(clip, plane: plane)
+    showScrollImage(clip, image: plane.cells)
+  }
+
+  private func installFrozenScrollClips(_ frozen: (corner: ScrollPlane?, top: ScrollPlane?, left: ScrollPlane?)) {
+    frozenCornerScrollClip.isHidden = true
+    frozenTopScrollClip.isHidden = true
+    frozenLeftScrollClip.isHidden = true
+    guard frozenRowCount() > 0 || frozenColumnCount() > 0 else { return }
+    layoutOnSheetCharts()
+    if frozenRowCount() > 0, let overlay = frozenPaneOverlays.first, !overlay.isHidden, overlay.bounds.height > 1 {
+      let cornerW = frozenColumnCount() > 0 ? max(0, frozenColumnBoundaryX() - contentRect.minX) : 0
+      if let corner = frozen.corner, cornerW > 1 {
+        installScrollClip(
+          frozenCornerScrollClip,
+          plane: corner,
+          frame: NSRect(x: 0, y: 0, width: cornerW, height: overlay.bounds.height),
+          superview: overlay
+        )
+      }
+      if let top = frozen.top {
+        installScrollClip(
+          frozenTopScrollClip,
+          plane: top,
+          frame: NSRect(
+            x: cornerW,
+            y: 0,
+            width: max(0, overlay.bounds.width - cornerW),
+            height: overlay.bounds.height
+          ),
+          superview: overlay
+        )
+      }
+    }
+    if frozenColumnCount() > 0, let left = frozen.left {
+      let index = frozenRowCount() > 0 ? 1 : 0
+      let overlay = frozenPaneOverlays[index]
+      guard !overlay.isHidden, overlay.bounds.width > 1, overlay.bounds.height > 1 else { return }
+      installScrollClip(frozenLeftScrollClip, plane: left, frame: overlay.bounds, superview: overlay)
+    }
+  }
+
+  private func showScrollImage(_ clip: ScrollClipView, image: NSImage) {
+    clip.isHidden = false
+    guard clip.surface.image !== image else { return }
+    clip.surface.image = image
+    clip.surface.needsDisplay = true
+    clip.surface.display()
+  }
+
+  private func placeScrollSurface(_ clip: ScrollClipView, plane: ScrollPlane) {
+    let paneInGrid = clip.convert(clip.bounds, to: self)
+    let dest = plane.destination(scroll: scrollOrigin)
+    let local = NSRect(
+      x: dest.minX - paneInGrid.minX,
+      y: dest.minY - paneInGrid.minY,
+      width: plane.viewRect.width,
+      height: plane.viewRect.height
+    )
+    if clip.surface.frame != local {
+      clip.surface.frame = local
+    }
+  }
+
+
   override func draw(_ dirtyRect: NSRect) {
+    if let target = rasterTarget {
+      drawRasterStack(target, in: dirtyRect)
+      return
+    }
+
+    if scrollSurfacesPresented, !rectOverlapsCellArea(dirtyRect) {
+      NSColor.controlBackgroundColor.setFill()
+      dirtyRect.fill()
+      drawStickyHeaders(in: dirtyRect)
+      drawHeaderCorner(in: dirtyRect)
+      return
+    }
+
     NSColor.windowBackgroundColor.setFill()
     dirtyRect.fill()
 
-  // 1. Cells first, then gridlines on top so hairlines stay even over fills.
+    // One live paint. Scroll ticks do not enter this path: they move the
+    // scroll-plane views built after this frame.
     let skipGridlines = visibleRegionIsMostlyBordered()
     if let ctx = NSGraphicsContext.current {
       ctx.saveGraphicsState()
@@ -1190,22 +1914,19 @@ final class SpreadsheetGridNSView: NSView {
       ctx.restoreGraphicsState()
     }
 
-    // 2. Frozen panes redrawn on top so a straddling scrolled row cannot cover
-    //    the last frozen row or column. Subviews paint after this, so the chart
-    //    layer still covers these cells. Pane-sized overlays paint them again
-    //    above the chart — not a full-grid clear.
-    if frozenRowCount() > 0 || frozenColumnCount() > 0 {
-      if let ctx = NSGraphicsContext.current {
-        ctx.saveGraphicsState()
-        NSBezierPath(rect: contentRect).addClip()
-        fillFrozenPaneBackgrounds(in: dirtyRect)
-        drawFrozenCells(in: dirtyRect)
-        if !skipGridlines {
-          drawFrozenGridLines(in: dirtyRect)
-        }
-        drawFrozenOverflowText(in: dirtyRect)
-        ctx.restoreGraphicsState()
+    // Frozen panes sit above scrolled cells. Subviews paint after this, so the
+    // chart layer still covers these cells. Pane-sized overlays paint them again
+    // above the chart — not a full-grid clear.
+    if frozenRowCount() > 0 || frozenColumnCount() > 0, let ctx = NSGraphicsContext.current {
+      ctx.saveGraphicsState()
+      NSBezierPath(rect: contentRect).addClip()
+      fillFrozenPaneBackgrounds(in: dirtyRect)
+      drawFrozenCells(in: dirtyRect)
+      if !skipGridlines {
+        drawFrozenGridLines(in: dirtyRect)
       }
+      drawFrozenOverflowText(in: dirtyRect)
+      ctx.restoreGraphicsState()
     }
 
     if let ctx = NSGraphicsContext.current {
@@ -1224,7 +1945,7 @@ final class SpreadsheetGridNSView: NSView {
       ctx.restoreGraphicsState()
     }
 
-    // 2.5 Opaque header gutters so scrolled cells cannot bleed into labels.
+    // Opaque header gutters so scrolled cells cannot bleed into labels.
     NSColor.controlBackgroundColor.setFill()
     if dirtyRect.intersects(NSRect(x: 0, y: 0, width: bounds.width, height: headerSize)) {
       NSRect(x: 0, y: 0, width: bounds.width, height: headerSize).fill()
@@ -1233,10 +1954,10 @@ final class SpreadsheetGridNSView: NSView {
       NSRect(x: 0, y: 0, width: headerSize, height: bounds.height).fill()
     }
 
-    // 3. Sticky headers drawn on top so scrolled cell text cannot bleed through.
     drawStickyHeaders(in: dirtyRect)
     drawFreezeDividers(in: dirtyRect)
     drawHeaderCorner(in: dirtyRect)
+    scheduleScrollPlanePrefetch()
   }
 
   private enum GridLineRegion {
@@ -1354,6 +2075,9 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func drawStickyHeaders(in dirtyRect: NSRect) {
+    if rasterTarget == nil {
+      liveScrollHeaderDraws += 1
+    }
     let headerFill = NSColor.controlBackgroundColor
     let headerText = NSColor.secondaryLabelColor
     let selectionFill = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.12)
@@ -2162,10 +2886,14 @@ final class SpreadsheetGridNSView: NSView {
         chartHostSnapshots[chart.id] = snapshot
       }
       host.isHidden = false
+      let sizeChanged = abs(host.frame.width - local.width) > 0.5
+        || abs(host.frame.height - local.height) > 0.5
       if host.frame != local {
         host.frame = local
       }
-      host.needsLayout = true
+      if sizeChanged {
+        host.needsLayout = true
+      }
     }
   }
 
@@ -2295,9 +3023,6 @@ final class SpreadsheetGridNSView: NSView {
     }
     cover.addClip()
 
-    // Only the invalid slice. Filling the whole pane here blanks a merged fill
-    // whose anchor sits outside this dirty rect, and the cell pass will not
-    // paint it again.
     NSColor.windowBackgroundColor.setFill()
     for rect in panes {
       let hit = rect.intersection(dirtyRect)
@@ -2616,7 +3341,7 @@ final class SpreadsheetGridNSView: NSView {
       let col1 = min(n.maxCol, colUpper - 1)
       guard row0 <= row1, col0 <= col1 else { continue }
       let anchor = CellAddress(row: n.minRow, col: n.minCol)
-      if viewModel.isEditing, isEditorActive, viewModel.selectionAnchor == anchor {
+      if rasterTarget == nil, viewModel.isEditing, isEditorActive, viewModel.selectionAnchor == anchor {
         continue
       }
       let paint = viewModel.resolvedPaint(at: anchor)
@@ -2757,6 +3482,7 @@ final class SpreadsheetGridNSView: NSView {
     viewModel: SpreadsheetViewModel,
     sheet: Sheet
   ) {
+    guard !suppressSelectionWash else { return }
     guard !rowRange.isEmpty, !colRange.isEmpty else { return }
     let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     let washAlpha: CGFloat = isDarkMode ? 0.4 : 0.12
@@ -2792,9 +3518,11 @@ final class SpreadsheetGridNSView: NSView {
     value: CellValue,
     displayText: String
   ) {
-    if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive {
+    if rasterTarget == nil, viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive {
       return
     }
+    liveScrollCellVisits += 1
+    if address.row > liveScrollMaxRow { liveScrollMaxRow = address.row }
     let paintFormat = paint.format
     let fillColor = CellFormatRenderer.fillColor(for: paintFormat)
     if let fill = fillColor {
@@ -2865,6 +3593,7 @@ final class SpreadsheetGridNSView: NSView {
     guard !text.isEmpty, textRect.width > 1, textRect.height > 1, clipRect.width > 0.5, clipRect.height > 0.5 else {
       return
     }
+    liveScrollTextPaints += 1
     NSGraphicsContext.saveGraphicsState()
     NSBezierPath(rect: clipRect).addClip()
     var drawFormat = format
@@ -2976,7 +3705,7 @@ final class SpreadsheetGridNSView: NSView {
         if sheet.isCoveredByMerge(address) { continue }
         let cell = sheet.cell(at: address)
         guard !cell.raw.isEmpty else { continue }
-        if viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
+        if rasterTarget == nil, viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
         let paint = viewModel.resolvedPaint(at: address)
         let format = paint.format ?? cell.format ?? CellFormat()
         guard format.overflowsUnclipped else { continue }
@@ -2991,6 +3720,7 @@ final class SpreadsheetGridNSView: NSView {
         var measureFormat = format
         let baseSize = measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize
         measureFormat.fontSize = baseSize * zoomScale
+        liveScrollTextPaints += 1
         let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
         let sourceColumns: ClosedRange<Int>
         if let merge = sheet.mergeContaining(address) {
@@ -3559,6 +4289,8 @@ final class SpreadsheetGridNSView: NSView {
 
   func refreshSelectionDisplay() {
     updateEditorFrame()
+    // Cell planes omit the selection wash, so a selection change repaints that
+    // wash without rasterizing cell text again.
     let next = selectionDirtyRect().insetBy(dx: -4, dy: -4)
     var dirty = next
     if !lastSelectionDirtyRect.isNull {
@@ -4051,18 +4783,42 @@ final class SpreadsheetGridNSView: NSView {
     scrollOrigin.x += event.scrollingDeltaX
     scrollOrigin.y += event.scrollingDeltaY * (invert ? -1 : 1)
     clampScrollOrigin()
+    guard scrollOrigin != previousOrigin else { return }
     updateEditorFrame()
     layoutOnSheetCharts()
-    let dirtyRects = scrollExposureDirtyRects(from: previousOrigin)
-    if dirtyRects.isEmpty {
-      needsDisplay = true
-    } else {
-      for rect in dirtyRects {
-        setNeedsDisplay(rect.intersection(bounds))
-      }
-      // Headers track scroll position.
-      setNeedsDisplay(NSRect(x: 0, y: 0, width: bounds.width, height: headerSize))
-      setNeedsDisplay(NSRect(x: 0, y: 0, width: headerSize, height: bounds.height))
+    // Move the rasterized panes. Repaint the view only when a plane does not
+    // cover this tick.
+    if !applyScrollSurfaces() {
+      invalidateScrollSurfaces()
+    }
+  }
+
+  func testingResetScrollCounters() {
+    liveScrollCellVisits = 0
+    liveScrollTextPaints = 0
+    liveScrollPlaneBuilds = 0
+    liveScrollHeaderDraws = 0
+    liveScrollMaxRow = -1
+  }
+
+  /// Rasterize scroll planes without counting the work as a scroll tick.
+  func testingWarmScrollPlanes() {
+    buildScrollPlanesIfNeeded()
+  }
+
+  /// Scroll the grid the way a trackpad tick does.
+  func testingApplyScroll(dx: CGFloat, dy: CGFloat) {
+    testingResetScrollCounters()
+    let previousOrigin = scrollOrigin
+    scrollOrigin.x += dx
+    scrollOrigin.y += dy
+    clampScrollOrigin()
+    guard scrollOrigin != previousOrigin else { return }
+    updateEditorFrame()
+    layoutOnSheetCharts()
+    if !applyScrollSurfaces() {
+      invalidateScrollSurfaces()
+      display()
     }
   }
 
