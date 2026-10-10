@@ -1348,12 +1348,131 @@ extension FormulaEvaluator {
     return nil
   }
 
-  private func diagnoseIfStripBranchKernelMiss(_ branch: FormulaExpr, master: CellAddress) -> String {
+  private func diagnoseIfStripBranchKernelMiss(
+    _ branch: FormulaExpr,
+    guardRef: FormulaRef,
+    master: CellAddress
+  ) -> String {
+    if makeColumnCountifPickPlan(branch, guardRef: guardRef, master: master) != nil {
+      return "countifPickUnexpected"
+    }
     if let kernel = stripCountifsKernelExpr(branch) {
       return makeColumnCOUNTIFSPlan(kernel, master: master) == nil ? "countifsPlan" : "countifsUnexpected"
     }
     if case .call(let name, _) = stripUnwrap(branch), name.uppercased() == "IFERROR" { return "iferrorNotVlk" }
     return "otherBranch"
+  }
+
+  /// `IF(pick<>"",COUNTIF(fixedA,pick),COUNTIF(fixedG,guard))` on KPI month **M** columns.
+  private struct ColumnCountifPickPlan {
+    var pickRef: FormulaRef
+    var rangeA: RangeAnchor
+    var rangeG: RangeAnchor
+    var valuesA: [CellValue]
+    var valuesG: [CellValue]
+    var rangeKeyA: AggregateRangeKey
+    var rangeKeyG: AggregateRangeKey
+  }
+
+  private func stripNotEmptyPickRef(_ condition: FormulaExpr) -> FormulaRef? {
+    guard case .binary(.ne, let lhs, let rhs) = stripUnwrap(condition) else { return nil }
+    guard stripIsStaticEmptyLiteral(rhs), let ref = stripFormulaCellRef(lhs) else { return nil }
+    return ref
+  }
+
+  private func stripCountifRangeCriterion(_ expr: FormulaExpr) -> (RangeAnchor, FormulaRef)? {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIF", args.count == 2 else {
+      return nil
+    }
+    guard let anchor = rangeAnchor(args[0]), anchor.cols == 1 else { return nil }
+    guard let criterionRef = stripFormulaCellRef(args[1]) else { return nil }
+    return (anchor, criterionRef)
+  }
+
+  private func stripRefSameShapeAs(_ ref: FormulaRef, other: FormulaRef) -> Bool {
+    (ref.sheet ?? "").caseInsensitiveCompare(other.sheet ?? "") == .orderedSame
+      && ref.col == other.col
+      && ref.absCol == other.absCol
+      && ref.absRow == other.absRow
+  }
+
+  private func makeColumnCountifPickPlan(
+    _ branch: FormulaExpr,
+    guardRef: FormulaRef,
+    master: CellAddress
+  ) -> ColumnCountifPickPlan? {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
+      return nil
+    }
+    guard let pickRef = stripNotEmptyPickRef(args[0]) else { return nil }
+    guard let (rangeA, critA) = stripCountifRangeCriterion(args[1]),
+          let (rangeG, critG) = stripCountifRangeCriterion(args[2])
+    else { return nil }
+    guard stripRefSameShapeAs(critA, pickRef), stripRefSameShapeAs(critG, guardRef) else { return nil }
+
+    prepareForCellEvaluation(origin: master)
+    var memo: [LookupMemoKey: CellValue] = [:]
+    let valuesA = snapshotValues(anchor: rangeA, memo: &memo)
+    let valuesG = snapshotValues(anchor: rangeG, memo: &memo)
+    return ColumnCountifPickPlan(
+      pickRef: pickRef,
+      rangeA: rangeA,
+      rangeG: rangeG,
+      valuesA: valuesA,
+      valuesG: valuesG,
+      rangeKeyA: aggregateRangeKey(for: rangeA),
+      rangeKeyG: aggregateRangeKey(for: rangeG)
+    )
+  }
+
+  private func emitColumnCountifPickRow(
+    plan: ColumnCountifPickPlan,
+    guardRef: FormulaRef,
+    master: CellAddress,
+    origin: CellAddress,
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    prepareForCellEvaluation(origin: origin)
+    let guardCell = shiftedRef(guardRef, master: master, origin: origin)
+    if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+      recalcProfile?.ifBlankEqualityFastHits += 1
+      sink(origin, .string(""))
+      recalcProfile?.ifStripCountifsRows += 1
+      return
+    }
+    recalcProfile?.ifBlankEqualityFastHits += 1
+    let pickCell = shiftedRef(plan.pickRef, master: master, origin: origin)
+    let pickValue = lookup(pickCell)
+    let usePickBranch = !stripValueIsBlankForIfGuard(pickValue)
+    let values = usePickBranch ? plan.valuesA : plan.valuesG
+    let rangeKey = usePickBranch ? plan.rangeKeyA : plan.rangeKeyG
+    let criterion = usePickBranch ? pickValue : lookup(guardCell)
+    if case .error = criterion {
+      sink(origin, criterion)
+      recalcProfile?.ifStripCountifsRows += 1
+      return
+    }
+    let test = criteriaTest(from: criterion)
+    if let cache = aggregateRangeCache,
+       criteriaSupportsIndexLookup(test),
+       let lookupKey = lookupKeyForCriterion(criterion, test: test) {
+      let count = cache.countForCriteria(
+        rangeKeys: [rangeKey],
+        criteriaKeys: [lookupKey],
+        supplyColumns: { [values] }
+      )
+      sink(origin, .number(Double(count)))
+      recalcProfile?.ifStripCountifsRows += 1
+      return
+    }
+    var matches = 0
+    recalcProfile?.countifsRowScanCells += values.count
+    for value in values {
+      if aggregateRowError(value) { continue }
+      if criteriaMatch(value, test) { matches += 1 }
+    }
+    sink(origin, .number(Double(matches)))
+    recalcProfile?.ifStripCountifsRows += 1
   }
 
   private struct ColumnCOUNTIFSPlan {
@@ -1613,6 +1732,18 @@ extension FormulaEvaluator {
       }
       return true
     }
+    if let countifPickPlan = makeColumnCountifPickPlan(branchExpr, guardRef: guardRef, master: master) {
+      for origin in members {
+        emitColumnCountifPickRow(
+          plan: countifPickPlan,
+          guardRef: guardRef,
+          master: master,
+          origin: origin,
+          sink: sink
+        )
+      }
+      return true
+    }
     if let countifsExpr = stripCountifsKernelExpr(branchExpr),
        let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
       for origin in members {
@@ -1629,7 +1760,9 @@ extension FormulaEvaluator {
       }
       return true
     }
-    recalcProfile?.recordIfStripPlanMiss(diagnoseIfStripBranchKernelMiss(branchExpr, master: master))
+    recalcProfile?.recordIfStripPlanMiss(
+      diagnoseIfStripBranchKernelMiss(branchExpr, guardRef: guardRef, master: master)
+    )
     for origin in members {
       prepareForCellEvaluation(origin: origin)
       let guardCell = shiftedRef(guardRef, master: master, origin: origin)
@@ -1642,6 +1775,7 @@ extension FormulaEvaluator {
       if !evaluateColumnBranchShape(
         master: master,
         origin: origin,
+        guardRef: guardRef,
         branch: branchExpr,
         sink: sink
       ) {
@@ -1654,6 +1788,7 @@ extension FormulaEvaluator {
   private func evaluateColumnBranchShape(
     master: CellAddress,
     origin: CellAddress,
+    guardRef: FormulaRef,
     branch: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
@@ -1663,6 +1798,16 @@ extension FormulaEvaluator {
     }
     if let plan = makeColumnIFERRORVlookupPlan(branch, master: master) {
       emitColumnIFERRORVlookupRow(plan: plan, master: master, origin: origin, sink: sink)
+      return true
+    }
+    if let pickPlan = makeColumnCountifPickPlan(branch, guardRef: guardRef, master: master) {
+      emitColumnCountifPickRow(
+        plan: pickPlan,
+        guardRef: guardRef,
+        master: master,
+        origin: origin,
+        sink: sink
+      )
       return true
     }
     let rowDelta = origin.row - master.row
