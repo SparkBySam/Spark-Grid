@@ -230,6 +230,55 @@ struct FormulaEvaluator {
     }
   }
 
+  /// `IF(Cn="","",…)` — skip heavy false-branch work on blank KPI month rows.
+  private func fastIFBlankEquality(_ args: [FormulaExpr]) -> CellValue? {
+    guard args.count == 3 else { return nil }
+    guard case .binary(.eq, let lhs, let rhs) = unwrapFormulaExpr(args[0]) else { return nil }
+    guard isEmptyCriterion(rhs) else { return nil }
+    guard let ref = formulaCellRef(lhs) else { return nil }
+    let value = lookup(ref)
+    if valueIsBlankForIfGuard(value) {
+      return evaluate(args[2])
+    }
+    return evaluate(args[1])
+  }
+
+  private func unwrapFormulaExpr(_ expr: FormulaExpr) -> FormulaExpr {
+    if case .unary(.plus, let inner) = expr { return unwrapFormulaExpr(inner) }
+    return expr
+  }
+
+  private func isEmptyCriterion(_ expr: FormulaExpr) -> Bool {
+    switch evaluate(expr) {
+    case .string(let text):
+      return text.isEmpty
+    case .blank:
+      return true
+    default:
+      return false
+    }
+  }
+
+  private func formulaCellRef(_ expr: FormulaExpr) -> FormulaRef? {
+    switch unwrapFormulaExpr(expr) {
+    case .cellRef(let ref):
+      return ref
+    default:
+      return nil
+    }
+  }
+
+  private func valueIsBlankForIfGuard(_ value: CellValue) -> Bool {
+    switch value {
+    case .blank:
+      return true
+    case .string(let text):
+      return text.isEmpty
+    default:
+      return false
+    }
+  }
+
   private func evalCall(_ name: String, _ args: [FormulaExpr]) -> CellValue {
     let profileStart = recalcProfile != nil ? CFAbsoluteTimeGetCurrent() : 0
     let result = evalCallBody(name, args)
@@ -274,6 +323,9 @@ struct FormulaEvaluator {
     case "MAX": return extreme(args, pickMin: false)
     case "IF":
       guard args.count >= 2, args.count <= 3 else { return .error(.value) }
+      if args.count == 3, let fast = fastIFBlankEquality(args) {
+        return fast
+      }
       let condition = evaluate(args[0])
       if case .error = condition { return condition }
       guard let flag = condition.asBool else { return .error(.value) }

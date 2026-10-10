@@ -78,6 +78,7 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
+    results.append(formulaEvalRegressionGate())
     results.append(everydayFormulas())
     results.append(sumproductBooleanFastPathSelfCheck())
     results.append(kpiJuneStyleCountifs())
@@ -3321,6 +3322,108 @@ enum BugBashRunner {
       passed: true,
       detail: "\(listed.count) functions, grouped, caret inside parentheses"
     )
+  }
+
+  /// Guards SUMIF, VLOOKUP, COUNTIFS UNIQUE, spell-check formula display, and SUMPRODUCT boolean hits.
+  private static func formulaEvalRegressionGate() -> Result {
+    let name = "formula eval regression gate"
+    let aggregateCells: [CellAddress: String] = [
+      CellAddress(row: 0, col: 0): "10",
+      CellAddress(row: 1, col: 0): "20",
+      CellAddress(row: 2, col: 0): "30",
+    ]
+    let sumif = evalFormula("=SUMIF(A1:A3,\">15\")", cells: aggregateCells)
+    guard case .number(let sumifTotal) = sumif, abs(sumifTotal - 50) < 0.000_001 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "SUMIF got \(sumif.displayString) expected 50"
+      )
+    }
+
+    let lookupCells: [CellAddress: String] = [
+      CellAddress(row: 0, col: 0): "10",
+      CellAddress(row: 1, col: 0): "20",
+      CellAddress(row: 2, col: 0): "30",
+      CellAddress(row: 0, col: 1): "a",
+      CellAddress(row: 1, col: 1): "b",
+      CellAddress(row: 2, col: 1): "c",
+    ]
+    let vlookup = evalFormula("=VLOOKUP(20,A1:B3,2,FALSE)", cells: lookupCells)
+    guard case .string(let hit) = vlookup, hit == "b" else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "VLOOKUP got \(vlookup.displayString) expected b"
+      )
+    }
+
+    var countifsCells: [CellAddress: String] = [:]
+    countifsCells[CellAddress(row: 5, col: 0)] = "k"
+    for row in 10..<30 {
+      countifsCells[CellAddress(row: row, col: 0)] = row < 15 ? "k" : "z"
+      if row < 15 {
+        countifsCells[CellAddress(row: row, col: 2)] = "k"
+      } else {
+        countifsCells[CellAddress(row: row, col: 2)] = "=1/0"
+      }
+      countifsCells[CellAddress(row: row, col: 11)] = "UNIQUE"
+    }
+    let countifs = evalFormula(
+      "=COUNTIFS($C$11:$C$29,$A6,$L$11:$L$29,\"UNIQUE\")",
+      cells: countifsCells
+    )
+    guard case .number(let uniqueCount) = countifs, uniqueCount == 5 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "COUNTIFS UNIQUE got \(countifs.displayString) expected 5"
+      )
+    }
+
+    var spellSheet = Sheet(name: "Sheet1")
+    spellSheet.setCell(Cell(raw: "recieve"), at: .origin)
+    spellSheet.setCell(Cell(raw: "=A1"), at: CellAddress(row: 0, col: 1))
+    let spellEngine = FormulaEngine()
+    spellEngine.rebuild(workbook: Workbook(sheets: [spellSheet]), recalculate: true)
+    let displayed = spellEngine.displayString(
+      at: CellAddress(row: 0, col: 1),
+      sheet: spellSheet,
+      format: nil
+    )
+    guard displayed == "recieve" else {
+      return Result(name: name, passed: false, detail: "spell formula result \(displayed)")
+    }
+
+    var january = Sheet(name: "January")
+    for row in 110...115 {
+      january.setCell(Cell(raw: "agent-1"), at: CellAddress(row: row, col: 2))
+      january.setCell(Cell(raw: "Yes"), at: CellAddress(row: row, col: 17))
+      january.setCell(Cell(raw: "3"), at: CellAddress(row: row, col: 18))
+      january.setCell(Cell(raw: "1"), at: CellAddress(row: row, col: 1))
+    }
+    var ytd = Sheet(name: "YTD Summary")
+    ytd.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 4, col: 0))
+    let kpiSumProduct = """
+    =SUMPRODUCT((January!$C$110:$C$115=$A5)*(January!$R$110:$R$115="Yes")*(January!$S$110:$S$115<>"")*((January!$S$110:$S$115-January!$B$110:$B$115)>=0)*((January!$S$110:$S$115-January!$B$110:$B$115)<=60))
+    """
+    let multiArg = """
+    =SUMPRODUCT(--(January!$C$110:$C$115=$A5),--(January!$R$110:$R$115="Yes"),--(January!$S$110:$S$115<>""),--((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
+    """
+    ytd.setCell(Cell(raw: kpiSumProduct), at: CellAddress(row: 4, col: 4))
+    ytd.setCell(Cell(raw: multiArg), at: CellAddress(row: 5, col: 4))
+    let gateEngine = FormulaEngine()
+    gateEngine.rebuild(workbook: Workbook(sheets: [january, ytd], activeSheetIndex: 1), recalculate: false)
+    _ = gateEngine.recalculateEntireWorkbook(
+      Workbook(sheets: [january, ytd], activeSheetIndex: 1),
+      profile: true
+    )
+    let hits = gateEngine.lastWorkbookRecalcProfile?.sumproductBooleanHits ?? 0
+    guard hits >= 2 else {
+      return Result(name: name, passed: false, detail: "sumproductBooleanHits \(hits) expected >= 2")
+    }
+
+    return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean")
   }
 
   /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.
