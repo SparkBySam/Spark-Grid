@@ -3517,11 +3517,13 @@ enum BugBashRunner {
     let fuseEngine = FormulaEngine()
     fuseEngine.rebuild(workbook: fuseWorkbook, recalculate: false)
     _ = fuseEngine.recalculateEntireWorkbook(fuseWorkbook, profile: true)
-    guard case .number(let fusedTotal) = fuseEngine.displayValue(
-      at: CellAddress(row: 4, col: 4),
-      sheet: fuseYtd
-    ), fusedTotal == 12 else {
-      return Result(name: name, passed: false, detail: "fused COUNTIFS sum got \(fusedTotal) expected 12")
+    let fusedValue = fuseEngine.displayValue(at: CellAddress(row: 4, col: 4), sheet: fuseYtd)
+    guard case .number(let fusedTotal) = fusedValue, fusedTotal == 12 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "fused COUNTIFS sum got \(fusedValue.displayString) expected 12"
+      )
     }
     let fuseHits = fuseEngine.lastWorkbookRecalcProfile?.countifsFusedAddHits ?? 0
     guard fuseHits >= 1 else {
