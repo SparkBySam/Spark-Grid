@@ -284,12 +284,6 @@ final class FormulaEngine {
     return Set(deps.map { CellAddress(row: $0.row + rowDelta, col: $0.col + colDelta) })
   }
 
-  private func bulkIngestIsFormulaRaw(_ raw: String) -> Bool {
-    guard let first = raw.unicodeScalars.first else { return false }
-    if first == "=" { return true }
-    return FormulaSyntax.isFormula(raw)
-  }
-
   // MARK: - Private
 
   private func ensureIngested(address: CellAddress, raw: String, sheet: Sheet) {
@@ -534,13 +528,7 @@ final class FormulaEngine {
     sheetShapeAnchorKeys.removeAll(keepingCapacity: true)
     ingestShapeStripPlans.removeAll(keepingCapacity: true)
     let entryScanStart = CFAbsoluteTimeGetCurrent()
-    var columnBuckets: [Int: [(CellAddress, String)]] = [:]
-    for (address, cell) in sheet.cells {
-      let raw = cell.raw
-      guard bulkIngestIsFormulaRaw(raw) else { continue }
-      let trimmed = raw.first == "=" ? raw : raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      columnBuckets[address.col, default: []].append((address, trimmed))
-    }
+    let columnBuckets = sheet.formulaIngestByColumn
     guard !columnBuckets.isEmpty else { return }
     profile?.ingestEntryScanSeconds += CFAbsoluteTimeGetCurrent() - entryScanStart
 
@@ -554,11 +542,7 @@ final class FormulaEngine {
     DispatchQueue.concurrentPerform(iterations: columnIndices.count) { columnIndex in
       var columnMetrics = BulkIngestColumnMetrics()
       let col = columnIndices[columnIndex]
-      var columnEntries = columnBuckets[col] ?? []
-      columnEntries.sort {
-        if $0.0.row != $1.0.row { return $0.0.row < $1.0.row }
-        return $0.0.col < $1.0.col
-      }
+      let columnEntries = columnBuckets[col] ?? []
       var templatesByAddress: [CellAddress: IngestedFormulaTemplate] = [:]
       templatesByAddress.reserveCapacity(columnEntries.count)
       var shapeKeysByAddress: [CellAddress: String] = [:]
