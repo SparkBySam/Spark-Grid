@@ -14,8 +14,10 @@ final class FormulaEngine {
     var expr: FormulaExpr
     var deps: Set<CellAddress>
     var ranges: [CellRange]
+    var canonicalAddress: CellAddress
   }
   private var ingestTemplateCache: [String: IngestedFormulaTemplate] = [:]
+  private let ingestTemplateCacheLock = NSLock()
   /// Results from `recalculateEntireWorkbook` (and incremental edits), keyed by sheet name.
   private var recalculatedSheetValues: [String: [CellAddress: CellValue]] = [:]
 
@@ -135,15 +137,18 @@ final class FormulaEngine {
         let sheet = monthSheets[index]
         let worker = FormulaEngine()
         let localProfile = FormulaRecalcProfile()
-        let values = worker.runIsolatedSheetRecalc(
+        let result = worker.runIsolatedSheetRecalc(
           workbook: workbook,
           sheet: sheet,
           profile: localProfile,
-          useShapeStrips: true
+          useShapeStrips: true,
+          sharedIngestOwner: self
         )
         profileLock.lock()
         prof?.mergeFrom(localProfile)
-        parallelValues[sheet.name.lowercased()] = values
+        parallelValues[sheet.name.lowercased()] = result.values
+        aggregateRangeCache.mergeFrom(result.aggregateCache)
+        lookupTableCache.mergeFrom(result.lookupCache)
         profileLock.unlock()
       }
       for (key, values) in parallelValues {
@@ -242,6 +247,121 @@ final class FormulaEngine {
     "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}\(formula)"
   }
 
+  private func shiftIngestAddress(_ address: CellAddress, rowDelta: Int, colDelta: Int) -> CellAddress {
+    CellAddress(row: address.row + rowDelta, col: address.col + colDelta)
+  }
+
+  private func shiftIngestDeps(
+    _ deps: Set<CellAddress>,
+    rowDelta: Int,
+    colDelta: Int
+  ) -> Set<CellAddress> {
+    Set(deps.map { shiftIngestAddress($0, rowDelta: rowDelta, colDelta: colDelta) })
+  }
+
+  private func shiftIngestRanges(
+    _ ranges: [CellRange],
+    rowDelta: Int,
+    colDelta: Int
+  ) -> [CellRange] {
+    ranges.map {
+      CellRange(
+        start: shiftIngestAddress($0.start, rowDelta: rowDelta, colDelta: colDelta),
+        end: shiftIngestAddress($0.end, rowDelta: rowDelta, colDelta: colDelta)
+      )
+    }
+  }
+
+  private func ingestTemplateStore(for sharedOwner: FormulaEngine?) -> FormulaEngine {
+    sharedOwner ?? self
+  }
+
+  private func loadOrBuildIngestTemplate(
+    templateKey: String,
+    address: CellAddress,
+    trimmed: String,
+    sheet: Sheet,
+    maxRow: Int,
+    maxCol: Int,
+    store: FormulaEngine
+  ) throws -> IngestedFormulaTemplate {
+    store.ingestTemplateCacheLock.lock()
+    if let cached = store.ingestTemplateCache[templateKey] {
+      store.ingestTemplateCacheLock.unlock()
+      return cached
+    }
+    store.ingestTemplateCacheLock.unlock()
+
+    let expr = try FormulaParser.parse(trimmed)
+    let deps = FormulaDependencies.collect(
+      from: expr,
+      activeSheetName: activeSheetName,
+      maxRow: maxRow,
+      maxCol: maxCol,
+      namedRangeLookup: { [weak self] name in
+        self?.namedRangeExpr(named: name)
+      }
+    )
+    let ranges = FormulaDependencies.collectWatchedRanges(
+      from: expr,
+      activeSheetName: activeSheetName,
+      maxRow: maxRow,
+      maxCol: maxCol,
+      namedRangeLookup: { [weak self] name in
+        self?.namedRangeExpr(named: name)
+      }
+    )
+    let template = IngestedFormulaTemplate(
+      expr: expr,
+      deps: deps,
+      ranges: ranges,
+      canonicalAddress: address
+    )
+
+    store.ingestTemplateCacheLock.lock()
+    if let cached = store.ingestTemplateCache[templateKey] {
+      store.ingestTemplateCacheLock.unlock()
+      return cached
+    }
+    store.ingestTemplateCache[templateKey] = template
+    store.ingestTemplateCacheLock.unlock()
+    return template
+  }
+
+  private func ingestSheetFormulas(
+    _ sheet: Sheet,
+    profile: FormulaRecalcProfile?,
+    useShapeAnchorTemplates: Bool,
+    sharedIngestOwner: FormulaEngine?
+  ) {
+    var cells: [(CellAddress, String)] = []
+    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+      cells.append((address, cell.raw))
+    }
+    if useShapeAnchorTemplates {
+      cells.sort { lhs, rhs in
+        let leftKey = FormulaRewriter.shapeAnchorKey(raw: lhs.1, anchor: lhs.0)
+        let rightKey = FormulaRewriter.shapeAnchorKey(raw: rhs.1, anchor: rhs.0)
+        if leftKey != rightKey { return leftKey < rightKey }
+        if lhs.0.row != rhs.0.row { return lhs.0.row < rhs.0.row }
+        return lhs.0.col < rhs.0.col
+      }
+    }
+    let ingestStart = CFAbsoluteTimeGetCurrent()
+    for (address, raw) in cells {
+      ingest(
+        address: address,
+        raw: raw,
+        sheet: sheet,
+        recalculate: false,
+        useShapeAnchorTemplates: useShapeAnchorTemplates,
+        skipStaleCleanup: true,
+        sharedIngestOwner: sharedIngestOwner
+      )
+    }
+    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+  }
+
   private func storedRecalculatedValue(sheetName: String, at address: CellAddress) -> CellValue? {
     recalculatedSheetValues[sheetKey(sheetName)]?[address]
   }
@@ -276,60 +396,63 @@ final class FormulaEngine {
     ingest(address: address, raw: raw, sheet: sheet, recalculate: false)
   }
 
-  private func ingest(address: CellAddress, raw: String, sheet: Sheet, recalculate: Bool) {
-    if let oldDeps = dependencies.removeValue(forKey: address) {
+  private func ingest(
+    address: CellAddress,
+    raw: String,
+    sheet: Sheet,
+    recalculate: Bool,
+    useShapeAnchorTemplates: Bool = false,
+    skipStaleCleanup: Bool = false,
+    sharedIngestOwner: FormulaEngine? = nil
+  ) {
+    if !skipStaleCleanup, let oldDeps = dependencies.removeValue(forKey: address) {
       for dep in oldDeps {
         dependents[dep]?.remove(address)
         if dependents[dep]?.isEmpty == true {
           dependents.removeValue(forKey: dep)
         }
       }
+      formulaAST.removeValue(forKey: address)
+      dependencyRanges.removeValue(forKey: address)
+      valueCache.removeValue(forKey: address)
     }
-    formulaAST.removeValue(forKey: address)
-    dependencyRanges.removeValue(forKey: address)
-    valueCache.removeValue(forKey: address)
 
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if FormulaSyntax.isFormula(trimmed) {
       do {
         let maxRow = sheet.effectiveRowCount - 1
         let maxCol = sheet.effectiveColumnCount - 1
+        let cacheFormula = useShapeAnchorTemplates
+          ? FormulaRewriter.shapeAnchorKey(raw: trimmed, anchor: address)
+          : trimmed
         let templateKey = ingestTemplateKey(
           sheetName: activeSheetName,
           maxRow: maxRow,
           maxCol: maxCol,
-          formula: trimmed
+          formula: cacheFormula
         )
-        let template: IngestedFormulaTemplate
-        if let cached = ingestTemplateCache[templateKey] {
-          template = cached
-        } else {
-          let expr = try FormulaParser.parse(trimmed)
-          let deps = FormulaDependencies.collect(
-            from: expr,
-            activeSheetName: activeSheetName,
-            maxRow: maxRow,
-            maxCol: maxCol,
-            namedRangeLookup: { [weak self] name in
-              self?.namedRangeExpr(named: name)
-            }
-          )
-          let ranges = FormulaDependencies.collectWatchedRanges(
-            from: expr,
-            activeSheetName: activeSheetName,
-            maxRow: maxRow,
-            maxCol: maxCol,
-            namedRangeLookup: { [weak self] name in
-              self?.namedRangeExpr(named: name)
-            }
-          )
-          template = IngestedFormulaTemplate(expr: expr, deps: deps, ranges: ranges)
-          ingestTemplateCache[templateKey] = template
-        }
+        let store = ingestTemplateStore(for: sharedIngestOwner)
+        let template = try loadOrBuildIngestTemplate(
+          templateKey: templateKey,
+          address: address,
+          trimmed: trimmed,
+          sheet: sheet,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          store: store
+        )
+        let rowDelta = address.row - template.canonicalAddress.row
+        let colDelta = address.col - template.canonicalAddress.col
+        let deps = rowDelta == 0 && colDelta == 0
+          ? template.deps
+          : shiftIngestDeps(template.deps, rowDelta: rowDelta, colDelta: colDelta)
+        let ranges = rowDelta == 0 && colDelta == 0
+          ? template.ranges
+          : shiftIngestRanges(template.ranges, rowDelta: rowDelta, colDelta: colDelta)
         formulaAST[address] = template.expr
-        dependencies[address] = template.deps
-        dependencyRanges[address] = template.ranges
-        for dep in template.deps {
+        dependencies[address] = deps
+        dependencyRanges[address] = ranges
+        for dep in deps {
           dependents[dep, default: []].insert(address)
         }
         if let snapshot = sheet.cell(at: address).importedFormulaResult {
@@ -410,34 +533,44 @@ final class FormulaEngine {
   private func recalculateWorkbookSheet(
     _ sheet: Sheet,
     profile: FormulaRecalcProfile?,
-    useShapeStrips: Bool
+    useShapeStrips: Bool,
+    sharedIngestOwner: FormulaEngine? = nil
   ) {
     activeSheetName = sheet.name
     clearFormulaGraph()
-    let ingestStart = CFAbsoluteTimeGetCurrent()
-    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
-    }
-    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+    ingestSheetFormulas(
+      sheet,
+      profile: profile,
+      useShapeAnchorTemplates: true,
+      sharedIngestOwner: sharedIngestOwner
+    )
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
     mergeRecalculatedValues(for: sheet)
   }
 
-  /// One sheet pass for parallel month workers (does not touch caller caches).
+  fileprivate struct IsolatedSheetRecalcResult {
+    var values: [CellAddress: CellValue]
+    var aggregateCache: FormulaAggregateRangeCache
+    var lookupCache: FormulaLookupTableCache
+  }
+
+  /// One sheet pass for parallel month workers (does not touch caller value maps).
   fileprivate func runIsolatedSheetRecalc(
     workbook: Workbook,
     sheet: Sheet,
     profile: FormulaRecalcProfile?,
-    useShapeStrips: Bool
-  ) -> [CellAddress: CellValue] {
+    useShapeStrips: Bool,
+    sharedIngestOwner: FormulaEngine?
+  ) -> IsolatedSheetRecalcResult {
     self.workbook = workbook
     activeSheetName = sheet.name
     clearFormulaGraph()
-    let ingestStart = CFAbsoluteTimeGetCurrent()
-    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
-    }
-    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+    ingestSheetFormulas(
+      sheet,
+      profile: profile,
+      useShapeAnchorTemplates: true,
+      sharedIngestOwner: sharedIngestOwner
+    )
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
     var values: [CellAddress: CellValue] = [:]
     for address in formulaAST.keys {
@@ -445,7 +578,11 @@ final class FormulaEngine {
         values[address] = value
       }
     }
-    return values
+    return IsolatedSheetRecalcResult(
+      values: values,
+      aggregateCache: aggregateRangeCache,
+      lookupCache: lookupTableCache
+    )
   }
 
   private func buildShapeStripPlans(sheet: Sheet) -> [ShapeStripPlan] {
