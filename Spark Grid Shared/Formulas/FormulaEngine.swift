@@ -521,9 +521,8 @@ final class FormulaEngine {
     var plans: [ShapeStripPlan] = []
     for (_, members) in grouped where members.count >= minimumMembers {
       guard membersFormFillStrip(members) else { continue }
-      if isYtdSumproductRowRibbon(members), members.contains(where: excludingMembers.contains) {
-        continue
-      }
+      // Column strips own S–Y; horizontal R5 ribbon only hijacks memberToMaster (see stripByMaster[S5] miss).
+      if isYtdSumproductRowRibbon(members) { continue }
       guard let master = members.min(by: {
         if $0.row != $1.row { return $0.row < $1.row }
         return $0.col < $1.col
@@ -918,22 +917,6 @@ final class FormulaEngine {
         visited.insert(address)
       }
 
-      if !plan.isColumnStrip,
-         sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
-         isYtdSumproductRowRibbon(orderedMembers) {
-        for address in orderedMembers where address.col == 17 {
-          evalStripCell(address)
-        }
-        for col in Self.ytdSumproductRibbonFirstCol...24 {
-          let masterAddr = CellAddress(row: plan.master.row, col: col)
-          guard let colPlan = stripByMaster[masterAddr], colPlan.isColumnStrip else { continue }
-          if stripExecuted.contains(masterAddr) { continue }
-          evalShapeStrip(colPlan)
-          stripExecuted.insert(masterAddr)
-        }
-        return
-      }
-
       guard let masterExpr = formulaAST[plan.master] else { return }
       let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(in: .whitespacesAndNewlines)
       let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
@@ -946,11 +929,16 @@ final class FormulaEngine {
       if plan.isColumnStrip,
          sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
          plan.master.col >= Self.ytdSumproductRibbonFirstCol,
-         runYtdSumproductColumnStrip(
+         let ytdStrip = ytdSumproductColumnStripAnchor(
            plan: plan,
+           masterExpr: masterExpr,
            formulaAST: formulaAST,
-           evaluator: evaluator,
-           evalCell: evalStripCell,
+           evaluator: evaluator
+         ),
+         evaluator.evaluateColumnYtdSumproductQuotientStrip(
+           master: ytdStrip.master,
+           members: ytdStrip.members,
+           expr: ytdStrip.expr,
            sink: stripSink
          ) {
         return
@@ -977,33 +965,28 @@ final class FormulaEngine {
       }
     }
 
-    func runYtdSumproductColumnStrip(
+    func ytdSumproductColumnStripAnchor(
       plan: ShapeStripPlan,
+      masterExpr: FormulaExpr,
       formulaAST: [CellAddress: FormulaExpr],
-      evaluator: FormulaEvaluator,
-      evalCell: (CellAddress) -> Void,
-      sink: (CellAddress, CellValue) -> Void
-    ) -> Bool {
-      let sorted = plan.members.sorted {
+      evaluator: FormulaEvaluator
+    ) -> (master: CellAddress, members: [CellAddress], expr: FormulaExpr)? {
+      var master = plan.master
+      var expr = masterExpr
+      var members = plan.members.sorted {
         if $0.row != $1.row { return $0.row < $1.row }
         return $0.col < $1.col
       }
-      guard let anchorIndex = sorted.firstIndex(where: { address in
-        guard let expr = formulaAST[address] else { return false }
-        return evaluator.canPlanColumnYtdSumproductQuotient(expr: expr, master: address)
-      }) else { return false }
-      let anchor = sorted[anchorIndex]
-      guard let anchorExpr = formulaAST[anchor] else { return false }
-      for prefix in sorted[..<anchorIndex] {
-        evalCell(prefix)
+      while master.row > 0 {
+        let above = CellAddress(row: master.row - 1, col: master.col)
+        guard let aboveExpr = formulaAST[above], !members.contains(above) else { break }
+        guard evaluator.canPlanColumnYtdSumproductQuotient(expr: aboveExpr, master: above) else { break }
+        members.insert(above, at: 0)
+        master = above
+        expr = aboveExpr
       }
-      let suffix = Array(sorted[anchorIndex...])
-      return evaluator.evaluateColumnYtdSumproductQuotientStrip(
-        master: anchor,
-        members: suffix,
-        expr: anchorExpr,
-        sink: sink
-      )
+      guard evaluator.canPlanColumnYtdSumproductQuotient(expr: expr, master: master) else { return nil }
+      return (master, members, expr)
     }
 
     func eval(_ address: CellAddress) {
@@ -1015,7 +998,7 @@ final class FormulaEngine {
             stripExecuted.insert(master)
           }
         }
-        return
+        if visited.contains(address) { return }
       }
       if visiting.contains(address) {
         valueCache[address] = .error(.cycle)

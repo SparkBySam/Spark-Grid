@@ -1592,7 +1592,7 @@ extension FormulaEvaluator {
     expr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    guard let plan = makeColumnYtdSumproductQuotientPlan(expr, master: master) else { return false }
+    guard let plan = makeColumnYtdSumproductQuotientPlan(stripUnwrap(expr), master: master) else { return false }
     for origin in members {
       prepareForCellEvaluation(origin: origin)
       let rowDelta = origin.row - master.row
