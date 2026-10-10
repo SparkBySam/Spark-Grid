@@ -54,6 +54,11 @@ struct AggregateCriteriaTupleKey: Hashable {
   var parts: [AggregateValueKey]
 }
 
+struct AggregateCountMemoKey: Hashable {
+  var rangeKeys: [AggregateRangeKey]
+  var criteriaKeys: [AggregateValueKey]
+}
+
 private struct CompositeCountIndexKey: Hashable {
   var rangeKeys: [AggregateRangeKey]
 }
@@ -167,12 +172,16 @@ final class FormulaAggregateRangeCache {
 
   func countForCriteria(
     rangeKeys: [AggregateRangeKey],
-    columns: [[CellValue]],
-    criteriaKeys: [AggregateValueKey]
+    criteriaKeys: [AggregateValueKey],
+    supplyColumns: () -> [[CellValue]]
   ) -> Int {
     let indexKey = CompositeCountIndexKey(rangeKeys: rangeKeys)
-    let map = countIndexes[indexKey] ?? buildCountIndex(indexKey: indexKey, columns: columns)
-    return map[AggregateCriteriaTupleKey(parts: criteriaKeys), default: 0]
+    let tuple = AggregateCriteriaTupleKey(parts: criteriaKeys)
+    if let map = countIndexes[indexKey] {
+      return map[tuple, default: 0]
+    }
+    let map = buildCountIndex(indexKey: indexKey, columns: supplyColumns())
+    return map[tuple, default: 0]
   }
 
   func sumByRowFilter(
@@ -193,17 +202,21 @@ final class FormulaAggregateRangeCache {
   func sumForCriteria(
     criteriaRangeKeys: [AggregateRangeKey],
     sumRangeKey: AggregateRangeKey,
-    criteriaColumns: [[CellValue]],
-    sumColumn: [CellValue],
-    criteriaKeys: [AggregateValueKey]
+    criteriaKeys: [AggregateValueKey],
+    supplyColumns: () -> (criteriaColumns: [[CellValue]], sumColumn: [CellValue])
   ) -> AggregateSumBucket {
     let indexKey = CompositeSumIndexKey(criteriaRangeKeys: criteriaRangeKeys, sumRangeKey: sumRangeKey)
-    let map = sumIndexes[indexKey] ?? buildSumIndex(
+    let tuple = AggregateCriteriaTupleKey(parts: criteriaKeys)
+    if let map = sumIndexes[indexKey] {
+      return map[tuple, default: AggregateSumBucket()]
+    }
+    let supplied = supplyColumns()
+    let map = buildSumIndex(
       indexKey: indexKey,
-      criteriaColumns: criteriaColumns,
-      sumColumn: sumColumn
+      criteriaColumns: supplied.criteriaColumns,
+      sumColumn: supplied.sumColumn
     )
-    return map[AggregateCriteriaTupleKey(parts: criteriaKeys), default: AggregateSumBucket()]
+    return map[tuple, default: AggregateSumBucket()]
   }
 
   private func usesAnyRange(_ keys: [AggregateRangeKey], in removed: Set<AggregateRangeKey>) -> Bool {

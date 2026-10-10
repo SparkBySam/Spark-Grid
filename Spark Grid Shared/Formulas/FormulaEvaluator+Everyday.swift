@@ -69,8 +69,8 @@ extension FormulaEvaluator {
       let rangeKey = aggregateRangeKey(for: anchor)
       let count = cache.countForCriteria(
         rangeKeys: [rangeKey],
-        columns: [values],
-        criteriaKeys: [lookupKey]
+        criteriaKeys: [lookupKey],
+        supplyColumns: { [values] }
       )
       return .number(Double(count))
     }
@@ -104,21 +104,30 @@ extension FormulaEvaluator {
       index += 2
     }
     var memo: [LookupMemoKey: CellValue] = [:]
-    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
     if let cache = aggregateRangeCache,
        let lookupKeys = aggregateLookupKeys(
          criteria: tests.map(\.2),
          tests: tests.map(\.1)
        ) {
       let rangeKeys = tests.map { aggregateRangeKey(for: $0.0) }
+      let memoKey = AggregateCountMemoKey(rangeKeys: rangeKeys, criteriaKeys: lookupKeys)
+      if let cached = aggregateCountMemoBox?.map[memoKey] {
+        recalcProfile?.countifsHistogramLookups += 1
+        return .number(Double(cached))
+      }
       let matches = cache.countForCriteria(
         rangeKeys: rangeKeys,
-        columns: rangeSnapshots,
-        criteriaKeys: lookupKeys
+        criteriaKeys: lookupKeys,
+        supplyColumns: {
+          var snapMemo: [LookupMemoKey: CellValue] = [:]
+          return tests.map { snapshotValues(anchor: $0.0, memo: &snapMemo) }
+        }
       )
+      aggregateCountMemoBox?.map[memoKey] = matches
       recalcProfile?.countifsHistogramLookups += 1
       return .number(Double(matches))
     }
+    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
     let count = rangeSnapshots[0].count
     var matches = 0
     recalcProfile?.countifsRowScanCells += count
@@ -343,8 +352,6 @@ extension FormulaEvaluator {
       index += 2
     }
     var memo: [LookupMemoKey: CellValue] = [:]
-    let sumValues = snapshotValues(anchor: sum, memo: &memo)
-    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
     if let cache = aggregateRangeCache {
       if let lookupKeys = aggregateLookupKeys(criteria: tests.map(\.2), tests: tests.map(\.1)) {
         let criteriaKeys = tests.map { aggregateRangeKey(for: $0.0) }
@@ -352,9 +359,13 @@ extension FormulaEvaluator {
         let bucket = cache.sumForCriteria(
           criteriaRangeKeys: criteriaKeys,
           sumRangeKey: sumKey,
-          criteriaColumns: rangeSnapshots,
-          sumColumn: sumValues,
-          criteriaKeys: lookupKeys
+          criteriaKeys: lookupKeys,
+          supplyColumns: {
+            var snapMemo: [LookupMemoKey: CellValue] = [:]
+            let sumValues = snapshotValues(anchor: sum, memo: &snapMemo)
+            let criteriaColumns = tests.map { snapshotValues(anchor: $0.0, memo: &snapMemo) }
+            return (criteriaColumns, sumValues)
+          }
         )
         switch kind {
         case .sum:
@@ -365,6 +376,8 @@ extension FormulaEvaluator {
         }
       }
       if tests.allSatisfy({ !$0.1.wildcard }) {
+        let sumValues = snapshotValues(anchor: sum, memo: &memo)
+        let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
         let bucket = cache.sumByRowFilter(sumColumn: sumValues) { row in
           for (rangeIndex, test) in tests.map(\.1).enumerated() {
             let value = rangeSnapshots[rangeIndex][row]
@@ -382,6 +395,8 @@ extension FormulaEvaluator {
         }
       }
     }
+    let sumValues = snapshotValues(anchor: sum, memo: &memo)
+    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
     let cellCount = sumValues.count
     var total = 0.0
     var matchCount = 0
@@ -432,9 +447,8 @@ extension FormulaEvaluator {
       let bucket = cache.sumForCriteria(
         criteriaRangeKeys: [criteriaKey],
         sumRangeKey: sumKey,
-        criteriaColumns: [criteriaValues],
-        sumColumn: sumValues,
-        criteriaKeys: [lookupKey]
+        criteriaKeys: [lookupKey],
+        supplyColumns: { ([criteriaValues], sumValues) }
       )
       switch kind {
       case .sum:
