@@ -39,11 +39,15 @@ struct FormulaEvaluator {
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
   /// Repeated `$A5`-style refs within one formula (12× `COUNTIFS` chains, etc.).
-  private var scalarRefMemo: [FormulaRef: CellValue] = [:]
+  private let scalarRefMemo = ScalarRefMemoBox()
 
   mutating func prepareForCellEvaluation(origin: CellAddress?) {
     evaluationOrigin = origin
-    scalarRefMemo.removeAll(keepingCapacity: true)
+    scalarRefMemo.values.removeAll(keepingCapacity: true)
+  }
+
+  final class ScalarRefMemoBox {
+    var values: [FormulaRef: CellValue] = [:]
   }
 
   final class ArrayEvalCacheBox {
@@ -64,9 +68,9 @@ struct FormulaEvaluator {
       guard let resolved = namedRangeLookup(name) else { return .error(.name) }
       return evaluate(resolved)
     case .cellRef(let ref):
-      if let cached = scalarRefMemo[ref] { return cached }
+      if let cached = scalarRefMemo.values[ref] { return cached }
       let value = lookup(ref)
-      scalarRefMemo[ref] = value
+      scalarRefMemo.values[ref] = value
       return value
     case .range:
       // Bare ranges are multi-valued; scalar context matches Sheets `#VALUE!`.
