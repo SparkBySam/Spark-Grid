@@ -1254,7 +1254,8 @@ extension FormulaEvaluator {
         sink: sink
       )
     }
-    if evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: stripUnwrap(masterExpr), sink: sink) {
+    if let countifsKernel = stripCountifsKernelExpr(stripUnwrap(masterExpr)),
+       evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifsKernel, sink: sink) {
       return true
     }
     if evaluateColumnIFERRORVlookupStrip(
@@ -1325,6 +1326,42 @@ extension FormulaEvaluator {
     let rowDelta = origin.row - master.row
     let colDelta = origin.col - master.col
     return ref.adjusted(rowDelta: rowDelta, colDelta: colDelta) ?? ref
+  }
+
+  /// Peel `IFERROR(COUNTIFS…)` / unary wrappers to the COUNTIFS call used by month KPI columns.
+  private func stripCountifsKernelExpr(_ branch: FormulaExpr) -> FormulaExpr? {
+    var current = stripUnwrap(branch)
+    for _ in 0..<8 {
+      if case .call(let name, _) = current, name.uppercased() == "COUNTIFS" {
+        return current
+      }
+      if case .call(let name, let args) = current, name.uppercased() == "IFERROR", args.count == 2 {
+        current = stripUnwrap(args[0])
+        continue
+      }
+      if case .unary(.plus, let inner) = current {
+        current = stripUnwrap(inner)
+        continue
+      }
+      break
+    }
+    return nil
+  }
+
+  private func diagnoseIfStripBranchKernelMiss(_ branch: FormulaExpr, master: CellAddress) -> String {
+    if let kernel = stripCountifsKernelExpr(branch) {
+      return makeColumnCOUNTIFSPlan(kernel, master: master) == nil ? "countifsPlan" : "countifsUnexpected"
+    }
+    if case .call(let name, _) = stripUnwrap(branch), name.uppercased() == "IFERROR" { return "iferrorNotVlk" }
+    return "otherBranch"
+  }
+
+  private struct ColumnCOUNTIFSPlan {
+    var staticCriteria: [CellValue]
+    var staticTests: [CriteriaTest]
+    var dynamicCriterionRefs: [FormulaRef]
+    var columns: [[CellValue]]
+    var rangeKeys: [AggregateRangeKey]
   }
 
   private struct ColumnIFERRORVlookupPlan {
@@ -1417,12 +1454,12 @@ extension FormulaEvaluator {
       colDelta: colDelta
     )
     if case .error = needle {
-      recalcProfile?.ifStripFallbacks += 1
+      recalcProfile?.ifStripVlkNA += 1
       sink(origin, evaluate(fallbackExpr))
       return
     }
     guard let cache = lookupTableCache else {
-      recalcProfile?.ifStripFallbacks += 1
+      recalcProfile?.ifStripVlkNA += 1
       sink(origin, evaluate(fallbackExpr))
       return
     }
@@ -1437,9 +1474,121 @@ extension FormulaEvaluator {
       recalcProfile?.ifStripHits += 1
       sink(origin, hit)
     } else {
-      recalcProfile?.ifStripFallbacks += 1
+      recalcProfile?.ifStripVlkNA += 1
       sink(origin, evaluate(fallbackExpr))
     }
+  }
+
+  private func makeColumnCOUNTIFSPlan(_ countifsExpr: FormulaExpr, master: CellAddress) -> ColumnCOUNTIFSPlan? {
+    guard case .call(let name, let args) = stripUnwrap(countifsExpr), name.uppercased() == "COUNTIFS" else {
+      return nil
+    }
+    guard args.count >= 2, args.count.isMultiple(of: 2) else { return nil }
+    guard let firstAnchor = rangeAnchor(args[0]) else { return nil }
+
+    var criterionExprs: [FormulaExpr] = []
+    var index = 0
+    while index < args.count {
+      guard let anchor = rangeAnchor(args[index]) else { return nil }
+      if anchor.rows != firstAnchor.rows || anchor.cols != firstAnchor.cols { return nil }
+      criterionExprs.append(args[index + 1])
+      index += 2
+    }
+
+    prepareForCellEvaluation(origin: master)
+    var staticCriteria: [CellValue] = []
+    var staticTests: [CriteriaTest] = []
+    var dynamicCriterionRefs: [FormulaRef] = []
+    for criterionExpr in criterionExprs {
+      if let ref = stripFormulaCellRef(criterionExpr) {
+        dynamicCriterionRefs.append(ref)
+        staticCriteria.append(.blank)
+        staticTests.append(CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: false))
+      } else {
+        let value = evaluate(criterionExpr)
+        if case .error = value { return nil }
+        staticCriteria.append(value)
+        staticTests.append(criteriaTest(from: value))
+        dynamicCriterionRefs.append(
+          FormulaRef(sheet: nil, row: -1, col: -1, absRow: true, absCol: true)
+        )
+      }
+    }
+
+    var rangeAnchors: [RangeAnchor] = []
+    index = 0
+    while index < args.count {
+      guard let anchor = rangeAnchor(args[index]) else { return nil }
+      rangeAnchors.append(anchor)
+      index += 2
+    }
+
+    var snapMemo: [LookupMemoKey: CellValue] = [:]
+    let columns = rangeAnchors.map { snapshotValues(anchor: $0, memo: &snapMemo) }
+    let rangeKeys = rangeAnchors.map { aggregateRangeKey(for: $0) }
+    return ColumnCOUNTIFSPlan(
+      staticCriteria: staticCriteria,
+      staticTests: staticTests,
+      dynamicCriterionRefs: dynamicCriterionRefs,
+      columns: columns,
+      rangeKeys: rangeKeys
+    )
+  }
+
+  private func emitColumnCOUNTIFSRow(
+    plan: ColumnCOUNTIFSPlan,
+    master: CellAddress,
+    origin: CellAddress,
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    prepareForCellEvaluation(origin: origin)
+    var criteriaValues = plan.staticCriteria
+    var tests = plan.staticTests
+    var criterionError: CellValue?
+    for (pairIndex, ref) in plan.dynamicCriterionRefs.enumerated() where ref.row >= 0 {
+      let shifted = shiftedRef(ref, master: master, origin: origin)
+      let value = lookup(shifted)
+      if case .error = value {
+        criterionError = value
+        break
+      }
+      criteriaValues[pairIndex] = value
+      tests[pairIndex] = criteriaTest(from: value)
+    }
+    if let criterionError {
+      sink(origin, criterionError)
+      return
+    }
+    if let cache = aggregateRangeCache,
+       let lookupKeys = aggregateLookupKeys(criteria: criteriaValues, tests: tests) {
+      let matches = cache.countForCriteria(
+        rangeKeys: plan.rangeKeys,
+        criteriaKeys: lookupKeys,
+        supplyColumns: { plan.columns }
+      )
+      recalcProfile?.countifsHistogramLookups += 1
+      sink(origin, .number(Double(matches)))
+      return
+    }
+    let count = plan.columns[0].count
+    var matches = 0
+    recalcProfile?.countifsRowScanCells += count
+    for offset in 0..<count {
+      var matched = true
+      for rangeIndex in 0..<tests.count {
+        let value = plan.columns[rangeIndex][offset]
+        if aggregateRowError(value) {
+          matched = false
+          break
+        }
+        if !criteriaMatch(value, tests[rangeIndex]) {
+          matched = false
+          break
+        }
+      }
+      if matched { matches += 1 }
+    }
+    sink(origin, .number(Double(matches)))
   }
 
   private func evaluateColumnIFBlankStrip(
@@ -1464,6 +1613,23 @@ extension FormulaEvaluator {
       }
       return true
     }
+    if let countifsExpr = stripCountifsKernelExpr(branchExpr),
+       let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
+      for origin in members {
+        prepareForCellEvaluation(origin: origin)
+        let guardCell = shiftedRef(guardRef, master: master, origin: origin)
+        if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+          recalcProfile?.ifBlankEqualityFastHits += 1
+          sink(origin, .string(""))
+          continue
+        }
+        recalcProfile?.ifBlankEqualityFastHits += 1
+        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
+        recalcProfile?.ifStripCountifsRows += 1
+      }
+      return true
+    }
+    recalcProfile?.recordIfStripPlanMiss(diagnoseIfStripBranchKernelMiss(branchExpr, master: master))
     for origin in members {
       prepareForCellEvaluation(origin: origin)
       let guardCell = shiftedRef(guardRef, master: master, origin: origin)
@@ -1491,7 +1657,8 @@ extension FormulaEvaluator {
     branch: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    if evaluateColumnCOUNTIFSStrip(master: master, members: [origin], expr: branch, sink: sink) {
+    if let countifsExpr = stripCountifsKernelExpr(branch),
+       evaluateColumnCOUNTIFSStrip(master: master, members: [origin], expr: countifsExpr, sink: sink) {
       return true
     }
     if let plan = makeColumnIFERRORVlookupPlan(branch, master: master) {
@@ -1501,7 +1668,7 @@ extension FormulaEvaluator {
     let rowDelta = origin.row - master.row
     let colDelta = origin.col - master.col
     let adjusted = FormulaRewriter.adjustExpression(branch, rowDelta: rowDelta, colDelta: colDelta)
-    recalcProfile?.ifStripFallbacks += 1
+    recalcProfile?.ifStripBranchTree += 1
     sink(origin, evaluate(adjusted))
     return true
   }
@@ -1512,93 +1679,9 @@ extension FormulaEvaluator {
     expr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    guard case .call(let name, let args) = expr, name.uppercased() == "COUNTIFS" else { return false }
-    guard args.count >= 2, args.count.isMultiple(of: 2) else { return false }
-    guard let firstAnchor = rangeAnchor(args[0]) else { return false }
-
-    var rangeAnchors: [RangeAnchor] = []
-    var criterionExprs: [FormulaExpr] = []
-    var index = 0
-    while index < args.count {
-      guard let anchor = rangeAnchor(args[index]) else { return false }
-      if anchor.rows != firstAnchor.rows || anchor.cols != firstAnchor.cols { return false }
-      rangeAnchors.append(anchor)
-      criterionExprs.append(args[index + 1])
-      index += 2
-    }
-
-    var staticCriteria: [CellValue] = []
-    var staticTests: [CriteriaTest] = []
-    var dynamicCriterionRefs: [FormulaRef] = []
-    for criterionExpr in criterionExprs {
-      if let ref = stripFormulaCellRef(criterionExpr) {
-        dynamicCriterionRefs.append(ref)
-        staticCriteria.append(.blank)
-        staticTests.append(CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: false))
-      } else {
-        let value = evaluate(criterionExpr)
-        if case .error = value { return false }
-        staticCriteria.append(value)
-        staticTests.append(criteriaTest(from: value))
-        dynamicCriterionRefs.append(
-          FormulaRef(sheet: nil, row: -1, col: -1, absRow: true, absCol: true)
-        )
-      }
-    }
-
-    var snapMemo: [LookupMemoKey: CellValue] = [:]
-    let columns = rangeAnchors.map { snapshotValues(anchor: $0, memo: &snapMemo) }
-    let rangeKeys = rangeAnchors.map { aggregateRangeKey(for: $0) }
-
+    guard let plan = makeColumnCOUNTIFSPlan(expr, master: master) else { return false }
     for origin in members {
-      prepareForCellEvaluation(origin: origin)
-      var criteriaValues = staticCriteria
-      var tests = staticTests
-      var criterionError: CellValue?
-      for (pairIndex, ref) in dynamicCriterionRefs.enumerated() where ref.row >= 0 {
-        let shifted = shiftedRef(ref, master: master, origin: origin)
-        let value = lookup(shifted)
-        if case .error = value {
-          criterionError = value
-          break
-        }
-        criteriaValues[pairIndex] = value
-        tests[pairIndex] = criteriaTest(from: value)
-      }
-      if let criterionError {
-        sink(origin, criterionError)
-        continue
-      }
-      if let cache = aggregateRangeCache,
-         let lookupKeys = aggregateLookupKeys(criteria: criteriaValues, tests: tests) {
-        let matches = cache.countForCriteria(
-          rangeKeys: rangeKeys,
-          criteriaKeys: lookupKeys,
-          supplyColumns: { columns }
-        )
-        recalcProfile?.countifsHistogramLookups += 1
-        sink(origin, .number(Double(matches)))
-        continue
-      }
-      let count = columns[0].count
-      var matches = 0
-      recalcProfile?.countifsRowScanCells += count
-      for offset in 0..<count {
-        var matched = true
-        for rangeIndex in 0..<tests.count {
-          let value = columns[rangeIndex][offset]
-          if aggregateRowError(value) {
-            matched = false
-            break
-          }
-          if !criteriaMatch(value, tests[rangeIndex]) {
-            matched = false
-            break
-          }
-        }
-        if matched { matches += 1 }
-      }
-      sink(origin, .number(Double(matches)))
+      emitColumnCOUNTIFSRow(plan: plan, master: master, origin: origin, sink: sink)
     }
     return true
   }
