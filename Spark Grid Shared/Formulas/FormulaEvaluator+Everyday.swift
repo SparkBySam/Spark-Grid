@@ -1236,6 +1236,11 @@ extension FormulaEvaluator {
 
   // MARK: - Column shape strip (tight eval loop)
 
+  /// True when `expr` at `master` can use the YTD `IFERROR(Σ SUMPRODUCT / divisor, "")` column strip.
+  func canPlanColumnYtdSumproductQuotient(expr: FormulaExpr, master: CellAddress) -> Bool {
+    makeColumnYtdSumproductQuotientPlan(expr, master: master) != nil
+  }
+
   /// Vertical shared-shape column: tight loops for KPI fill patterns; falls back to `false`.
   func evaluateColumnShapeStrip(
     master: CellAddress,
@@ -1249,6 +1254,14 @@ extension FormulaEvaluator {
     guard let firstRow = rows.first, let lastRow = rows.last else { return false }
     guard lastRow - firstRow + 1 == members.count, rows == rows.sorted() else { return false }
 
+    if evaluateColumnYtdSumproductQuotientStrip(
+      master: master,
+      members: members,
+      expr: stripUnwrap(masterExpr),
+      sink: sink
+    ) {
+      return true
+    }
     if let ifBlank = unpackIFBlankBranch(stripUnwrap(masterExpr)) {
       return evaluateColumnIFBlankStrip(
         master: master,
@@ -1271,14 +1284,6 @@ extension FormulaEvaluator {
       return true
     }
     if evaluateColumnCrossSheetCountifsSumStrip(
-      master: master,
-      members: members,
-      expr: stripUnwrap(masterExpr),
-      sink: sink
-    ) {
-      return true
-    }
-    if evaluateColumnYtdSumproductQuotientStrip(
       master: master,
       members: members,
       expr: stripUnwrap(masterExpr),
@@ -1539,7 +1544,7 @@ extension FormulaEvaluator {
     return "ytd.sp.ok"
   }
 
-  private func evaluateColumnYtdSumproductQuotientStrip(
+  func evaluateColumnYtdSumproductQuotientStrip(
     master: CellAddress,
     members: [CellAddress],
     expr: FormulaExpr,

@@ -492,14 +492,21 @@ final class FormulaEngine {
     return values
   }
 
+  /// KPI YTD `IFERROR(Σ SUMPRODUCT…)` row ribbon (R–Y); must not steal column strips from S onward.
+  private static let ytdSumproductRibbonFirstCol = 18
+
   private func buildShapeStripPlans(sheet: Sheet, profile: FormulaRecalcProfile?) -> [ShapeStripPlan] {
-    if !ingestShapeStripPlans.isEmpty {
-      return ingestShapeStripPlans
-    }
     let planStart = CFAbsoluteTimeGetCurrent()
     defer {
       profile?.shapeStripPlanSeconds += CFAbsoluteTimeGetCurrent() - planStart
     }
+    var plans = ingestShapeStripPlans
+    let ingestMembers = Set(plans.flatMap(\.members))
+    plans.append(contentsOf: groupedShapeStripPlans(excludingMembers: ingestMembers))
+    return plans
+  }
+
+  private func groupedShapeStripPlans(excludingMembers: Set<CellAddress>) -> [ShapeStripPlan] {
     var grouped: [String: [CellAddress]] = [:]
     for address in formulaAST.keys {
       let key = sheetShapeAnchorKeys[address]
@@ -514,6 +521,9 @@ final class FormulaEngine {
     var plans: [ShapeStripPlan] = []
     for (_, members) in grouped where members.count >= minimumMembers {
       guard membersFormFillStrip(members) else { continue }
+      if isYtdSumproductRowRibbon(members), members.contains(where: excludingMembers.contains) {
+        continue
+      }
       guard let master = members.min(by: {
         if $0.row != $1.row { return $0.row < $1.row }
         return $0.col < $1.col
@@ -527,6 +537,15 @@ final class FormulaEngine {
       plans.append(ShapeStripPlan(master: master, members: sorted, isColumnStrip: columnStrip))
     }
     return plans
+  }
+
+  private func isYtdSumproductRowRibbon(_ members: [CellAddress]) -> Bool {
+    guard members.count >= 8 else { return false }
+    let rows = Set(members.map(\.row))
+    guard rows.count == 1 else { return false }
+    let cols = members.map(\.col).sorted()
+    guard cols.count == 8, cols.first == 17, cols.last == 24 else { return false }
+    return zip(cols, 17...24).allSatisfy { $0.0 == $0.1 }
   }
 
   /// True when `members` share one row or one column and cover consecutive indices (Excel fill strip).
@@ -848,7 +867,16 @@ final class FormulaEngine {
     var memberToMaster: [CellAddress: CellAddress] = [:]
     var stripExecuted: Set<CellAddress> = []
     if useShapeStrips {
-      for plan in buildShapeStripPlans(sheet: sheet, profile: profile) {
+      let plans = buildShapeStripPlans(sheet: sheet, profile: profile)
+      let rowPlans = plans.filter { !$0.isColumnStrip }
+      let columnPlans = plans.filter(\.isColumnStrip)
+      for plan in rowPlans {
+        stripByMaster[plan.master] = plan
+        for member in plan.members {
+          memberToMaster[member] = plan.master
+        }
+      }
+      for plan in columnPlans {
         stripByMaster[plan.master] = plan
         for member in plan.members {
           memberToMaster[member] = plan.master
@@ -868,7 +896,6 @@ final class FormulaEngine {
     }
 
     func evalShapeStrip(_ plan: ShapeStripPlan) {
-      guard let masterExpr = formulaAST[plan.master] else { return }
       let orderedMembers = plan.members
       let memberSet = Set(orderedMembers)
       for address in orderedMembers {
@@ -877,6 +904,37 @@ final class FormulaEngine {
           eval(dep)
         }
       }
+
+      func evalStripCell(_ address: CellAddress) {
+        if visited.contains(address) { return }
+        guard let expr = formulaAST[address] else { return }
+        evaluator.prepareForCellEvaluation(origin: address)
+        valueCache[address] = evaluator.evaluate(expr)
+        visited.insert(address)
+      }
+
+      func stripSink(_ address: CellAddress, _ value: CellValue) {
+        valueCache[address] = value
+        visited.insert(address)
+      }
+
+      if !plan.isColumnStrip,
+         sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
+         isYtdSumproductRowRibbon(orderedMembers) {
+        for address in orderedMembers where address.col == 17 {
+          evalStripCell(address)
+        }
+        for col in Self.ytdSumproductRibbonFirstCol...24 {
+          let masterAddr = CellAddress(row: plan.master.row, col: col)
+          guard let colPlan = stripByMaster[masterAddr], colPlan.isColumnStrip else { continue }
+          if stripExecuted.contains(masterAddr) { continue }
+          evalShapeStrip(colPlan)
+          stripExecuted.insert(masterAddr)
+        }
+        return
+      }
+
+      guard let masterExpr = formulaAST[plan.master] else { return }
       let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(in: .whitespacesAndNewlines)
       let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
       evaluator.stripPlanDiagnosticContext = FormulaEvaluator.StripPlanDiagnosticContext(
@@ -884,15 +942,26 @@ final class FormulaEngine {
         masterFormulaText: masterFormulaText
       )
       defer { evaluator.stripPlanDiagnosticContext = nil }
+
+      if plan.isColumnStrip,
+         sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
+         plan.master.col >= Self.ytdSumproductRibbonFirstCol,
+         runYtdSumproductColumnStrip(
+           plan: plan,
+           formulaAST: formulaAST,
+           evaluator: evaluator,
+           evalCell: evalStripCell,
+           sink: stripSink
+         ) {
+        return
+      }
+
       if plan.isColumnStrip,
          evaluator.evaluateColumnShapeStrip(
            master: plan.master,
            members: orderedMembers,
            masterExpr: masterExpr,
-           sink: { address, value in
-             valueCache[address] = value
-             visited.insert(address)
-           }
+           sink: stripSink
          ) {
         return
       }
@@ -906,6 +975,35 @@ final class FormulaEngine {
         valueCache[address] = evaluator.evaluate(expr)
         visited.insert(address)
       }
+    }
+
+    func runYtdSumproductColumnStrip(
+      plan: ShapeStripPlan,
+      formulaAST: [CellAddress: FormulaExpr],
+      evaluator: FormulaEvaluator,
+      evalCell: (CellAddress) -> Void,
+      sink: (CellAddress, CellValue) -> Void
+    ) -> Bool {
+      let sorted = plan.members.sorted {
+        if $0.row != $1.row { return $0.row < $1.row }
+        return $0.col < $1.col
+      }
+      guard let anchorIndex = sorted.firstIndex(where: { address in
+        guard let expr = formulaAST[address] else { return false }
+        return evaluator.canPlanColumnYtdSumproductQuotient(expr: expr, master: address)
+      }) else { return false }
+      let anchor = sorted[anchorIndex]
+      guard let anchorExpr = formulaAST[anchor] else { return false }
+      for prefix in sorted[..<anchorIndex] {
+        evalCell(prefix)
+      }
+      let suffix = Array(sorted[anchorIndex...])
+      return evaluator.evaluateColumnYtdSumproductQuotientStrip(
+        master: anchor,
+        members: suffix,
+        expr: anchorExpr,
+        sink: sink
+      )
     }
 
     func eval(_ address: CellAddress) {
