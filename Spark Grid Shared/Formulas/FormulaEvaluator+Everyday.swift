@@ -1304,12 +1304,47 @@ extension FormulaEvaluator {
   }
 
   private func ytdSumproductQuotientStripCandidate(_ expr: FormulaExpr) -> Bool {
+    guard let quotient = stripYtdIfErrorQuotient(expr) else { return false }
+    return ytdSumproductAddChainTerms(quotient.numerator) != nil
+  }
+
+  /// Two-range COUNTIFS on YTD KPI columns: one agent needle (`$A` row) and a static `"Yes"` criterion (any pair index; status column may be O/Q/R).
+  private func ytdCrossSheetCountifsTermAccepts(_ plan: ColumnCOUNTIFSPlan) -> Bool {
+    let dynamicNeedles = plan.dynamicCriterionRefs.filter { $0.row >= 0 }
+    guard dynamicNeedles.count == 1, dynamicNeedles[0].row >= 0 else { return false }
+    return plan.staticTests.contains {
+      $0.op == .eq && $0.text.caseInsensitiveCompare("Yes") == .orderedSame
+    }
+  }
+
+  /// `IFERROR( Σ SUMPRODUCT / divisor , "" )` quotient, peeling grouping `+` on the IFERROR value.
+  private func stripYtdIfErrorQuotient(_ expr: FormulaExpr) -> (numerator: FormulaExpr, denominator: FormulaExpr)? {
     guard case .call(let name, let args) = stripUnwrap(expr),
           name.uppercased() == "IFERROR",
-          args.count == 2
-    else { return false }
-    guard case .binary(.divide, _, _) = stripUnwrap(args[0]) else { return false }
-    return true
+          args.count == 2,
+          stripIsStaticEmptyLiteral(args[1])
+    else { return nil }
+    var inner = stripUnwrap(args[0])
+    for _ in 0..<6 {
+      if case .binary(.divide, let numerator, let denominator) = inner {
+        return (numerator, denominator)
+      }
+      if case .unary(.plus, let wrapped) = inner {
+        inner = stripUnwrap(wrapped)
+        continue
+      }
+      break
+    }
+    return nil
+  }
+
+  private func ytdSumproductAddChainTerms(_ numerator: FormulaExpr) -> [FormulaExpr]? {
+    let terms = stripAddChain(stripUnwrap(numerator))
+    guard terms.count >= 12 else { return nil }
+    for term in terms {
+      guard case .call(let spName, _) = stripUnwrap(term), spName.uppercased() == "SUMPRODUCT" else { return nil }
+    }
+    return terms
   }
 
   private func recordYtdStripPlanRejectsIfNeeded(master: CellAddress, expr: FormulaExpr) {
@@ -1370,12 +1405,7 @@ extension FormulaEvaluator {
     for term in terms {
       guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else { return nil }
       guard let plan = makeColumnCOUNTIFSPlan(stripUnwrap(term), master: master) else { return nil }
-      guard plan.dynamicCriterionRefs.count == 1,
-            plan.dynamicCriterionRefs[0].row >= 0,
-            plan.staticTests.count == 2,
-            plan.staticTests[1].op == .eq,
-            plan.staticTests[1].text.caseInsensitiveCompare("Yes") == .orderedSame
-      else { return nil }
+      guard ytdCrossSheetCountifsTermAccepts(plan) else { return nil }
       let critRef = plan.dynamicCriterionRefs[0]
       if let needleRef {
         guard stripRefSameCellAs(critRef, keyRef: needleRef) else { return nil }
@@ -1405,12 +1435,7 @@ extension FormulaEvaluator {
       guard let plan = makeColumnCOUNTIFSPlan(stripUnwrap(term), master: master) else {
         return "ytd.cnt.\(label).termPlan"
       }
-      guard plan.dynamicCriterionRefs.count == 1,
-            plan.dynamicCriterionRefs[0].row >= 0,
-            plan.staticTests.count == 2,
-            plan.staticTests[1].op == .eq,
-            plan.staticTests[1].text.caseInsensitiveCompare("Yes") == .orderedSame
-      else {
+      guard ytdCrossSheetCountifsTermAccepts(plan) else {
         return "ytd.cnt.\(label).termShape"
       }
       let critRef = plan.dynamicCriterionRefs[0]
@@ -1472,20 +1497,13 @@ extension FormulaEvaluator {
     _ expr: FormulaExpr,
     master: CellAddress
   ) -> ColumnYtdSumproductQuotientPlan? {
-    guard case .call(let name, let args) = stripUnwrap(expr),
-          name.uppercased() == "IFERROR",
-          args.count == 2
-    else { return nil }
-    guard stripIsStaticEmptyLiteral(args[1]) else { return nil }
-    guard case .binary(.divide, let numerator, let denominator) = stripUnwrap(args[0]) else { return nil }
-    guard let divisorRef = stripFormulaCellRef(denominator) else { return nil }
-    let terms = stripAddChain(stripUnwrap(numerator))
-    guard terms.count >= 12 else { return nil }
+    guard let quotient = stripYtdIfErrorQuotient(expr) else { return nil }
+    guard let divisorRef = stripFormulaCellRef(quotient.denominator) else { return nil }
+    guard let terms = ytdSumproductAddChainTerms(quotient.numerator) else { return nil }
     var calls: [FormulaExpr] = []
     prepareForCellEvaluation(origin: master)
     for term in terms {
-      guard case .call(let spName, let spArgs) = stripUnwrap(term),
-            spName.uppercased() == "SUMPRODUCT",
+      guard case .call(_, let spArgs) = stripUnwrap(term),
             let _ = parseSumProductBooleanPlan(spArgs)
       else { return nil }
       calls.append(stripUnwrap(term))
@@ -1502,11 +1520,11 @@ extension FormulaEvaluator {
           args.count == 2
     else { return "ytd.sp.iferrorTop" }
     guard stripIsStaticEmptyLiteral(args[1]) else { return "ytd.sp.fallbackEmpty" }
-    guard case .binary(.divide, let numerator, let denominator) = stripUnwrap(args[0]) else {
+    guard let quotient = stripYtdIfErrorQuotient(expr) else {
       return "ytd.sp.divide"
     }
-    guard stripFormulaCellRef(denominator) != nil else { return "ytd.sp.divisorRef" }
-    let terms = stripAddChain(stripUnwrap(numerator))
+    guard stripFormulaCellRef(quotient.denominator) != nil else { return "ytd.sp.divisorRef" }
+    let terms = stripAddChain(stripUnwrap(quotient.numerator))
     guard terms.count >= 12 else { return "ytd.sp.addChainCount" }
     prepareForCellEvaluation(origin: master)
     for (index, term) in terms.enumerated() {
