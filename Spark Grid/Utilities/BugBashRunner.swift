@@ -3338,11 +3338,11 @@ enum BugBashRunner {
     let multiArg = """
     =SUMPRODUCT(--(January!$C$110:$C$115=$A5),--(January!$R$110:$R$115="Yes"),--(January!$S$110:$S$115<>""),--((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
     """
-    let singleArg = """
-    =SUMPRODUCT((January!$C$110:$C$115=$A5)*(January!$R$110:$R$115="Yes")*(January!$S$110:$S$115<>"")*((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
+    let kpiJanuary = """
+    =SUMPRODUCT((January!$C$110:$C$115=$A5)*(January!$R$110:$R$115="Yes")*(January!$S$110:$S$115<>"")*((January!$S$110:$S$115-January!$B$110:$B$115)>=0)*((January!$S$110:$S$115-January!$B$110:$B$115)<=60))
     """
     ytd.setCell(Cell(raw: multiArg), at: CellAddress(row: 4, col: 4))
-    ytd.setCell(Cell(raw: singleArg), at: CellAddress(row: 5, col: 4))
+    ytd.setCell(Cell(raw: kpiJanuary), at: CellAddress(row: 5, col: 4))
     let workbook = Workbook(sheets: [january, ytd], activeSheetIndex: 1)
     let engine = FormulaEngine()
     engine.rebuild(workbook: workbook, recalculate: false)
@@ -3350,7 +3350,7 @@ enum BugBashRunner {
     guard let profile = engine.lastWorkbookRecalcProfile else {
       return Result(name: name, passed: false, detail: "missing recalc profile")
     }
-    guard profile.sumproductBooleanHits > 0 else {
+    guard profile.sumproductBooleanHits >= 2 else {
       return Result(
         name: name,
         passed: false,

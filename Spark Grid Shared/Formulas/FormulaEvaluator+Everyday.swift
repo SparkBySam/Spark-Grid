@@ -873,11 +873,19 @@ extension FormulaEvaluator {
         if aggregateRowError(value) { return false }
         if !criteriaMatch(value, test.test) { return false }
       }
-      for diff in plan.diffGeTests {
+      for diff in plan.diffBoundTests {
         let lhs = columns[diff.lhsColumnIndex][row]
         let rhs = columns[diff.rhsColumnIndex][row]
         guard let left = lhs.asNumber, let right = rhs.asNumber else { return false }
-        if left - right < diff.threshold { return false }
+        let delta = left - right
+        switch diff.op {
+        case .ge:
+          if delta < diff.threshold { return false }
+        case .le:
+          if delta > diff.threshold { return false }
+        default:
+          return false
+        }
       }
       return true
     }
@@ -933,7 +941,7 @@ extension FormulaEvaluator {
     var anchors: [RangeAnchor]
     var staticTests: [StaticColumnTest]
     var dynamicTests: [DynamicColumnTest]
-    var diffGeTests: [DiffGeTest]
+    var diffBoundTests: [DiffBoundTest]
     var staticMaskKey: UInt64
 
     struct StaticColumnTest {
@@ -947,9 +955,10 @@ extension FormulaEvaluator {
       var criterionExpr: FormulaExpr
     }
 
-    struct DiffGeTest {
+    struct DiffBoundTest {
       var lhsColumnIndex: Int
       var rhsColumnIndex: Int
+      var op: CriteriaOp
       var threshold: Double
     }
   }
@@ -957,16 +966,13 @@ extension FormulaEvaluator {
   private enum ParsedBooleanFactor {
     case staticTest(RangeAnchor, CriteriaTest)
     case dynamicTest(RangeAnchor, BinaryOp, FormulaExpr)
-    case diffGe(RangeAnchor, RangeAnchor, Double)
+    case diffBound(RangeAnchor, RangeAnchor, CriteriaOp, Double)
   }
 
   private func looksLikeBooleanSumProduct(_ args: [FormulaExpr]) -> Bool {
     guard let factors = booleanProductFactors(from: args), !factors.isEmpty else { return false }
     let meaningful = factors.filter { !isIgnorableBooleanProductFactor($0) }
     guard !meaningful.isEmpty else { return false }
-    if args.count == 1 {
-      return meaningful.contains { parseBooleanFactor($0) != nil }
-    }
     return meaningful.allSatisfy { parseBooleanFactor($0) != nil }
   }
 
@@ -1007,7 +1013,7 @@ extension FormulaEvaluator {
     var anchors: [RangeAnchor] = []
     var staticTests: [SumProductBooleanPlan.StaticColumnTest] = []
     var dynamicTests: [SumProductBooleanPlan.DynamicColumnTest] = []
-    var diffGeTests: [SumProductBooleanPlan.DiffGeTest] = []
+    var diffBoundTests: [SumProductBooleanPlan.DiffBoundTest] = []
     var staticHasher = Hasher()
 
     for factor in factors {
@@ -1021,15 +1027,16 @@ extension FormulaEvaluator {
       case .dynamicTest(let anchor, let op, let criterionExpr):
         let index = sumProductAnchorIndex(anchor, anchors: &anchors)
         dynamicTests.append(.init(columnIndex: index, op: op, criterionExpr: criterionExpr))
-      case .diffGe(let lhs, let rhs, let threshold):
+      case .diffBound(let lhs, let rhs, let op, let threshold):
         let li = sumProductAnchorIndex(lhs, anchors: &anchors)
         let ri = sumProductAnchorIndex(rhs, anchors: &anchors)
-        diffGeTests.append(.init(lhsColumnIndex: li, rhsColumnIndex: ri, threshold: threshold))
+        diffBoundTests.append(.init(lhsColumnIndex: li, rhsColumnIndex: ri, op: op, threshold: threshold))
+        staticHasher.combine(op.hashValue)
         staticHasher.combine(threshold)
       }
     }
 
-    guard !(staticTests.isEmpty && dynamicTests.isEmpty && diffGeTests.isEmpty) else { return nil }
+    guard !(staticTests.isEmpty && dynamicTests.isEmpty && diffBoundTests.isEmpty) else { return nil }
     for anchor in anchors {
       mixSumProductAnchor(anchor, into: &staticHasher)
     }
@@ -1037,7 +1044,7 @@ extension FormulaEvaluator {
       anchors: anchors,
       staticTests: staticTests,
       dynamicTests: dynamicTests,
-      diffGeTests: diffGeTests,
+      diffBoundTests: diffBoundTests,
       staticMaskKey: UInt64(bitPattern: Int64(staticHasher.finalize()))
     )
   }
@@ -1065,14 +1072,8 @@ extension FormulaEvaluator {
   private func parseBooleanFactor(_ expr: FormulaExpr) -> ParsedBooleanFactor? {
     let node = unwrapSumProductParen(expr)
     guard case .binary(let op, let lhs, let rhs) = node else { return nil }
-    if op == .ge,
-       case .number(let threshold) = evaluate(rhs),
-       case .binary(.subtract, let left, let right) = unwrapSumProductParen(lhs),
-       let lhsAnchor = rangeAnchor(left),
-       let rhsAnchor = rangeAnchor(right),
-       lhsAnchor.rows == rhsAnchor.rows,
-       lhsAnchor.cols == rhsAnchor.cols {
-      return .diffGe(lhsAnchor, rhsAnchor, threshold)
+    if let diff = parseRangeSubtractBound(lhs: lhs, op: op, rhs: rhs) {
+      return diff
     }
     switch op {
     case .eq, .ne, .lt, .le, .gt, .ge:
@@ -1102,6 +1103,25 @@ extension FormulaEvaluator {
       return .staticTest(anchor, test)
     }
     return nil
+  }
+
+  private func parseRangeSubtractBound(
+    lhs: FormulaExpr,
+    op: BinaryOp,
+    rhs: FormulaExpr
+  ) -> ParsedBooleanFactor? {
+    guard op == .ge || op == .le else { return nil }
+    guard case .number(let threshold) = evaluate(rhs) else { return nil }
+    guard case .binary(.subtract, let left, let right) = unwrapSumProductParen(lhs),
+          let lhsAnchor = rangeAnchor(left),
+          let rhsAnchor = rangeAnchor(right),
+          lhsAnchor.rows == rhsAnchor.rows,
+          lhsAnchor.cols == rhsAnchor.cols
+    else {
+      return nil
+    }
+    let boundOp: CriteriaOp = op == .ge ? .ge : .le
+    return .diffBound(lhsAnchor, rhsAnchor, boundOp, threshold)
   }
 
   private func isRangeExpr(_ expr: FormulaExpr) -> Bool {
