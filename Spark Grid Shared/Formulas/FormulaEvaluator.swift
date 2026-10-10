@@ -38,7 +38,7 @@ struct FormulaEvaluator {
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
-  fileprivate final class ArrayEvalCacheBox {
+  final class ArrayEvalCacheBox {
     var values: [FormulaExpr: [CellValue]] = [:]
   }
   var arrayEvaluateCache: ArrayEvalCacheBox?
