@@ -303,27 +303,30 @@ final class FormulaEngine {
         let template: IngestedFormulaTemplate
         if let cached = ingestTemplateCache[templateKey] {
           template = cached
+          lastWorkbookRecalcProfile?.ingestTemplateCacheHits += 1
         } else {
+          let parseStart = CFAbsoluteTimeGetCurrent()
           let expr = try FormulaParser.parse(trimmed)
-          let deps = FormulaDependencies.collect(
+          let parseElapsed = CFAbsoluteTimeGetCurrent() - parseStart
+          let depStart = CFAbsoluteTimeGetCurrent()
+          let collected = FormulaDependencies.collectForIngest(
             from: expr,
             activeSheetName: activeSheetName,
             maxRow: maxRow,
             maxCol: maxCol,
+            collectWatchedRanges: true,
             namedRangeLookup: { [weak self] name in
               self?.namedRangeExpr(named: name)
             }
           )
-          let ranges = FormulaDependencies.collectWatchedRanges(
-            from: expr,
-            activeSheetName: activeSheetName,
-            maxRow: maxRow,
-            maxCol: maxCol,
-            namedRangeLookup: { [weak self] name in
-              self?.namedRangeExpr(named: name)
-            }
+          let depElapsed = CFAbsoluteTimeGetCurrent() - depStart
+          lastWorkbookRecalcProfile?.ingestParseSeconds += parseElapsed
+          lastWorkbookRecalcProfile?.ingestDependencySeconds += depElapsed
+          template = IngestedFormulaTemplate(
+            expr: expr,
+            deps: collected.deps,
+            ranges: collected.ranges
           )
-          template = IngestedFormulaTemplate(expr: expr, deps: deps, ranges: ranges)
           ingestTemplateCache[templateKey] = template
         }
         formulaAST[address] = template.expr
@@ -415,9 +418,7 @@ final class FormulaEngine {
     activeSheetName = sheet.name
     clearFormulaGraph()
     let ingestStart = CFAbsoluteTimeGetCurrent()
-    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
-    }
+    bulkIngestFormulas(on: sheet, profile: profile)
     profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
     mergeRecalculatedValues(for: sheet)
@@ -434,9 +435,7 @@ final class FormulaEngine {
     activeSheetName = sheet.name
     clearFormulaGraph()
     let ingestStart = CFAbsoluteTimeGetCurrent()
-    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
-    }
+    bulkIngestFormulas(on: sheet, profile: profile)
     profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
     var values: [CellAddress: CellValue] = [:]
@@ -448,11 +447,15 @@ final class FormulaEngine {
     return values
   }
 
-  private func buildShapeStripPlans(sheet: Sheet) -> [ShapeStripPlan] {
+  private func buildShapeStripPlans(sheet: Sheet, profile: FormulaRecalcProfile?) -> [ShapeStripPlan] {
+    let planStart = CFAbsoluteTimeGetCurrent()
+    defer {
+      profile?.shapeStripPlanSeconds += CFAbsoluteTimeGetCurrent() - planStart
+    }
     var grouped: [String: [CellAddress]] = [:]
     for address in formulaAST.keys {
-      let raw = sheet.cell(at: address).raw
-      let key = FormulaRewriter.shapeAnchorKey(raw: raw, anchor: address)
+      guard let expr = formulaAST[address] else { continue }
+      let key = FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
       grouped[key, default: []].append(address)
     }
     let minimumMembers = 8
@@ -462,16 +465,111 @@ final class FormulaEngine {
         if $0.row != $1.row { return $0.row < $1.row }
         return $0.col < $1.col
       }) else { continue }
-      let masterRaw = sheet.cell(at: master).raw
+      guard let masterExpr = formulaAST[master] else { continue }
       let matchesFill = members.allSatisfy { addr in
         let rowDelta = addr.row - master.row
         let colDelta = addr.col - master.col
-        return FormulaRewriter.adjust(masterRaw, rowDelta: rowDelta, colDelta: colDelta) == sheet.cell(at: addr).raw
+        let expected = FormulaRewriter.adjustedFormulaText(
+          expr: masterExpr,
+          rowDelta: rowDelta,
+          colDelta: colDelta
+        )
+        let actual = sheet.cell(at: addr).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return expected == actual
       }
       guard matchesFill else { continue }
       plans.append(ShapeStripPlan(master: master, members: members))
     }
     return plans
+  }
+
+  /// Full-sheet ingest after `clearFormulaGraph`: parallel parse/deps, no watched ranges, no stale cleanup.
+  private func bulkIngestFormulas(on sheet: Sheet, profile: FormulaRecalcProfile?) {
+    let maxRow = sheet.effectiveRowCount - 1
+    let maxCol = sheet.effectiveColumnCount - 1
+    let sheetName = sheet.name
+    var entries: [(CellAddress, String)] = []
+    entries.reserveCapacity(sheet.cells.count)
+    for (address, cell) in sheet.cells {
+      let trimmed = cell.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard FormulaSyntax.isFormula(trimmed) else { continue }
+      entries.append((address, trimmed))
+    }
+    guard !entries.isEmpty else { return }
+
+    let count = entries.count
+    var templates: [IngestedFormulaTemplate?] = Array(repeating: nil, count: count)
+    let cacheLock = NSLock()
+    let profileLock = NSLock()
+
+    DispatchQueue.concurrentPerform(iterations: count) { index in
+      let trimmed = entries[index].1
+      let templateKey = ingestTemplateKey(
+        sheetName: sheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        formula: trimmed
+      )
+      cacheLock.lock()
+      let cached = ingestTemplateCache[templateKey]
+      cacheLock.unlock()
+      if let cached {
+        templates[index] = cached
+        profileLock.lock()
+        profile?.ingestTemplateCacheHits += 1
+        profileLock.unlock()
+        return
+      }
+
+      do {
+        let parseStart = CFAbsoluteTimeGetCurrent()
+        let expr = try FormulaParser.parse(trimmed)
+        let parseElapsed = CFAbsoluteTimeGetCurrent() - parseStart
+        let depStart = CFAbsoluteTimeGetCurrent()
+        let collected = FormulaDependencies.collectForIngest(
+          from: expr,
+          activeSheetName: sheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          collectWatchedRanges: false,
+          namedRangeLookup: { [weak self] name in
+            self?.namedRangeExpr(named: name)
+          }
+        )
+        let depElapsed = CFAbsoluteTimeGetCurrent() - depStart
+        let template = IngestedFormulaTemplate(
+          expr: expr,
+          deps: collected.deps,
+          ranges: []
+        )
+        templates[index] = template
+        cacheLock.lock()
+        ingestTemplateCache[templateKey] = template
+        cacheLock.unlock()
+        profileLock.lock()
+        profile?.ingestParseSeconds += parseElapsed
+        profile?.ingestDependencySeconds += depElapsed
+        profileLock.unlock()
+      } catch {
+        templates[index] = nil
+      }
+    }
+
+    for index in 0..<count {
+      let address = entries[index].0
+      guard let template = templates[index] else {
+        valueCache[address] = .error(.error)
+        continue
+      }
+      formulaAST[address] = template.expr
+      dependencies[address] = template.deps
+      for dep in template.deps {
+        dependents[dep, default: []].insert(address)
+      }
+      if let snapshot = sheet.cell(at: address).importedFormulaResult {
+        valueCache[address] = CellValue.fromImportedExcel(snapshot)
+      }
+    }
   }
 
   private func recalculateAll(
@@ -500,7 +598,7 @@ final class FormulaEngine {
     var memberToMaster: [CellAddress: CellAddress] = [:]
     var stripExecuted: Set<CellAddress> = []
     if useShapeStrips {
-      for plan in buildShapeStripPlans(sheet: sheet) {
+      for plan in buildShapeStripPlans(sheet: sheet, profile: profile) {
         stripByMaster[plan.master] = plan
         for member in plan.members {
           memberToMaster[member] = plan.master

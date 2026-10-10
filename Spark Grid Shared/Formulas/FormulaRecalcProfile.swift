@@ -3,6 +3,11 @@ import Foundation
 /// Phase timings for `recalculateEntireWorkbook` (Bug Bash / diagnostics).
 final class FormulaRecalcProfile {
   var ingestSeconds: Double = 0
+  var ingestParseSeconds: Double = 0
+  var ingestDependencySeconds: Double = 0
+  var ingestTemplateCacheHits: Int = 0
+  /// `buildShapeStripPlans` (AST anchor keys + fill validation); runs at eval start, not in `ingestSeconds`.
+  var shapeStripPlanSeconds: Double = 0
   var aggregateIndexBuildSeconds: Double = 0
   var lookupIndexBuildSeconds: Double = 0
   var evalSeconds: Double = 0
@@ -30,6 +35,10 @@ final class FormulaRecalcProfile {
 
   func mergeFrom(_ other: FormulaRecalcProfile) {
     ingestSeconds += other.ingestSeconds
+    ingestParseSeconds += other.ingestParseSeconds
+    ingestDependencySeconds += other.ingestDependencySeconds
+    ingestTemplateCacheHits += other.ingestTemplateCacheHits
+    shapeStripPlanSeconds += other.shapeStripPlanSeconds
     aggregateIndexBuildSeconds += other.aggregateIndexBuildSeconds
     lookupIndexBuildSeconds += other.lookupIndexBuildSeconds
     evalSeconds += other.evalSeconds
@@ -52,9 +61,13 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
+      format: "total %.2fs | ingest %.2fs (parse %.2fs deps %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
       totalSeconds,
       ingestSeconds,
+      ingestParseSeconds,
+      ingestDependencySeconds,
+      ingestTemplateCacheHits,
+      shapeStripPlanSeconds,
       aggregateIndexBuildSeconds,
       lookupIndexBuildSeconds,
       evalSeconds,

@@ -1101,6 +1101,129 @@ struct FormulaEvaluator {
 }
 
 enum FormulaDependencies {
+  /// One AST walk for workbook ingest (deps; optional range list for incremental invalidation).
+  static func collectForIngest(
+    from expr: FormulaExpr,
+    activeSheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    collectWatchedRanges: Bool,
+    namedRangeLookup: (String) -> FormulaExpr? = { _ in nil }
+  ) -> (deps: Set<CellAddress>, ranges: [CellRange]) {
+    var deps: Set<CellAddress> = []
+    var ranges: [CellRange] = []
+    collectForIngest(
+      expr,
+      activeSheetName: activeSheetName,
+      maxRow: maxRow,
+      maxCol: maxCol,
+      collectWatchedRanges: collectWatchedRanges,
+      namedRangeLookup: namedRangeLookup,
+      intoDeps: &deps,
+      intoRanges: &ranges
+    )
+    return (deps, ranges)
+  }
+
+  private static func collectForIngest(
+    _ expr: FormulaExpr,
+    activeSheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    collectWatchedRanges: Bool,
+    namedRangeLookup: (String) -> FormulaExpr?,
+    intoDeps: inout Set<CellAddress>,
+    intoRanges: inout [CellRange]
+  ) {
+    switch expr {
+    case .number, .string, .boolean, .error:
+      break
+    case .namedRange(let name):
+      if let resolved = namedRangeLookup(name) {
+        collectForIngest(
+          resolved,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          collectWatchedRanges: collectWatchedRanges,
+          namedRangeLookup: namedRangeLookup,
+          intoDeps: &intoDeps,
+          intoRanges: &intoRanges
+        )
+      }
+    case .cellRef(let ref):
+      if ref.isOnSheet(activeSheetName), !ref.isRowOpen, !ref.isColOpen {
+        intoDeps.insert(ref.address)
+      }
+    case .range(let start, let end):
+      if start.isOnSheet(activeSheetName) {
+        let n = A1Reference.resolvedBounds(
+          start: start,
+          end: end,
+          maxRow: maxRow,
+          maxCol: maxCol
+        )
+        let rows = n.maxRow - n.minRow + 1
+        let cols = n.maxCol - n.minCol + 1
+        if rows * cols == 1 {
+          intoDeps.insert(CellAddress(row: n.minRow, col: n.minCol))
+        } else if collectWatchedRanges {
+          intoRanges.append(
+            CellRange(
+              start: CellAddress(row: n.minRow, col: n.minCol),
+              end: CellAddress(row: n.maxRow, col: n.maxCol)
+            )
+          )
+        }
+      }
+    case .unary(_, let inner):
+      collectForIngest(
+        inner,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        collectWatchedRanges: collectWatchedRanges,
+        namedRangeLookup: namedRangeLookup,
+        intoDeps: &intoDeps,
+        intoRanges: &intoRanges
+      )
+    case .binary(_, let lhs, let rhs):
+      collectForIngest(
+        lhs,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        collectWatchedRanges: collectWatchedRanges,
+        namedRangeLookup: namedRangeLookup,
+        intoDeps: &intoDeps,
+        intoRanges: &intoRanges
+      )
+      collectForIngest(
+        rhs,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        collectWatchedRanges: collectWatchedRanges,
+        namedRangeLookup: namedRangeLookup,
+        intoDeps: &intoDeps,
+        intoRanges: &intoRanges
+      )
+    case .call(_, let args):
+      for arg in args {
+        collectForIngest(
+          arg,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          collectWatchedRanges: collectWatchedRanges,
+          namedRangeLookup: namedRangeLookup,
+          intoDeps: &intoDeps,
+          intoRanges: &intoRanges
+        )
+      }
+    }
+  }
+
   /// Sheet-local ranges referenced by a formula (for invalidation when cells inside change).
   static func collectWatchedRanges(
     from expr: FormulaExpr,
