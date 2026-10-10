@@ -312,31 +312,4 @@ final class FormulaAggregateRangeCache {
     maskedCountIndexes[indexKey] = map
     return map
   }
-
-  /// Copies indexes built on month-sheet workers so YTD recalc can reuse histograms.
-  func mergeFrom(_ other: FormulaAggregateRangeCache) {
-    for (key, values) in other.snapshots where snapshots[key] == nil {
-      snapshots[key] = values
-    }
-    for (key, map) in other.countIndexes {
-      if countIndexes[key] == nil {
-        countIndexes[key] = map
-      }
-    }
-    for (key, map) in other.sumIndexes {
-      if sumIndexes[key] == nil {
-        sumIndexes[key] = map
-      }
-    }
-    for (key, map) in other.maskedCountIndexes {
-      if maskedCountIndexes[key] == nil {
-        maskedCountIndexes[key] = map
-      }
-    }
-    for (key, mask) in other.booleanStaticMasks {
-      if booleanStaticMasks[key] == nil {
-        booleanStaticMasks[key] = mask
-      }
-    }
-  }
 }

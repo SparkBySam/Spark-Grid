@@ -45,10 +45,4 @@ final class FormulaLookupTableCache {
     }()
     return map[needleKey]
   }
-
-  func mergeFrom(_ other: FormulaLookupTableCache) {
-    for (key, map) in other.exactMaps where exactMaps[key] == nil {
-      exactMaps[key] = map
-    }
-  }
 }
