@@ -243,6 +243,7 @@ struct FormulaEvaluator {
     switch name {
     case "SUM": return aggregate(args, skipNonNumeric: true) { $0 + $1 }
     case "AVERAGE":
+      if let fast = fastAverageIfPossible(args) { return fast }
       var sum = 0.0
       var count = 0
       for value in flatten(args) {

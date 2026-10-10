@@ -336,24 +336,30 @@ final class FormulaEngine {
     }) else {
       return []
     }
+    let recalculated = recalculatedSheetValues[sheetKey(sheet.name)]
     var values: [CellValue] = []
     values.reserveCapacity((key.maxRow - key.minRow + 1) * (key.maxCol - key.minCol + 1))
     for row in key.minRow...key.maxRow {
       for col in key.minCol...key.maxCol {
         let address = CellAddress(row: row, col: col)
+        if let stored = recalculated?[address] {
+          values.append(stored)
+          continue
+        }
         if let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
           values.append(stored)
           continue
         }
+        let cell = sheet.cell(at: address)
         if let literal = workbookLiteral(sheet: sheet, address: address) {
           values.append(literal)
           continue
         }
-        if let imported = sheet.cell(at: address).importedFormulaResult {
+        if let imported = cell.importedFormulaResult {
           values.append(CellValue.fromImportedExcel(imported))
           continue
         }
-        values.append(literalOrEmpty(sheet.cell(at: address).raw))
+        values.append(literalOrEmpty(cell.raw))
       }
     }
     return values

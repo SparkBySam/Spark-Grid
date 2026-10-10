@@ -63,6 +63,11 @@ private struct CompositeSumIndexKey: Hashable {
   var sumRangeKey: AggregateRangeKey
 }
 
+private struct MaskedCountIndexKey: Hashable {
+  var rangeKey: AggregateRangeKey
+  var staticMaskKey: UInt64
+}
+
 struct AggregateSumBucket {
   var count: Int = 0
   var sum: Double = 0
@@ -76,11 +81,15 @@ final class FormulaAggregateRangeCache {
   private var snapshots: [AggregateRangeKey: [CellValue]] = [:]
   private var countIndexes: [CompositeCountIndexKey: [AggregateCriteriaTupleKey: Int]] = [:]
   private var sumIndexes: [CompositeSumIndexKey: [AggregateCriteriaTupleKey: AggregateSumBucket]] = [:]
+  private var booleanStaticMasks: [UInt64: [Bool]] = [:]
+  private var maskedCountIndexes: [MaskedCountIndexKey: [AggregateValueKey: Int]] = [:]
 
   func invalidateAll() {
     snapshots.removeAll(keepingCapacity: true)
     countIndexes.removeAll(keepingCapacity: true)
     sumIndexes.removeAll(keepingCapacity: true)
+    booleanStaticMasks.removeAll(keepingCapacity: true)
+    maskedCountIndexes.removeAll(keepingCapacity: true)
   }
 
   func invalidate(sheetName: String, address: CellAddress) {
@@ -98,6 +107,37 @@ final class FormulaAggregateRangeCache {
     sumIndexes = sumIndexes.filter {
       !usesAnyRange($0.key.criteriaRangeKeys, in: removedKeys) && !removedKeys.contains($0.key.sumRangeKey)
     }
+    maskedCountIndexes = maskedCountIndexes.filter { !removedKeys.contains($0.key.rangeKey) }
+    booleanStaticMasks.removeAll(keepingCapacity: true)
+  }
+
+  func countForMaskedCriteria(
+    rangeKey: AggregateRangeKey,
+    column: [CellValue],
+    staticMaskKey: UInt64,
+    mask: [Bool],
+    criteriaKey: AggregateValueKey
+  ) -> Int {
+    let indexKey = MaskedCountIndexKey(rangeKey: rangeKey, staticMaskKey: staticMaskKey)
+    let map = maskedCountIndexes[indexKey] ?? buildMaskedCountIndex(
+      indexKey: indexKey,
+      column: column,
+      mask: mask
+    )
+    return map[criteriaKey, default: 0]
+  }
+
+  func booleanStaticMask(key: UInt64, rowCount: Int, build: (Int) -> Bool) -> [Bool] {
+    if let cached = booleanStaticMasks[key], cached.count == rowCount {
+      return cached
+    }
+    var mask = [Bool]()
+    mask.reserveCapacity(rowCount)
+    for row in 0..<rowCount {
+      mask.append(build(row))
+    }
+    booleanStaticMasks[key] = mask
+    return mask
   }
 
   func rowMajorValues(
@@ -240,6 +280,26 @@ final class FormulaAggregateRangeCache {
       map[tuple] = bucket
     }
     sumIndexes[indexKey] = map
+    return map
+  }
+
+  private func buildMaskedCountIndex(
+    indexKey: MaskedCountIndexKey,
+    column: [CellValue],
+    mask: [Bool]
+  ) -> [AggregateValueKey: Int] {
+    let buildStart = CFAbsoluteTimeGetCurrent()
+    defer {
+      profile?.aggregateIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
+    }
+    var map: [AggregateValueKey: Int] = [:]
+    let rowCount = min(column.count, mask.count)
+    for row in 0..<rowCount {
+      guard mask[row] else { continue }
+      guard let key = AggregateValueKey.from(cellValue: column[row]) else { continue }
+      map[key, default: 0] += 1
+    }
+    maskedCountIndexes[indexKey] = map
     return map
   }
 }

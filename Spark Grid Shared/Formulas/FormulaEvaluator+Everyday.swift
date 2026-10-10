@@ -155,6 +155,9 @@ extension FormulaEvaluator {
   func evalSUMPRODUCT(_ args: [FormulaExpr]) -> CellValue {
     guard !args.isEmpty else { return .error(.value) }
     if args.count == 1 {
+      if let fast = tryEvalBooleanProductCount(args[0]) {
+        return fast
+      }
       let cacheBox = FormulaEvaluator.ArrayEvalCacheBox()
       let values = arrayEvaluate(args[0], cache: cacheBox)
       var total = 0.0
@@ -819,6 +822,324 @@ extension FormulaEvaluator {
       search = range.upperBound
     }
     return source
+  }
+
+  private func statsNumericValue(_ value: CellValue) -> Double? {
+    switch value {
+    case .number(let number):
+      return number
+    case .bool(let flag):
+      return flag ? 1 : 0
+    case .blank, .string, .error:
+      return nil
+    }
+  }
+
+  func fastAverageIfPossible(_ args: [FormulaExpr]) -> CellValue? {
+    guard args.count == 1 else { return nil }
+    guard let anchor = rangeAnchor(args[0]) else { return nil }
+    var memo: [LookupMemoKey: CellValue] = [:]
+    let values = snapshotValues(anchor: anchor, memo: &memo)
+    var sum = 0.0
+    var count = 0
+    for value in values {
+      if case .error = value { continue }
+      guard let number = statsNumericValue(value) else { continue }
+      sum += number
+      count += 1
+    }
+    guard count > 0 else { return .error(.divZero) }
+    return .number(sum / Double(count))
+  }
+
+  // MARK: - SUMPRODUCT boolean products
+
+  /// KPI-style `SUMPRODUCT((C=$A5)*(R="Yes")*...)` via cached static masks and column snapshots.
+  private func tryEvalBooleanProductCount(_ expr: FormulaExpr) -> CellValue? {
+    guard let plan = parseSumProductBooleanPlan(expr) else { return nil }
+    guard let cache = aggregateRangeCache else { return nil }
+    var memo: [LookupMemoKey: CellValue] = [:]
+    let columns = plan.anchors.map { snapshotValues(anchor: $0, memo: &memo) }
+    let rowCount = columns.first?.count ?? 0
+    guard rowCount > 0, columns.allSatisfy({ $0.count == rowCount }) else { return nil }
+
+    let staticMask = cache.booleanStaticMask(key: plan.staticMaskKey, rowCount: rowCount) { row in
+      for test in plan.staticTests {
+        let value = columns[test.columnIndex][row]
+        if aggregateRowError(value) { return false }
+        if !criteriaMatch(value, test.test) { return false }
+      }
+      for diff in plan.diffGeTests {
+        let lhs = columns[diff.lhsColumnIndex][row]
+        let rhs = columns[diff.rhsColumnIndex][row]
+        guard let left = lhs.asNumber, let right = rhs.asNumber else { return false }
+        if left - right < diff.threshold { return false }
+      }
+      return true
+    }
+
+    if plan.dynamicTests.count == 1, plan.dynamicTests[0].op == .eq {
+      let dynamic = plan.dynamicTests[0]
+      let criterion = evaluate(dynamic.criterionExpr)
+      if case .error = criterion { return criterion }
+      if let test = criteriaTestFromComparison(criterion: criterion, op: dynamic.op),
+         criteriaSupportsIndexLookup(test),
+         let lookupKey = lookupKeyForCriterion(criterion, test: test) {
+        let rangeKey = aggregateRangeKey(for: plan.anchors[dynamic.columnIndex])
+        let count = cache.countForMaskedCriteria(
+          rangeKey: rangeKey,
+          column: columns[dynamic.columnIndex],
+          staticMaskKey: plan.staticMaskKey,
+          mask: staticMask,
+          criteriaKey: lookupKey
+        )
+        return .number(Double(count))
+      }
+    }
+
+    var dynamicTests: [(columnIndex: Int, test: CriteriaTest)] = []
+    for dynamic in plan.dynamicTests {
+      let criterion = evaluate(dynamic.criterionExpr)
+      if case .error = criterion { return criterion }
+      guard let test = criteriaTestFromComparison(criterion: criterion, op: dynamic.op) else { return nil }
+      dynamicTests.append((dynamic.columnIndex, test))
+    }
+
+    var count = 0
+    for row in 0..<rowCount {
+      guard staticMask[row] else { continue }
+      var matched = true
+      for dynamic in dynamicTests {
+        let value = columns[dynamic.columnIndex][row]
+        if aggregateRowError(value) {
+          matched = false
+          break
+        }
+        if !criteriaMatch(value, dynamic.test) {
+          matched = false
+          break
+        }
+      }
+      if matched { count += 1 }
+    }
+    return .number(Double(count))
+  }
+
+  private struct SumProductBooleanPlan {
+    var anchors: [RangeAnchor]
+    var staticTests: [StaticColumnTest]
+    var dynamicTests: [DynamicColumnTest]
+    var diffGeTests: [DiffGeTest]
+    var staticMaskKey: UInt64
+
+    struct StaticColumnTest {
+      var columnIndex: Int
+      var test: CriteriaTest
+    }
+
+    struct DynamicColumnTest {
+      var columnIndex: Int
+      var op: BinaryOp
+      var criterionExpr: FormulaExpr
+    }
+
+    struct DiffGeTest {
+      var lhsColumnIndex: Int
+      var rhsColumnIndex: Int
+      var threshold: Double
+    }
+  }
+
+  private enum ParsedBooleanFactor {
+    case staticTest(RangeAnchor, CriteriaTest)
+    case dynamicTest(RangeAnchor, BinaryOp, FormulaExpr)
+    case diffGe(RangeAnchor, RangeAnchor, Double)
+  }
+
+  private func parseSumProductBooleanPlan(_ expr: FormulaExpr) -> SumProductBooleanPlan? {
+    var factors: [FormulaExpr] = []
+    guard collectMultiplyFactors(unwrapSumProductParen(expr), into: &factors) else { return nil }
+    var anchors: [RangeAnchor] = []
+    var staticTests: [SumProductBooleanPlan.StaticColumnTest] = []
+    var dynamicTests: [SumProductBooleanPlan.DynamicColumnTest] = []
+    var diffGeTests: [SumProductBooleanPlan.DiffGeTest] = []
+    var staticHasher = Hasher()
+
+    for factor in factors {
+      guard let parsed = parseBooleanFactor(factor) else { return nil }
+      switch parsed {
+      case .staticTest(let anchor, let test):
+        let index = sumProductAnchorIndex(anchor, anchors: &anchors)
+        staticTests.append(.init(columnIndex: index, test: test))
+        mixStaticCriteriaTest(test, into: &staticHasher)
+      case .dynamicTest(let anchor, let op, let criterionExpr):
+        let index = sumProductAnchorIndex(anchor, anchors: &anchors)
+        dynamicTests.append(.init(columnIndex: index, op: op, criterionExpr: criterionExpr))
+      case .diffGe(let lhs, let rhs, let threshold):
+        let li = sumProductAnchorIndex(lhs, anchors: &anchors)
+        let ri = sumProductAnchorIndex(rhs, anchors: &anchors)
+        diffGeTests.append(.init(lhsColumnIndex: li, rhsColumnIndex: ri, threshold: threshold))
+        staticHasher.combine(threshold)
+      }
+    }
+
+    for anchor in anchors {
+      mixSumProductAnchor(anchor, into: &staticHasher)
+    }
+    return SumProductBooleanPlan(
+      anchors: anchors,
+      staticTests: staticTests,
+      dynamicTests: dynamicTests,
+      diffGeTests: diffGeTests,
+      staticMaskKey: UInt64(bitPattern: Int64(staticHasher.finalize()))
+    )
+  }
+
+  private func unwrapSumProductParen(_ expr: FormulaExpr) -> FormulaExpr {
+    if case .unary(.plus, let inner) = expr { return unwrapSumProductParen(inner) }
+    return expr
+  }
+
+  private func collectMultiplyFactors(_ expr: FormulaExpr, into factors: inout [FormulaExpr]) -> Bool {
+    switch expr {
+    case .binary(.multiply, let lhs, let rhs):
+      guard collectMultiplyFactors(lhs, into: &factors), collectMultiplyFactors(rhs, into: &factors) else {
+        return false
+      }
+      return true
+    case .unary(.plus, let inner):
+      return collectMultiplyFactors(inner, into: &factors)
+    default:
+      factors.append(expr)
+      return true
+    }
+  }
+
+  private func parseBooleanFactor(_ expr: FormulaExpr) -> ParsedBooleanFactor? {
+    let node = unwrapSumProductParen(expr)
+    guard case .binary(let op, let lhs, let rhs) = node else { return nil }
+    if op == .ge,
+       case .number(let threshold) = evaluate(rhs),
+       case .binary(.subtract, let left, let right) = unwrapSumProductParen(lhs),
+       let lhsAnchor = rangeAnchor(left),
+       let rhsAnchor = rangeAnchor(right),
+       lhsAnchor.rows == rhsAnchor.rows,
+       lhsAnchor.cols == rhsAnchor.cols {
+      return .diffGe(lhsAnchor, rhsAnchor, threshold)
+    }
+    switch op {
+    case .eq, .ne, .lt, .le, .gt, .ge:
+      break
+    default:
+      return nil
+    }
+    if let anchor = rangeAnchor(lhs) {
+      guard !isRangeExpr(rhs) else { return nil }
+      if isDynamicCriterion(rhs) {
+        return .dynamicTest(anchor, op, rhs)
+      }
+      let criterion = evaluate(rhs)
+      if case .error = criterion { return nil }
+      guard let test = criteriaTestFromComparison(criterion: criterion, op: op) else { return nil }
+      return .staticTest(anchor, test)
+    }
+    if let anchor = rangeAnchor(rhs) {
+      guard !isRangeExpr(lhs) else { return nil }
+      let flipped = flipComparisonOp(op)
+      if isDynamicCriterion(lhs) {
+        return .dynamicTest(anchor, flipped, lhs)
+      }
+      let criterion = evaluate(lhs)
+      if case .error = criterion { return nil }
+      guard let test = criteriaTestFromComparison(criterion: criterion, op: flipped) else { return nil }
+      return .staticTest(anchor, test)
+    }
+    return nil
+  }
+
+  private func isRangeExpr(_ expr: FormulaExpr) -> Bool {
+    if case .range = expr { return true }
+    return false
+  }
+
+  private func isDynamicCriterion(_ expr: FormulaExpr) -> Bool {
+    switch expr {
+    case .cellRef, .namedRange:
+      return true
+    case .unary(.plus, let inner), .unary(.negate, let inner):
+      return isDynamicCriterion(inner)
+    default:
+      return false
+    }
+  }
+
+  private func flipComparisonOp(_ op: BinaryOp) -> BinaryOp {
+    switch op {
+    case .eq: return .eq
+    case .ne: return .ne
+    case .lt: return .gt
+    case .le: return .ge
+    case .gt: return .lt
+    case .ge: return .le
+    default: return op
+    }
+  }
+
+  private func criteriaTestFromComparison(criterion: CellValue, op: BinaryOp) -> CriteriaTest? {
+    guard let criteriaOp = binaryOpToCriteriaOp(op) else { return nil }
+    if criteriaOp == .ne {
+      if case .string(let text) = criterion, text.isEmpty {
+        return CriteriaTest(op: .ne, number: nil, text: "", wildcard: false, blank: true)
+      }
+      if case .blank = criterion {
+        return CriteriaTest(op: .ne, number: nil, text: "", wildcard: false, blank: true)
+      }
+    }
+    var test = criteriaTest(from: criterion)
+    if test.wildcard { return nil }
+    test.op = criteriaOp
+    return test
+  }
+
+  private func binaryOpToCriteriaOp(_ op: BinaryOp) -> CriteriaOp? {
+    switch op {
+    case .eq: return .eq
+    case .ne: return .ne
+    case .lt: return .lt
+    case .le: return .le
+    case .gt: return .gt
+    case .ge: return .ge
+    default: return nil
+    }
+  }
+
+  private func sumProductAnchorIndex(_ anchor: RangeAnchor, anchors: inout [RangeAnchor]) -> Int {
+    if let index = anchors.firstIndex(where: { sameSumProductAnchorShape($0, anchor) }) {
+      return index
+    }
+    anchors.append(anchor)
+    return anchors.count - 1
+  }
+
+  private func sameSumProductAnchorShape(_ lhs: RangeAnchor, _ rhs: RangeAnchor) -> Bool {
+    (lhs.sheet ?? "").caseInsensitiveCompare(rhs.sheet ?? "") == .orderedSame
+      && lhs.row == rhs.row && lhs.col == rhs.col && lhs.rows == rhs.rows && lhs.cols == rhs.cols
+  }
+
+  private func mixSumProductAnchor(_ anchor: RangeAnchor, into hasher: inout Hasher) {
+    hasher.combine((anchor.sheet ?? "").lowercased())
+    hasher.combine(anchor.row)
+    hasher.combine(anchor.col)
+    hasher.combine(anchor.rows)
+    hasher.combine(anchor.cols)
+  }
+
+  private func mixStaticCriteriaTest(_ test: CriteriaTest, into hasher: inout Hasher) {
+    hasher.combine(test.op.hashValue)
+    hasher.combine(test.number ?? 0)
+    hasher.combine(test.text)
+    hasher.combine(test.wildcard)
+    hasher.combine(test.blank)
   }
 
   private func excelRound(_ value: Double, places: Int, mode: NSDecimalNumber.RoundingMode) -> Double {
