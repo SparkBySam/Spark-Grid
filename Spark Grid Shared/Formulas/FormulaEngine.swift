@@ -572,7 +572,7 @@ final class FormulaEngine {
         var shapeKey: String
 
         if let runMaster, let runMasterExpr, let runMasterDeps,
-           let lastRow, address.row == lastRow + 1 {
+           let previousRow = lastRow, address.row == previousRow + 1 {
           let rowDelta = address.row - runMaster.row
           let colDelta = address.col - runMaster.col
           let expected = FormulaRewriter.adjustedFormulaText(
