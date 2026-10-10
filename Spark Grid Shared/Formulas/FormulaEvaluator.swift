@@ -38,6 +38,10 @@ struct FormulaEvaluator {
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
+  fileprivate final class ArrayEvalCacheBox {
+    var values: [FormulaExpr: [CellValue]] = [:]
+  }
+  var arrayEvaluateCache: ArrayEvalCacheBox?
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {
@@ -118,6 +122,15 @@ struct FormulaEvaluator {
 
   /// Evaluates an expression to one or more values (ranges / broadcast arithmetic).
   private func arrayEvaluate(_ expr: FormulaExpr) -> [CellValue] {
+    if let cache = arrayEvaluateCache, let hit = cache.values[expr] {
+      return hit
+    }
+    let result = arrayEvaluateImpl(expr)
+    arrayEvaluateCache?.values[expr] = result
+    return result
+  }
+
+  private func arrayEvaluateImpl(_ expr: FormulaExpr) -> [CellValue] {
     switch expr {
     case .number, .string, .boolean, .error, .cellRef:
       return [evaluate(expr)]
@@ -157,8 +170,27 @@ struct FormulaEvaluator {
 
   func rangeCellValues(start: FormulaRef, end: FormulaRef) -> [CellValue] {
     let n = normalizedBounds(start: start, end: end)
+    let rows = n.maxRow - n.minRow + 1
+    let cols = n.maxCol - n.minCol + 1
+    let count = rows * cols
+    guard count > 0 else { return [] }
+    if let cache = aggregateRangeCache {
+      let key = AggregateRangeKey(
+        sheet: start.sheet ?? end.sheet,
+        row: n.minRow,
+        col: n.minCol,
+        rows: rows,
+        cols: cols
+      )
+      return cache.rowMajorValues(key: key, count: count) { index in
+        let row = n.minRow + index / cols
+        let col = n.minCol + index % cols
+        var ref = FormulaRef(sheet: start.sheet ?? end.sheet, row: row, col: col, absRow: false, absCol: false)
+        return lookup(ref)
+      }
+    }
     var values: [CellValue] = []
-    values.reserveCapacity((n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1))
+    values.reserveCapacity(count)
     for row in n.minRow...n.maxRow {
       for col in n.minCol...n.maxCol {
         var ref = FormulaRef(sheet: start.sheet, row: row, col: col, absRow: false, absCol: false)

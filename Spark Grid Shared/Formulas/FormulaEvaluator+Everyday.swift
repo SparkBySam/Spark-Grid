@@ -154,6 +154,18 @@ extension FormulaEvaluator {
 
   func evalSUMPRODUCT(_ args: [FormulaExpr]) -> CellValue {
     guard !args.isEmpty else { return .error(.value) }
+    if args.count == 1 {
+      let cacheBox = FormulaEvaluator.ArrayEvalCacheBox()
+      arrayEvaluateCache = cacheBox
+      defer { arrayEvaluateCache = nil }
+      let values = arrayEvaluate(args[0])
+      var total = 0.0
+      for value in values {
+        if case .error(let error) = value { return .error(error) }
+        total += sumProductCoefficient(value)
+      }
+      return .number(total)
+    }
     var matrices: [ValueMatrix] = []
     for arg in args {
       guard let matrix = valueMatrix(arg) else { return .error(.value) }
@@ -327,23 +339,41 @@ extension FormulaEvaluator {
     var memo: [LookupMemoKey: CellValue] = [:]
     let sumValues = snapshotValues(anchor: sum, memo: &memo)
     let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
-    if let cache = aggregateRangeCache,
-       let lookupKeys = aggregateLookupKeys(criteria: tests.map(\.2), tests: tests.map(\.1)) {
-      let criteriaKeys = tests.map { aggregateRangeKey(for: $0.0) }
-      let sumKey = aggregateRangeKey(for: sum)
-      let bucket = cache.sumForCriteria(
-        criteriaRangeKeys: criteriaKeys,
-        sumRangeKey: sumKey,
-        criteriaColumns: rangeSnapshots,
-        sumColumn: sumValues,
-        criteriaKeys: lookupKeys
-      )
-      switch kind {
-      case .sum:
-        return .number(bucket.sum)
-      case .average:
-        guard bucket.count > 0 else { return .error(.divZero) }
-        return .number(bucket.sum / Double(bucket.count))
+    if let cache = aggregateRangeCache {
+      if let lookupKeys = aggregateLookupKeys(criteria: tests.map(\.2), tests: tests.map(\.1)) {
+        let criteriaKeys = tests.map { aggregateRangeKey(for: $0.0) }
+        let sumKey = aggregateRangeKey(for: sum)
+        let bucket = cache.sumForCriteria(
+          criteriaRangeKeys: criteriaKeys,
+          sumRangeKey: sumKey,
+          criteriaColumns: rangeSnapshots,
+          sumColumn: sumValues,
+          criteriaKeys: lookupKeys
+        )
+        switch kind {
+        case .sum:
+          return .number(bucket.sum)
+        case .average:
+          guard bucket.count > 0 else { return .error(.divZero) }
+          return .number(bucket.sum / Double(bucket.count))
+        }
+      }
+      if tests.allSatisfy({ !$0.1.wildcard }) {
+        let bucket = cache.sumByRowFilter(sumColumn: sumValues) { row in
+          for (rangeIndex, test) in tests.map(\.1).enumerated() {
+            let value = rangeSnapshots[rangeIndex][row]
+            if aggregateRowError(value) { return false }
+            if !criteriaMatch(value, test) { return false }
+          }
+          return true
+        }
+        switch kind {
+        case .sum:
+          return .number(bucket.sum)
+        case .average:
+          guard bucket.count > 0 else { return .error(.divZero) }
+          return .number(bucket.sum / Double(bucket.count))
+        }
       }
     }
     let cellCount = sumValues.count

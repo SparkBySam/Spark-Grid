@@ -71,6 +71,8 @@ struct AggregateSumBucket {
 /// One scan per criteria range, then O(1) COUNTIFS / SUMIFS lookups via composite histograms.
 final class FormulaAggregateRangeCache {
   weak var profile: FormulaRecalcProfile?
+  /// Reads cell values directly from the workbook model (no per-cell formula eval).
+  var workbookBulkLoader: ((AggregateRangeKey) -> [CellValue])?
   private var snapshots: [AggregateRangeKey: [CellValue]] = [:]
   private var countIndexes: [CompositeCountIndexKey: [AggregateCriteriaTupleKey: Int]] = [:]
   private var sumIndexes: [CompositeSumIndexKey: [AggregateCriteriaTupleKey: AggregateSumBucket]] = [:]
@@ -107,10 +109,16 @@ final class FormulaAggregateRangeCache {
       return cached
     }
     let buildStart = CFAbsoluteTimeGetCurrent()
-    var values = [CellValue]()
-    values.reserveCapacity(count)
-    for index in 0..<count {
-      values.append(fill(index))
+    let values: [CellValue]
+    if let bulk = workbookBulkLoader?(key), bulk.count == count {
+      values = bulk
+    } else {
+      var built = [CellValue]()
+      built.reserveCapacity(count)
+      for index in 0..<count {
+        built.append(fill(index))
+      }
+      values = built
     }
     snapshots[key] = values
     profile?.aggregateIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
@@ -125,6 +133,21 @@ final class FormulaAggregateRangeCache {
     let indexKey = CompositeCountIndexKey(rangeKeys: rangeKeys)
     let map = countIndexes[indexKey] ?? buildCountIndex(indexKey: indexKey, columns: columns)
     return map[AggregateCriteriaTupleKey(parts: criteriaKeys), default: 0]
+  }
+
+  func sumByRowFilter(
+    sumColumn: [CellValue],
+    includeRow: (Int) -> Bool
+  ) -> AggregateSumBucket {
+    var bucket = AggregateSumBucket()
+    for row in 0..<sumColumn.count {
+      guard includeRow(row) else { continue }
+      let value = sumColumn[row]
+      guard case .number(let number) = value else { continue }
+      bucket.count += 1
+      bucket.sum += number
+    }
+    return bucket
   }
 
   func sumForCriteria(

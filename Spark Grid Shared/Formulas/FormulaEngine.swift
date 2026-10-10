@@ -330,6 +330,35 @@ final class FormulaEngine {
     return literalOrEmpty(raw)
   }
 
+  private func workbookRangeValues(for key: AggregateRangeKey) -> [CellValue] {
+    guard let sheet = workbook.sheets.first(where: {
+      $0.name.lowercased() == key.sheet
+    }) else {
+      return []
+    }
+    var values: [CellValue] = []
+    values.reserveCapacity((key.maxRow - key.minRow + 1) * (key.maxCol - key.minCol + 1))
+    for row in key.minRow...key.maxRow {
+      for col in key.minCol...key.maxCol {
+        let address = CellAddress(row: row, col: col)
+        if let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
+          values.append(stored)
+          continue
+        }
+        if let literal = workbookLiteral(sheet: sheet, address: address) {
+          values.append(literal)
+          continue
+        }
+        if let imported = sheet.cell(at: address).importedFormulaResult {
+          values.append(CellValue.fromImportedExcel(imported))
+          continue
+        }
+        values.append(literalOrEmpty(sheet.cell(at: address).raw))
+      }
+    }
+    return values
+  }
+
   /// Non-formula cells are read from `sheet` and refreshed in the cache.
   /// Returns nil when the cell holds a formula and the caller should use the cache.
   private func literalOnSheet(at address: CellAddress, sheet: Sheet) -> CellValue? {
@@ -345,6 +374,10 @@ final class FormulaEngine {
   }
 
   private func recalculate(addresses: Set<CellAddress>, sheet: Sheet, profile: FormulaRecalcProfile? = nil) {
+    aggregateRangeCache.workbookBulkLoader = { [weak self] key in
+      self?.workbookRangeValues(for: key) ?? []
+    }
+    defer { aggregateRangeCache.workbookBulkLoader = nil }
     let order = topologicalOrder(of: addresses)
     var visiting: Set<CellAddress> = []
     var visited: Set<CellAddress> = []
