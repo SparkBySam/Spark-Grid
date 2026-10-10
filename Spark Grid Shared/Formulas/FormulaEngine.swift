@@ -537,7 +537,6 @@ final class FormulaEngine {
       uniqueKeysWithValues: entries.enumerated().map { ($0.element.0, $0.offset) }
     )
     let cacheLock = NSLock()
-    let profileLock = NSLock()
     let stripLock = NSLock()
 
     DispatchQueue.concurrentPerform(iterations: columnIndices.count) { columnIndex in
@@ -546,6 +545,7 @@ final class FormulaEngine {
         if $0.0.row != $1.0.row { return $0.0.row < $1.0.row }
         return $0.0.col < $1.0.col
       }
+      var localMetrics = BulkIngestLocalMetrics()
       var localStripPlans: [ShapeStripPlan] = []
       var runMaster: CellAddress?
       var runMasterExpr: FormulaExpr?
@@ -553,6 +553,8 @@ final class FormulaEngine {
       var runMasterShapeKey: String?
       var runMembers: [CellAddress] = []
       var lastRow: Int?
+      var runLastExpr: FormulaExpr?
+      var runNextExpectedTrimmed: String?
 
       func flushRun() {
         if let master = runMaster, membersFormFillStrip(runMembers) {
@@ -563,6 +565,23 @@ final class FormulaEngine {
         runMasterDeps = nil
         runMasterShapeKey = nil
         runMembers = []
+        runLastExpr = nil
+        runNextExpectedTrimmed = nil
+      }
+
+      func beginRun(
+        address: CellAddress,
+        expr: FormulaExpr,
+        deps: Set<CellAddress>,
+        shapeKey: String
+      ) {
+        runMaster = address
+        runMasterExpr = expr
+        runMasterDeps = deps
+        runMasterShapeKey = shapeKey
+        runMembers = [address]
+        runLastExpr = expr
+        runNextExpectedTrimmed = prepareRollingStepExpectation(expr: expr, metrics: &localMetrics)
       }
 
       for (address, trimmed) in columnEntries {
@@ -575,23 +594,47 @@ final class FormulaEngine {
            let masterExpr = runMasterExpr,
            let masterDeps = runMasterDeps,
            let previousRow = lastRow,
-           address.row == previousRow + 1 {
-          let rowDelta = address.row - master.row
-          let colDelta = address.col - master.col
-          let expected = FormulaRewriter.adjustedFormulaText(
-            expr: masterExpr,
-            rowDelta: rowDelta,
-            colDelta: colDelta
-          )
-          if expected == trimmed {
-            expr = FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
-            deps = self.shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: colDelta)
+           address.row == previousRow + 1,
+           address.col == master.col {
+          var matched = false
+          if let nextExpected = runNextExpectedTrimmed,
+             let lastExpr = runLastExpr,
+             nextExpected == trimmed {
+            let adjustStart = CFAbsoluteTimeGetCurrent()
+            expr = FormulaRewriter.adjustExpression(lastExpr, rowDelta: 1, colDelta: 0)
+            localMetrics.adjustSeconds += CFAbsoluteTimeGetCurrent() - adjustStart
+            let rowDelta = address.row - master.row
+            deps = self.shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: 0)
             shapeKey = runMasterShapeKey
               ?? FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
-            profileLock.lock()
-            profile?.ingestTemplateCacheHits += 1
-            profileLock.unlock()
+            localMetrics.templateCacheHits += 1
+            localMetrics.rollingVerifyHits += 1
             runMembers.append(address)
+            runLastExpr = expr
+            runNextExpectedTrimmed = prepareRollingStepExpectation(expr: expr, metrics: &localMetrics)
+            matched = true
+          }
+          if !matched {
+            if let filled = fillFollowerMatchesMaster(
+              master: master,
+              masterExpr: masterExpr,
+              masterDeps: masterDeps,
+              address: address,
+              trimmed: trimmed,
+              metrics: &localMetrics
+            ) {
+              expr = filled.expr
+              deps = filled.deps
+              shapeKey = runMasterShapeKey
+                ?? FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
+              localMetrics.templateCacheHits += 1
+              runMembers.append(address)
+              runLastExpr = expr
+              runNextExpectedTrimmed = prepareRollingStepExpectation(expr: expr, metrics: &localMetrics)
+              matched = true
+            }
+          }
+          if matched {
             lastRow = address.row
           } else {
             flushRun()
@@ -602,9 +645,8 @@ final class FormulaEngine {
                 sheetName: sheetName,
                 maxRow: maxRow,
                 maxCol: maxCol,
-                profile: profile,
                 cacheLock: cacheLock,
-                profileLock: profileLock
+                metrics: &localMetrics
               )
             else {
               templates[index] = nil
@@ -614,11 +656,7 @@ final class FormulaEngine {
             expr = parsed.expr
             deps = parsed.deps
             shapeKey = parsed.shapeKey
-            runMaster = address
-            runMasterExpr = expr
-            runMasterDeps = deps
-            runMasterShapeKey = shapeKey
-            runMembers = [address]
+            beginRun(address: address, expr: expr, deps: deps, shapeKey: shapeKey)
             lastRow = address.row
           }
         } else {
@@ -632,9 +670,8 @@ final class FormulaEngine {
               sheetName: sheetName,
               maxRow: maxRow,
               maxCol: maxCol,
-              profile: profile,
               cacheLock: cacheLock,
-              profileLock: profileLock
+              metrics: &localMetrics
             )
           else {
             templates[index] = nil
@@ -644,11 +681,7 @@ final class FormulaEngine {
           expr = parsed.expr
           deps = parsed.deps
           shapeKey = parsed.shapeKey
-          runMaster = address
-          runMasterExpr = expr
-          runMasterDeps = deps
-          runMasterShapeKey = shapeKey
-          runMembers = [address]
+          beginRun(address: address, expr: expr, deps: deps, shapeKey: shapeKey)
           lastRow = address.row
         }
 
@@ -661,8 +694,13 @@ final class FormulaEngine {
         ingestShapeStripPlans.append(contentsOf: localStripPlans)
         stripLock.unlock()
       }
+      mergeBulkIngestMetrics(localMetrics, into: profile)
     }
 
+    let graphStart = CFAbsoluteTimeGetCurrent()
+    formulaAST.reserveCapacity(formulaAST.count + count)
+    dependencies.reserveCapacity(dependencies.count + count)
+    sheetShapeAnchorKeys.reserveCapacity(sheetShapeAnchorKeys.count + count)
     for index in 0..<count {
       let address = entries[index].0
       guard let template = templates[index] else {
@@ -674,13 +712,17 @@ final class FormulaEngine {
       if let shapeKey = shapeKeys[index] {
         sheetShapeAnchorKeys[address] = shapeKey
       }
-      for dep in template.deps {
-        dependents[dep, default: []].insert(address)
-      }
       if let snapshot = sheet.cell(at: address).importedFormulaResult {
         valueCache[address] = CellValue.fromImportedExcel(snapshot)
       }
     }
+    dependents.removeAll(keepingCapacity: true)
+    for (formula, deps) in dependencies {
+      for dep in deps {
+        dependents[dep, default: []].insert(formula)
+      }
+    }
+    profile?.ingestGraphBuildSeconds += CFAbsoluteTimeGetCurrent() - graphStart
   }
 
   private struct BulkIngestMasterParse {
@@ -689,15 +731,65 @@ final class FormulaEngine {
     var shapeKey: String
   }
 
+  private struct BulkIngestLocalMetrics {
+    var parseSeconds: Double = 0
+    var dependencySeconds: Double = 0
+    var verifySeconds: Double = 0
+    var adjustSeconds: Double = 0
+    var templateCacheHits: Int = 0
+    var rollingVerifyHits: Int = 0
+  }
+
+  private func mergeBulkIngestMetrics(_ local: BulkIngestLocalMetrics, into profile: FormulaRecalcProfile?) {
+    guard let profile else { return }
+    profile.ingestParseSeconds += local.parseSeconds
+    profile.ingestDependencySeconds += local.dependencySeconds
+    profile.ingestVerifySeconds += local.verifySeconds
+    profile.ingestAdjustSeconds += local.adjustSeconds
+    profile.ingestTemplateCacheHits += local.templateCacheHits
+    profile.ingestRollingVerifyHits += local.rollingVerifyHits
+  }
+
+  /// Master-relative fill check: one `adjustExpression`, then compare serialized text to stored raw.
+  private func fillFollowerMatchesMaster(
+    master: CellAddress,
+    masterExpr: FormulaExpr,
+    masterDeps: Set<CellAddress>,
+    address: CellAddress,
+    trimmed: String,
+    metrics: inout BulkIngestLocalMetrics
+  ) -> (expr: FormulaExpr, deps: Set<CellAddress>)? {
+    let rowDelta = address.row - master.row
+    let colDelta = address.col - master.col
+    let adjustStart = CFAbsoluteTimeGetCurrent()
+    let expr = FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
+    metrics.adjustSeconds += CFAbsoluteTimeGetCurrent() - adjustStart
+    let verifyStart = CFAbsoluteTimeGetCurrent()
+    let expected = FormulaRewriter.serializedFormulaText(expr: expr)
+    metrics.verifySeconds += CFAbsoluteTimeGetCurrent() - verifyStart
+    guard expected == trimmed else { return nil }
+    let deps = shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: colDelta)
+    return (expr, deps)
+  }
+
+  private func prepareRollingStepExpectation(
+    expr: FormulaExpr,
+    metrics: inout BulkIngestLocalMetrics
+  ) -> String {
+    let verifyStart = CFAbsoluteTimeGetCurrent()
+    let next = FormulaRewriter.adjustedFormulaText(expr: expr, rowDelta: 1, colDelta: 0)
+    metrics.verifySeconds += CFAbsoluteTimeGetCurrent() - verifyStart
+    return next
+  }
+
   private func parseBulkIngestMaster(
     trimmed: String,
     address: CellAddress,
     sheetName: String,
     maxRow: Int,
     maxCol: Int,
-    profile: FormulaRecalcProfile?,
     cacheLock: NSLock,
-    profileLock: NSLock
+    metrics: inout BulkIngestLocalMetrics
   ) -> BulkIngestMasterParse? {
     let templateKey = ingestTemplateKey(
       sheetName: sheetName,
@@ -709,17 +801,17 @@ final class FormulaEngine {
     let cached = ingestTemplateCache[templateKey]
     cacheLock.unlock()
     if let cached {
-      profileLock.lock()
-      profile?.ingestTemplateCacheHits += 1
-      profileLock.unlock()
+      metrics.templateCacheHits += 1
+      let verifyStart = CFAbsoluteTimeGetCurrent()
       let shapeKey = FormulaRewriter.shapeAnchorKey(expr: cached.expr, anchor: address)
+      metrics.verifySeconds += CFAbsoluteTimeGetCurrent() - verifyStart
       return BulkIngestMasterParse(expr: cached.expr, deps: cached.deps, shapeKey: shapeKey)
     }
 
     do {
       let parseStart = CFAbsoluteTimeGetCurrent()
       let expr = try FormulaParser.parse(trimmed)
-      let parseElapsed = CFAbsoluteTimeGetCurrent() - parseStart
+      metrics.parseSeconds += CFAbsoluteTimeGetCurrent() - parseStart
       let depStart = CFAbsoluteTimeGetCurrent()
       let collected = FormulaDependencies.collectForIngest(
         from: expr,
@@ -731,8 +823,10 @@ final class FormulaEngine {
           self?.namedRangeExpr(named: name)
         }
       )
-      let depElapsed = CFAbsoluteTimeGetCurrent() - depStart
+      metrics.dependencySeconds += CFAbsoluteTimeGetCurrent() - depStart
+      let verifyStart = CFAbsoluteTimeGetCurrent()
       let shapeKey = FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
+      metrics.verifySeconds += CFAbsoluteTimeGetCurrent() - verifyStart
       let template = IngestedFormulaTemplate(
         expr: expr,
         deps: collected.deps,
@@ -741,10 +835,6 @@ final class FormulaEngine {
       cacheLock.lock()
       ingestTemplateCache[templateKey] = template
       cacheLock.unlock()
-      profileLock.lock()
-      profile?.ingestParseSeconds += parseElapsed
-      profile?.ingestDependencySeconds += depElapsed
-      profileLock.unlock()
       return BulkIngestMasterParse(expr: expr, deps: collected.deps, shapeKey: shapeKey)
     } catch {
       return nil
