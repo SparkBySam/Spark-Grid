@@ -387,6 +387,7 @@ final class FormulaEngine {
     let order = topologicalOrder(of: addresses)
     var visiting: Set<CellAddress> = []
     var visited: Set<CellAddress> = []
+    var evaluator: FormulaEvaluator!
 
     func eval(_ address: CellAddress) {
       if visited.contains(address) { return }
@@ -418,23 +419,24 @@ final class FormulaEngine {
         }
       }
 
-      var evaluator = FormulaEvaluator { [weak self] ref in
-        guard let self else { return .blank }
-        return self.resolve(ref, activeSheet: sheet, localEval: eval)
-      }
-      evaluator.evaluationOrigin = address
-      evaluator.namedRangeLookup = { [weak self] name in
-        self?.namedRangeExpr(named: name)
-      }
-      evaluator.sheetExtent = { [weak self] sheetName in
-        guard let self else { return (999, 25) }
-        return self.extent(for: sheetName ?? self.activeSheetName)
-      }
-      evaluator.aggregateRangeCache = aggregateRangeCache
-      evaluator.lookupTableCache = lookupTableCache
-      evaluator.recalcProfile = profile
+      evaluator.prepareForCellEvaluation(origin: address)
       valueCache[address] = evaluator.evaluate(expr)
     }
+
+    evaluator = FormulaEvaluator { [weak self] ref in
+      guard let self else { return .blank }
+      return self.resolve(ref, activeSheet: sheet, localEval: eval)
+    }
+    evaluator.namedRangeLookup = { [weak self] name in
+      self?.namedRangeExpr(named: name)
+    }
+    evaluator.sheetExtent = { [weak self] sheetName in
+      guard let self else { return (999, 25) }
+      return self.extent(for: sheetName ?? self.activeSheetName)
+    }
+    evaluator.aggregateRangeCache = aggregateRangeCache
+    evaluator.lookupTableCache = lookupTableCache
+    evaluator.recalcProfile = profile
 
     for address in order {
       eval(address)

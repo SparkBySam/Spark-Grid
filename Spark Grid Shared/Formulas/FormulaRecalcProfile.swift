@@ -16,6 +16,10 @@ final class FormulaRecalcProfile {
   var foreignFormulaEvaluations: Int = 0
   /// `IF(Cn="","",…)` KPI guard: skipped heavy false branch on blank rows.
   var ifBlankEqualityFastHits: Int = 0
+  /// `COUNTIFS(…)+COUNTIFS(…)+…` fused: shared criteria evaluated once per sum tree.
+  var countifsFusedAddHits: Int = 0
+  /// `IFERROR(VLOOKUP(…),…)` without nested `evalCall` dispatch.
+  var iferrorVlookupFastHits: Int = 0
   /// `SUMPRODUCT` boolean-product fast path (masked histogram / column snapshots).
   var sumproductBooleanHits: Int = 0
   /// Boolean-shaped `SUMPRODUCT` that did not use the fast path (parse miss or unsupported shape).
@@ -31,7 +35,7 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | eval %@",
+      format: "total %.2fs | ingest %.2fs aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | cntifsFuse %d iferrVlk %d | eval %@",
       totalSeconds,
       ingestSeconds,
       aggregateIndexBuildSeconds,
@@ -45,6 +49,8 @@ final class FormulaRecalcProfile {
       sumproductBooleanHits,
       sumproductBooleanFallbacks,
       ifBlankEqualityFastHits,
+      countifsFusedAddHits,
+      iferrorVlookupFastHits,
       topEval.isEmpty ? "—" : topEval
     )
   }

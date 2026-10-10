@@ -38,6 +38,14 @@ struct FormulaEvaluator {
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
+  /// Repeated `$A5`-style refs within one formula (12× `COUNTIFS` chains, etc.).
+  private var scalarRefMemo: [FormulaRef: CellValue] = [:]
+
+  mutating func prepareForCellEvaluation(origin: CellAddress?) {
+    evaluationOrigin = origin
+    scalarRefMemo.removeAll(keepingCapacity: true)
+  }
+
   final class ArrayEvalCacheBox {
     var values: [FormulaExpr: [CellValue]] = [:]
   }
@@ -56,7 +64,10 @@ struct FormulaEvaluator {
       guard let resolved = namedRangeLookup(name) else { return .error(.name) }
       return evaluate(resolved)
     case .cellRef(let ref):
-      return lookup(ref)
+      if let cached = scalarRefMemo[ref] { return cached }
+      let value = lookup(ref)
+      scalarRefMemo[ref] = value
+      return value
     case .range:
       // Bare ranges are multi-valued; scalar context matches Sheets `#VALUE!`.
       return .error(.arrayResult)
@@ -79,6 +90,9 @@ struct FormulaEvaluator {
   }
 
   private func evalBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> CellValue {
+    if op == .add, let fused = tryEvalFusedCountIFSSum(lhsExpr, rhsExpr) {
+      return fused
+    }
     let values = arrayBinary(op, lhsExpr, rhsExpr, cache: nil)
     if values.count == 1 { return values[0] }
     if values.isEmpty { return .blank }
@@ -252,6 +266,20 @@ struct FormulaEvaluator {
     return nil
   }
 
+  /// `IFERROR(VLOOKUP(needle, Config!…, col, FALSE), fallback)` — KPI config columns.
+  private func fastIFERRORVLOOKUP(_ args: [FormulaExpr]) -> CellValue? {
+    guard case .call(let name, let vargs) = unwrapFormulaExpr(args[0]),
+          name.uppercased() == "VLOOKUP",
+          vargs.count >= 3, vargs.count <= 4
+    else { return nil }
+    let value = tableLookup(vargs, horizontal: false)
+    recalcProfile?.iferrorVlookupFastHits += 1
+    if case .error = value {
+      return evaluate(args[1])
+    }
+    return value
+  }
+
   private func isStaticEmptyLiteral(_ expr: FormulaExpr) -> Bool {
     switch unwrapFormulaExpr(expr) {
     case .string(let text):
@@ -345,6 +373,9 @@ struct FormulaEvaluator {
       return .bool(false)
     case "IFERROR":
       guard args.count == 2 else { return .error(.value) }
+      if let fast = fastIFERRORVLOOKUP(args) {
+        return fast
+      }
       let value = evaluate(args[0])
       if case .error = value {
         return evaluate(args[1])
