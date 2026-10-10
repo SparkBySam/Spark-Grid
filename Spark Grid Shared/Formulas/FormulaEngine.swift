@@ -11,8 +11,9 @@ final class FormulaEngine {
   private let aggregateRangeCache = FormulaAggregateRangeCache()
   private let lookupTableCache = FormulaLookupTableCache()
   private struct IngestedFormulaTemplate {
-    /// Parsed expression normalized to row 0 / column 0 via `FormulaRewriter.adjust`.
     var expr: FormulaExpr
+    var deps: Set<CellAddress>
+    var ranges: [CellRange]
   }
   private var ingestTemplateCache: [String: IngestedFormulaTemplate] = [:]
   /// Results from `recalculateEntireWorkbook` (and incremental edits), keyed by sheet name.
@@ -210,15 +211,8 @@ final class FormulaEngine {
     name.lowercased()
   }
 
-  private func ingestTemplateKey(
-    sheetName: String,
-    address: CellAddress,
-    maxRow: Int,
-    maxCol: Int,
-    formula: String
-  ) -> String {
-    let normalized = FormulaRewriter.adjust(formula, rowDelta: -address.row, colDelta: -address.col)
-    return "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}\(normalized)"
+  private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String) -> String {
+    "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}\(formula)"
   }
 
   private func storedRecalculatedValue(sheetName: String, at address: CellAddress) -> CellValue? {
@@ -275,50 +269,40 @@ final class FormulaEngine {
         let maxCol = sheet.effectiveColumnCount - 1
         let templateKey = ingestTemplateKey(
           sheetName: activeSheetName,
-          address: address,
           maxRow: maxRow,
           maxCol: maxCol,
           formula: trimmed
         )
-        let exprNorm: FormulaExpr
+        let template: IngestedFormulaTemplate
         if let cached = ingestTemplateCache[templateKey] {
-          exprNorm = cached.expr
+          template = cached
         } else {
-          let normalized = FormulaRewriter.adjust(
-            trimmed,
-            rowDelta: -address.row,
-            colDelta: -address.col
+          let expr = try FormulaParser.parse(trimmed)
+          let deps = FormulaDependencies.collect(
+            from: expr,
+            activeSheetName: activeSheetName,
+            maxRow: maxRow,
+            maxCol: maxCol,
+            namedRangeLookup: { [weak self] name in
+              self?.namedRangeExpr(named: name)
+            }
           )
-          exprNorm = try FormulaParser.parse(normalized)
-          ingestTemplateCache[templateKey] = IngestedFormulaTemplate(expr: exprNorm)
+          let ranges = FormulaDependencies.collectWatchedRanges(
+            from: expr,
+            activeSheetName: activeSheetName,
+            maxRow: maxRow,
+            maxCol: maxCol,
+            namedRangeLookup: { [weak self] name in
+              self?.namedRangeExpr(named: name)
+            }
+          )
+          template = IngestedFormulaTemplate(expr: expr, deps: deps, ranges: ranges)
+          ingestTemplateCache[templateKey] = template
         }
-        let expr = FormulaRewriter.shiftExpression(
-          exprNorm,
-          rowDelta: address.row,
-          colDelta: address.col
-        )
-        let deps = FormulaDependencies.collect(
-          from: expr,
-          activeSheetName: activeSheetName,
-          maxRow: maxRow,
-          maxCol: maxCol,
-          namedRangeLookup: { [weak self] name in
-            self?.namedRangeExpr(named: name)
-          }
-        )
-        let ranges = FormulaDependencies.collectWatchedRanges(
-          from: expr,
-          activeSheetName: activeSheetName,
-          maxRow: maxRow,
-          maxCol: maxCol,
-          namedRangeLookup: { [weak self] name in
-            self?.namedRangeExpr(named: name)
-          }
-        )
-        formulaAST[address] = expr
-        dependencies[address] = deps
-        dependencyRanges[address] = ranges
-        for dep in deps {
+        formulaAST[address] = template.expr
+        dependencies[address] = template.deps
+        dependencyRanges[address] = template.ranges
+        for dep in template.deps {
           dependents[dep, default: []].insert(address)
         }
         if let snapshot = sheet.cell(at: address).importedFormulaResult {
@@ -403,7 +387,6 @@ final class FormulaEngine {
     let order = topologicalOrder(of: addresses)
     var visiting: Set<CellAddress> = []
     var visited: Set<CellAddress> = []
-    let aggregateCountMemoBox = FormulaEvaluator.AggregateCountMemoBox()
 
     func eval(_ address: CellAddress) {
       if visited.contains(address) { return }
@@ -450,7 +433,6 @@ final class FormulaEngine {
       evaluator.aggregateRangeCache = aggregateRangeCache
       evaluator.lookupTableCache = lookupTableCache
       evaluator.recalcProfile = profile
-      evaluator.aggregateCountMemoBox = aggregateCountMemoBox
       valueCache[address] = evaluator.evaluate(expr)
     }
 

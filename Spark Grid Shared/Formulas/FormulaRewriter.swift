@@ -47,12 +47,6 @@ enum FormulaRewriter {
     }
   }
 
-  /// Shifts every cell/range reference in a parsed expression (fill/paste semantics).
-  static func shiftExpression(_ expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> FormulaExpr {
-    guard rowDelta != 0 || colDelta != 0 else { return expr }
-    return adjustExpr(expr, rowDelta: rowDelta, colDelta: colDelta)
-  }
-
   /// Returns adjusted formula text (including leading `=`), or the original raw if not a formula / unparseable.
   static func adjust(_ raw: String, rowDelta: Int, colDelta: Int) -> String {
     guard FormulaSyntax.isFormula(raw) else { return raw }
