@@ -156,9 +156,7 @@ extension FormulaEvaluator {
     guard !args.isEmpty else { return .error(.value) }
     if args.count == 1 {
       let cacheBox = FormulaEvaluator.ArrayEvalCacheBox()
-      arrayEvaluateCache = cacheBox
-      defer { arrayEvaluateCache = nil }
-      let values = arrayEvaluate(args[0])
+      let values = arrayEvaluate(args[0], cache: cacheBox)
       var total = 0.0
       for value in values {
         if case .error(let error) = value { return .error(error) }

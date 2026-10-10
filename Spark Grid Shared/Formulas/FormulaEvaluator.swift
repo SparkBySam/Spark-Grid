@@ -41,7 +41,6 @@ struct FormulaEvaluator {
   final class ArrayEvalCacheBox {
     var values: [FormulaExpr: [CellValue]] = [:]
   }
-  var arrayEvaluateCache: ArrayEvalCacheBox?
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {
@@ -71,7 +70,7 @@ struct FormulaEvaluator {
   }
 
   private func evalUnary(_ op: UnaryOp, _ expr: FormulaExpr) -> CellValue {
-    let values = arrayEvaluate(expr)
+    let values = arrayEvaluate(expr, cache: nil)
     if values.count == 1 {
       return applyUnary(op, to: values[0])
     }
@@ -80,7 +79,7 @@ struct FormulaEvaluator {
   }
 
   private func evalBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> CellValue {
-    let values = arrayBinary(op, lhsExpr, rhsExpr)
+    let values = arrayBinary(op, lhsExpr, rhsExpr, cache: nil)
     if values.count == 1 { return values[0] }
     if values.isEmpty { return .blank }
     // Sheets/Excel: multi-value result in one cell is not silently collapsed.
@@ -121,36 +120,41 @@ struct FormulaEvaluator {
   }
 
   /// Evaluates an expression to one or more values (ranges / broadcast arithmetic).
-  private func arrayEvaluate(_ expr: FormulaExpr) -> [CellValue] {
-    if let cache = arrayEvaluateCache, let hit = cache.values[expr] {
+  func arrayEvaluate(_ expr: FormulaExpr, cache: ArrayEvalCacheBox?) -> [CellValue] {
+    if let cache, let hit = cache.values[expr] {
       return hit
     }
-    let result = arrayEvaluateImpl(expr)
-    arrayEvaluateCache?.values[expr] = result
+    let result = arrayEvaluateImpl(expr, cache: cache)
+    cache?.values[expr] = result
     return result
   }
 
-  private func arrayEvaluateImpl(_ expr: FormulaExpr) -> [CellValue] {
+  private func arrayEvaluateImpl(_ expr: FormulaExpr, cache: ArrayEvalCacheBox?) -> [CellValue] {
     switch expr {
     case .number, .string, .boolean, .error, .cellRef:
       return [evaluate(expr)]
     case .namedRange(let name):
       guard let resolved = namedRangeLookup(name) else { return [.error(.name)] }
-      return arrayEvaluate(resolved)
+      return arrayEvaluate(resolved, cache: cache)
     case .range(let start, let end):
       return rangeCellValues(start: start, end: end)
     case .unary(let op, let inner):
-      return arrayEvaluate(inner).map { applyUnary(op, to: $0) }
+      return arrayEvaluate(inner, cache: cache).map { applyUnary(op, to: $0) }
     case .binary(let op, let lhs, let rhs):
-      return arrayBinary(op, lhs, rhs)
+      return arrayBinary(op, lhs, rhs, cache: cache)
     case .call:
       return [evaluate(expr)]
     }
   }
 
-  private func arrayBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> [CellValue] {
-    let lhs = arrayEvaluate(lhsExpr)
-    let rhs = arrayEvaluate(rhsExpr)
+  private func arrayBinary(
+    _ op: BinaryOp,
+    _ lhsExpr: FormulaExpr,
+    _ rhsExpr: FormulaExpr,
+    cache: ArrayEvalCacheBox?
+  ) -> [CellValue] {
+    let lhs = arrayEvaluate(lhsExpr, cache: cache)
+    let rhs = arrayEvaluate(rhsExpr, cache: cache)
     if let err = lhs.first(where: \.isError) { return [err] }
     if let err = rhs.first(where: \.isError) { return [err] }
 
@@ -1008,7 +1012,7 @@ struct FormulaEvaluator {
         resolved = arg
       }
       // Expands ranges and broadcast arithmetic like `(A2+A6+A7)*(B3:B5)`.
-      values.append(contentsOf: arrayEvaluate(resolved))
+      values.append(contentsOf: arrayEvaluate(resolved, cache: nil))
     }
     return values
   }
