@@ -47,6 +47,27 @@ enum FormulaRewriter {
     }
   }
 
+  /// Formula text normalized to a sheet anchor (shared fill / batch shape key).
+  static func shapeAnchorKey(raw: String, anchor: CellAddress) -> String {
+    adjust(raw, rowDelta: -anchor.row, colDelta: -anchor.col)
+  }
+
+  /// Anchor key from an already-parsed expression (avoids re-parse during shape-strip planning).
+  static func shapeAnchorKey(expr: FormulaExpr, anchor: CellAddress) -> String {
+    let anchored = adjustExpression(expr, rowDelta: -anchor.row, colDelta: -anchor.col)
+    return serialize(anchored)
+  }
+
+  /// Expected stored formula text after shifting `expr` by row/column delta.
+  static func adjustedFormulaText(expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> String {
+    "=" + serialize(adjustExpression(expr, rowDelta: rowDelta, colDelta: colDelta))
+  }
+
+  /// Shift a parsed expression by relative row/column delta (fill / batch eval only).
+  static func adjustExpression(_ expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> FormulaExpr {
+    adjustExpr(expr, rowDelta: rowDelta, colDelta: colDelta)
+  }
+
   /// Returns adjusted formula text (including leading `=`), or the original raw if not a formula / unparseable.
   static func adjust(_ raw: String, rowDelta: Int, colDelta: Int) -> String {
     guard FormulaSyntax.isFormula(raw) else { return raw }

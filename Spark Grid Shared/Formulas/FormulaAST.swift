@@ -1,7 +1,7 @@
 import Foundation
 
 /// A cell reference inside a formula, optionally sheet-qualified, with absolute flags.
-nonisolated struct FormulaRef: Equatable, Sendable {
+nonisolated struct FormulaRef: Equatable, Hashable, Sendable {
   /// Sentinel for open-ended row/column bounds (e.g. `A2:A`, `A:A`).
   static let open = Int.max / 4
 
@@ -43,7 +43,7 @@ nonisolated struct FormulaRef: Equatable, Sendable {
   }
 }
 
-nonisolated indirect enum FormulaExpr: Equatable {
+nonisolated indirect enum FormulaExpr: Equatable, Hashable {
   case number(Double)
   case string(String)
   case boolean(Bool)
@@ -56,12 +56,12 @@ nonisolated indirect enum FormulaExpr: Equatable {
   case call(String, [FormulaExpr])
 }
 
-nonisolated enum UnaryOp: Equatable {
+nonisolated enum UnaryOp: Equatable, Hashable {
   case negate
   case plus
 }
 
-nonisolated enum BinaryOp: Equatable {
+nonisolated enum BinaryOp: Equatable, Hashable {
   case add
   case subtract
   case multiply

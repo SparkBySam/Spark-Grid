@@ -33,6 +33,19 @@ struct FormulaEvaluator {
   var sheetExtent: SheetExtentLookup = { _ in (maxRow: 999, maxCol: 25) }
   /// Cell being evaluated (`COLUMN()` / `ROW()` with no argument).
   var evaluationOrigin: CellAddress?
+  /// Shared range snapshots for COUNTIFS / SUMIFS-style functions (one scan per range per batch).
+  var aggregateRangeCache: FormulaAggregateRangeCache?
+  /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
+  var lookupTableCache: FormulaLookupTableCache?
+  weak var recalcProfile: FormulaRecalcProfile?
+
+  mutating func prepareForCellEvaluation(origin: CellAddress?) {
+    evaluationOrigin = origin
+  }
+
+  final class ArrayEvalCacheBox {
+    var values: [FormulaExpr: [CellValue]] = [:]
+  }
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {
@@ -62,7 +75,7 @@ struct FormulaEvaluator {
   }
 
   private func evalUnary(_ op: UnaryOp, _ expr: FormulaExpr) -> CellValue {
-    let values = arrayEvaluate(expr)
+    let values = arrayEvaluate(expr, cache: nil)
     if values.count == 1 {
       return applyUnary(op, to: values[0])
     }
@@ -71,7 +84,7 @@ struct FormulaEvaluator {
   }
 
   private func evalBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> CellValue {
-    let values = arrayBinary(op, lhsExpr, rhsExpr)
+    let values = arrayBinary(op, lhsExpr, rhsExpr, cache: nil)
     if values.count == 1 { return values[0] }
     if values.isEmpty { return .blank }
     // Sheets/Excel: multi-value result in one cell is not silently collapsed.
@@ -112,27 +125,41 @@ struct FormulaEvaluator {
   }
 
   /// Evaluates an expression to one or more values (ranges / broadcast arithmetic).
-  private func arrayEvaluate(_ expr: FormulaExpr) -> [CellValue] {
+  func arrayEvaluate(_ expr: FormulaExpr, cache: ArrayEvalCacheBox?) -> [CellValue] {
+    if let cache, let hit = cache.values[expr] {
+      return hit
+    }
+    let result = arrayEvaluateImpl(expr, cache: cache)
+    cache?.values[expr] = result
+    return result
+  }
+
+  private func arrayEvaluateImpl(_ expr: FormulaExpr, cache: ArrayEvalCacheBox?) -> [CellValue] {
     switch expr {
     case .number, .string, .boolean, .error, .cellRef:
       return [evaluate(expr)]
     case .namedRange(let name):
       guard let resolved = namedRangeLookup(name) else { return [.error(.name)] }
-      return arrayEvaluate(resolved)
+      return arrayEvaluate(resolved, cache: cache)
     case .range(let start, let end):
       return rangeCellValues(start: start, end: end)
     case .unary(let op, let inner):
-      return arrayEvaluate(inner).map { applyUnary(op, to: $0) }
+      return arrayEvaluate(inner, cache: cache).map { applyUnary(op, to: $0) }
     case .binary(let op, let lhs, let rhs):
-      return arrayBinary(op, lhs, rhs)
+      return arrayBinary(op, lhs, rhs, cache: cache)
     case .call:
       return [evaluate(expr)]
     }
   }
 
-  private func arrayBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> [CellValue] {
-    let lhs = arrayEvaluate(lhsExpr)
-    let rhs = arrayEvaluate(rhsExpr)
+  private func arrayBinary(
+    _ op: BinaryOp,
+    _ lhsExpr: FormulaExpr,
+    _ rhsExpr: FormulaExpr,
+    cache: ArrayEvalCacheBox?
+  ) -> [CellValue] {
+    let lhs = arrayEvaluate(lhsExpr, cache: cache)
+    let rhs = arrayEvaluate(rhsExpr, cache: cache)
     if let err = lhs.first(where: \.isError) { return [err] }
     if let err = rhs.first(where: \.isError) { return [err] }
 
@@ -152,8 +179,27 @@ struct FormulaEvaluator {
 
   func rangeCellValues(start: FormulaRef, end: FormulaRef) -> [CellValue] {
     let n = normalizedBounds(start: start, end: end)
+    let rows = n.maxRow - n.minRow + 1
+    let cols = n.maxCol - n.minCol + 1
+    let count = rows * cols
+    guard count > 0 else { return [] }
+    if let cache = aggregateRangeCache {
+      let key = AggregateRangeKey(
+        sheet: start.sheet ?? end.sheet,
+        row: n.minRow,
+        col: n.minCol,
+        rows: rows,
+        cols: cols
+      )
+      return cache.rowMajorValues(key: key, count: count) { index in
+        let row = n.minRow + index / cols
+        let col = n.minCol + index % cols
+        var ref = FormulaRef(sheet: start.sheet ?? end.sheet, row: row, col: col, absRow: false, absCol: false)
+        return lookup(ref)
+      }
+    }
     var values: [CellValue] = []
-    values.reserveCapacity((n.maxRow - n.minRow + 1) * (n.maxCol - n.minCol + 1))
+    values.reserveCapacity(count)
     for row in n.minRow...n.maxRow {
       for col in n.minCol...n.maxCol {
         var ref = FormulaRef(sheet: start.sheet, row: row, col: col, absRow: false, absCol: false)
@@ -189,10 +235,90 @@ struct FormulaEvaluator {
     }
   }
 
+  /// `IF(Cn="","",…)` — skip heavy false-branch work on blank KPI month rows.
+  private func fastIFBlankEquality(_ args: [FormulaExpr]) -> CellValue? {
+    guard args.count == 3 else { return nil }
+    guard isStaticEmptyLiteral(args[1]) else { return nil }
+    guard let ref = blankEqualityGuardRef(args[0]) else { return nil }
+    let value = lookup(ref)
+    if valueIsBlankForIfGuard(value) {
+      recalcProfile?.ifBlankEqualityFastHits += 1
+      return .string("")
+    }
+    recalcProfile?.ifBlankEqualityFastHits += 1
+    return evaluate(args[2])
+  }
+
+  /// `Cn=""` or `""=Cn` with a single cell reference (KPI month lookup guard).
+  private func blankEqualityGuardRef(_ condition: FormulaExpr) -> FormulaRef? {
+    guard case .binary(.eq, let lhs, let rhs) = unwrapFormulaExpr(condition) else { return nil }
+    if isStaticEmptyLiteral(rhs), let ref = formulaCellRef(lhs) { return ref }
+    if isStaticEmptyLiteral(lhs), let ref = formulaCellRef(rhs) { return ref }
+    return nil
+  }
+
+  /// `IFERROR(VLOOKUP(needle, Config!…, col, FALSE), fallback)` — KPI config columns.
+  private func fastIFERRORVLOOKUP(_ args: [FormulaExpr]) -> CellValue? {
+    guard case .call(let name, let vargs) = unwrapFormulaExpr(args[0]),
+          name.uppercased() == "VLOOKUP",
+          vargs.count >= 3, vargs.count <= 4
+    else { return nil }
+    let value = tableLookup(vargs, horizontal: false)
+    recalcProfile?.iferrorVlookupFastHits += 1
+    if case .error = value {
+      return evaluate(args[1])
+    }
+    return value
+  }
+
+  private func isStaticEmptyLiteral(_ expr: FormulaExpr) -> Bool {
+    switch unwrapFormulaExpr(expr) {
+    case .string(let text):
+      return text.isEmpty
+    default:
+      return false
+    }
+  }
+
+  private func unwrapFormulaExpr(_ expr: FormulaExpr) -> FormulaExpr {
+    if case .unary(.plus, let inner) = expr { return unwrapFormulaExpr(inner) }
+    return expr
+  }
+
+  private func formulaCellRef(_ expr: FormulaExpr) -> FormulaRef? {
+    switch unwrapFormulaExpr(expr) {
+    case .cellRef(let ref):
+      return ref
+    default:
+      return nil
+    }
+  }
+
+  private func valueIsBlankForIfGuard(_ value: CellValue) -> Bool {
+    switch value {
+    case .blank:
+      return true
+    case .string(let text):
+      return text.isEmpty
+    default:
+      return false
+    }
+  }
+
   private func evalCall(_ name: String, _ args: [FormulaExpr]) -> CellValue {
+    let profileStart = recalcProfile != nil ? CFAbsoluteTimeGetCurrent() : 0
+    let result = evalCallBody(name, args)
+    if let profile = recalcProfile {
+      profile.recordEval(function: name.uppercased(), seconds: CFAbsoluteTimeGetCurrent() - profileStart)
+    }
+    return result
+  }
+
+  private func evalCallBody(_ name: String, _ args: [FormulaExpr]) -> CellValue {
     switch name {
     case "SUM": return aggregate(args, skipNonNumeric: true) { $0 + $1 }
     case "AVERAGE":
+      if let fast = fastAverageIfPossible(args) { return fast }
       var sum = 0.0
       var count = 0
       for value in flatten(args) {
@@ -223,6 +349,9 @@ struct FormulaEvaluator {
     case "MAX": return extreme(args, pickMin: false)
     case "IF":
       guard args.count >= 2, args.count <= 3 else { return .error(.value) }
+      if args.count == 3, let fast = fastIFBlankEquality(args) {
+        return fast
+      }
       let condition = evaluate(args[0])
       if case .error = condition { return condition }
       guard let flag = condition.asBool else { return .error(.value) }
@@ -235,6 +364,9 @@ struct FormulaEvaluator {
       return .bool(false)
     case "IFERROR":
       guard args.count == 2 else { return .error(.value) }
+      if let fast = fastIFERRORVLOOKUP(args) {
+        return fast
+      }
       let value = evaluate(args[0])
       if case .error = value {
         return evaluate(args[1])
@@ -752,6 +884,29 @@ struct FormulaEvaluator {
     guard index >= 1, index <= span else { return .error(.ref) }
 
     let resultOffset = (horizontal ? n.minRow : n.minCol) + index - 1
+    if exact, let cache = lookupTableCache {
+      let tableKey = LookupTableKey(
+        sheet: (start.sheet ?? "").lowercased(),
+        minRow: n.minRow,
+        minCol: n.minCol,
+        maxRow: n.maxRow,
+        maxCol: n.maxCol,
+        resultIndex: index,
+        horizontal: horizontal
+      )
+      if let hit = cache.exactLookup(key: tableKey, needle: needle, build: {
+        buildExactLookupMap(
+          horizontal: horizontal,
+          bounds: n,
+          start: start,
+          resultOffset: resultOffset
+        )
+      }) {
+        return hit
+      }
+      return .error(.na)
+    }
+
     var approximate: (key: Double, value: CellValue)?
     let outerStart = horizontal ? n.minCol : n.minRow
     let outerEnd = horizontal ? n.maxCol : n.maxRow
@@ -789,6 +944,39 @@ struct FormulaEvaluator {
 
     if exact { return .error(.na) }
     return approximate?.value ?? .error(.na)
+  }
+
+  private func buildExactLookupMap(
+    horizontal: Bool,
+    bounds: (minRow: Int, minCol: Int, maxRow: Int, maxCol: Int),
+    start: FormulaRef,
+    resultOffset: Int
+  ) -> [AggregateValueKey: CellValue] {
+    var map: [AggregateValueKey: CellValue] = [:]
+    let outerStart = horizontal ? bounds.minCol : bounds.minRow
+    let outerEnd = horizontal ? bounds.maxCol : bounds.maxRow
+    for position in outerStart...outerEnd {
+      let keyRef = FormulaRef(
+        sheet: start.sheet,
+        row: horizontal ? bounds.minRow : position,
+        col: horizontal ? position : bounds.minCol,
+        absRow: false,
+        absCol: false
+      )
+      let key = lookup(keyRef)
+      if case .error = key { continue }
+      guard let keyIndex = AggregateValueKey.from(cellValue: key) else { continue }
+      if map[keyIndex] != nil { continue }
+      let result = lookup(FormulaRef(
+        sheet: start.sheet,
+        row: horizontal ? resultOffset : position,
+        col: horizontal ? position : resultOffset,
+        absRow: false,
+        absCol: false
+      ))
+      map[keyIndex] = result
+    }
+    return map
   }
 
   private func valuesEqual(_ lhs: CellValue, _ rhs: CellValue) -> Bool {
@@ -906,13 +1094,136 @@ struct FormulaEvaluator {
         resolved = arg
       }
       // Expands ranges and broadcast arithmetic like `(A2+A6+A7)*(B3:B5)`.
-      values.append(contentsOf: arrayEvaluate(resolved))
+      values.append(contentsOf: arrayEvaluate(resolved, cache: nil))
     }
     return values
   }
 }
 
 enum FormulaDependencies {
+  /// One AST walk for workbook ingest (deps; optional range list for incremental invalidation).
+  static func collectForIngest(
+    from expr: FormulaExpr,
+    activeSheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    collectWatchedRanges: Bool,
+    namedRangeLookup: (String) -> FormulaExpr? = { _ in nil }
+  ) -> (deps: Set<CellAddress>, ranges: [CellRange]) {
+    var deps: Set<CellAddress> = []
+    var ranges: [CellRange] = []
+    collectForIngest(
+      expr,
+      activeSheetName: activeSheetName,
+      maxRow: maxRow,
+      maxCol: maxCol,
+      collectWatchedRanges: collectWatchedRanges,
+      namedRangeLookup: namedRangeLookup,
+      intoDeps: &deps,
+      intoRanges: &ranges
+    )
+    return (deps, ranges)
+  }
+
+  private static func collectForIngest(
+    _ expr: FormulaExpr,
+    activeSheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    collectWatchedRanges: Bool,
+    namedRangeLookup: (String) -> FormulaExpr?,
+    intoDeps: inout Set<CellAddress>,
+    intoRanges: inout [CellRange]
+  ) {
+    switch expr {
+    case .number, .string, .boolean, .error:
+      break
+    case .namedRange(let name):
+      if let resolved = namedRangeLookup(name) {
+        collectForIngest(
+          resolved,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          collectWatchedRanges: collectWatchedRanges,
+          namedRangeLookup: namedRangeLookup,
+          intoDeps: &intoDeps,
+          intoRanges: &intoRanges
+        )
+      }
+    case .cellRef(let ref):
+      if ref.isOnSheet(activeSheetName), !ref.isRowOpen, !ref.isColOpen {
+        intoDeps.insert(ref.address)
+      }
+    case .range(let start, let end):
+      if start.isOnSheet(activeSheetName) {
+        let n = A1Reference.resolvedBounds(
+          start: start,
+          end: end,
+          maxRow: maxRow,
+          maxCol: maxCol
+        )
+        let rows = n.maxRow - n.minRow + 1
+        let cols = n.maxCol - n.minCol + 1
+        if rows * cols == 1 {
+          intoDeps.insert(CellAddress(row: n.minRow, col: n.minCol))
+        } else if collectWatchedRanges {
+          intoRanges.append(
+            CellRange(
+              start: CellAddress(row: n.minRow, col: n.minCol),
+              end: CellAddress(row: n.maxRow, col: n.maxCol)
+            )
+          )
+        }
+      }
+    case .unary(_, let inner):
+      collectForIngest(
+        inner,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        collectWatchedRanges: collectWatchedRanges,
+        namedRangeLookup: namedRangeLookup,
+        intoDeps: &intoDeps,
+        intoRanges: &intoRanges
+      )
+    case .binary(_, let lhs, let rhs):
+      collectForIngest(
+        lhs,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        collectWatchedRanges: collectWatchedRanges,
+        namedRangeLookup: namedRangeLookup,
+        intoDeps: &intoDeps,
+        intoRanges: &intoRanges
+      )
+      collectForIngest(
+        rhs,
+        activeSheetName: activeSheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        collectWatchedRanges: collectWatchedRanges,
+        namedRangeLookup: namedRangeLookup,
+        intoDeps: &intoDeps,
+        intoRanges: &intoRanges
+      )
+    case .call(_, let args):
+      for arg in args {
+        collectForIngest(
+          arg,
+          activeSheetName: activeSheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          collectWatchedRanges: collectWatchedRanges,
+          namedRangeLookup: namedRangeLookup,
+          intoDeps: &intoDeps,
+          intoRanges: &intoRanges
+        )
+      }
+    }
+  }
+
   /// Sheet-local ranges referenced by a formula (for invalidation when cells inside change).
   static func collectWatchedRanges(
     from expr: FormulaExpr,

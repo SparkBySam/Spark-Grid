@@ -78,10 +78,16 @@ enum BugBashRunner {
     results.append(MainActor.assumeIsolated { chartMoveResizeAndColorRoundTrip() })
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
+    results.append(formulaEvalRegressionGate())
     results.append(everydayFormulas())
+    results.append(sumproductBooleanFastPathSelfCheck())
     results.append(kpiJuneStyleCountifs())
     results.append(countifsSkipsErrorRows())
     results.append(countifsRangeDependencyBudget())
+    results.append(syntheticWorkbookAggregateRecalcBudget())
+    results.append(syntheticWorkbookAggregateEditBudget())
+    results.append(kpiWorkbookFullRecalcBudget())
+    results.append(kpiWorkbookAggregateEditBudget())
     results.append(nowAndTodayUseLocalTime())
     results.append(lookupFormulas())
     results.append(formulaFunctionPicker())
@@ -3319,6 +3325,240 @@ enum BugBashRunner {
     )
   }
 
+  /// Guards SUMIF, VLOOKUP, COUNTIFS UNIQUE, spell-check formula display, and SUMPRODUCT boolean hits.
+  private static func formulaEvalRegressionGate() -> Result {
+    let name = "formula eval regression gate"
+    let aggregateCells: [CellAddress: String] = [
+      CellAddress(row: 0, col: 0): "10",
+      CellAddress(row: 1, col: 0): "20",
+      CellAddress(row: 2, col: 0): "30",
+    ]
+    let sumif = evalFormula("=SUMIF(A1:A3,\">15\")", cells: aggregateCells)
+    guard case .number(let sumifTotal) = sumif, abs(sumifTotal - 50) < 0.000_001 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "SUMIF got \(sumif.displayString) expected 50"
+      )
+    }
+
+    let lookupCells: [CellAddress: String] = [
+      CellAddress(row: 0, col: 0): "10",
+      CellAddress(row: 1, col: 0): "20",
+      CellAddress(row: 2, col: 0): "30",
+      CellAddress(row: 0, col: 1): "a",
+      CellAddress(row: 1, col: 1): "b",
+      CellAddress(row: 2, col: 1): "c",
+    ]
+    let vlookup = evalFormula("=VLOOKUP(20,A1:B3,2,FALSE)", cells: lookupCells)
+    guard case .string(let hit) = vlookup, hit == "b" else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "VLOOKUP got \(vlookup.displayString) expected b"
+      )
+    }
+
+    var countifsCells: [CellAddress: String] = [:]
+    countifsCells[CellAddress(row: 5, col: 0)] = "k"
+    for row in 10..<30 {
+      countifsCells[CellAddress(row: row, col: 0)] = row < 15 ? "k" : "z"
+      if row < 15 {
+        countifsCells[CellAddress(row: row, col: 2)] = "k"
+      } else {
+        countifsCells[CellAddress(row: row, col: 2)] = "=1/0"
+      }
+      countifsCells[CellAddress(row: row, col: 11)] = "UNIQUE"
+    }
+    let countifs = evalFormula(
+      "=COUNTIFS($C$11:$C$29,$A6,$L$11:$L$29,\"UNIQUE\")",
+      cells: countifsCells
+    )
+    guard case .number(let uniqueCount) = countifs, uniqueCount == 5 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "COUNTIFS UNIQUE got \(countifs.displayString) expected 5"
+      )
+    }
+
+    var spellSheet = Sheet(name: "Sheet1")
+    spellSheet.setCell(Cell(raw: "recieve"), at: .origin)
+    spellSheet.setCell(Cell(raw: "=A1"), at: CellAddress(row: 0, col: 1))
+    let spellEngine = FormulaEngine()
+    spellEngine.rebuild(workbook: Workbook(sheets: [spellSheet]), recalculate: true)
+    let displayed = spellEngine.displayString(
+      at: CellAddress(row: 0, col: 1),
+      sheet: spellSheet,
+      format: nil
+    )
+    guard displayed == "recieve" else {
+      return Result(name: name, passed: false, detail: "spell formula result \(displayed)")
+    }
+
+    var january = Sheet(name: "January")
+    for row in 110...115 {
+      january.setCell(Cell(raw: "agent-1"), at: CellAddress(row: row, col: 2))
+      january.setCell(Cell(raw: "Yes"), at: CellAddress(row: row, col: 17))
+      january.setCell(Cell(raw: "3"), at: CellAddress(row: row, col: 18))
+      january.setCell(Cell(raw: "1"), at: CellAddress(row: row, col: 1))
+    }
+    var ytd = Sheet(name: "YTD Summary")
+    ytd.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 4, col: 0))
+    let kpiSumProduct = """
+    =SUMPRODUCT((January!$C$110:$C$115=$A5)*(January!$R$110:$R$115="Yes")*(January!$S$110:$S$115<>"")*((January!$S$110:$S$115-January!$B$110:$B$115)>=0)*((January!$S$110:$S$115-January!$B$110:$B$115)<=60))
+    """
+    let multiArg = """
+    =SUMPRODUCT(--(January!$C$110:$C$115=$A5),--(January!$R$110:$R$115="Yes"),--(January!$S$110:$S$115<>""),--((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
+    """
+    ytd.setCell(Cell(raw: kpiSumProduct), at: CellAddress(row: 4, col: 4))
+    ytd.setCell(Cell(raw: multiArg), at: CellAddress(row: 5, col: 4))
+    let gateEngine = FormulaEngine()
+    gateEngine.rebuild(workbook: Workbook(sheets: [january, ytd], activeSheetIndex: 1), recalculate: false)
+    _ = gateEngine.recalculateEntireWorkbook(
+      Workbook(sheets: [january, ytd], activeSheetIndex: 1),
+      profile: true
+    )
+    let hits = gateEngine.lastWorkbookRecalcProfile?.sumproductBooleanHits ?? 0
+    guard hits >= 2 else {
+      return Result(name: name, passed: false, detail: "sumproductBooleanHits \(hits) expected >= 2")
+    }
+
+    var config = Sheet(name: "Config")
+    config.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 0, col: 0))
+    config.setCell(Cell(raw: "Agent One"), at: CellAddress(row: 0, col: 1))
+    var jan = Sheet(name: "January")
+    jan.setCell(Cell(raw: ""), at: CellAddress(row: 109, col: 2))
+    jan.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 110, col: 2))
+    jan.setCell(
+      Cell(raw: "=IF(C110=\"\",\"\",IFERROR(VLOOKUP(C110,Config!$A:$B,2,0),\"?\"))"),
+      at: CellAddress(row: 109, col: 5)
+    )
+    jan.setCell(
+      Cell(raw: "=IF(C111=\"\",\"\",IFERROR(VLOOKUP(C111,Config!$A:$B,2,0),\"?\"))"),
+      at: CellAddress(row: 110, col: 5)
+    )
+    let ifWorkbook = Workbook(sheets: [config, jan], activeSheetIndex: 1)
+    let ifEngine = FormulaEngine()
+    ifEngine.rebuild(workbook: ifWorkbook, recalculate: false)
+    _ = ifEngine.recalculateEntireWorkbook(ifWorkbook, profile: true)
+    let blankDisplay = ifEngine.displayString(
+      at: CellAddress(row: 109, col: 5),
+      sheet: jan,
+      format: nil
+    )
+    let filledDisplay = ifEngine.displayString(
+      at: CellAddress(row: 110, col: 5),
+      sheet: jan,
+      format: nil
+    )
+    guard blankDisplay.isEmpty, filledDisplay == "Agent One" else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "IF blank guard blank=\(blankDisplay) filled=\(filledDisplay)"
+      )
+    }
+    let ifBlankHits = ifEngine.lastWorkbookRecalcProfile?.ifBlankEqualityFastHits ?? 0
+    guard ifBlankHits >= 2 else {
+      return Result(name: name, passed: false, detail: "ifBlankEqualityFastHits \(ifBlankHits) expected >= 2")
+    }
+
+    var idxCells: [CellAddress: String] = [:]
+    idxCells[CellAddress(row: 5, col: 0)] = "k"
+    for row in 10..<20 {
+      idxCells[CellAddress(row: row, col: 0)] = "k"
+      idxCells[CellAddress(row: row, col: 2)] = "k"
+    }
+    let idxFormula = "=COUNTIFS($C$11:$C$19,$A6,$C$11:$C$19,\"k\")"
+    idxCells[CellAddress(row: 5, col: 1)] = idxFormula
+    idxCells[CellAddress(row: 5, col: 2)] = idxFormula
+    var idxSheet = Sheet(name: "Sheet1")
+    for (address, raw) in idxCells {
+      idxSheet.setCell(Cell(raw: raw), at: address)
+    }
+    let idxWorkbook = Workbook(sheets: [idxSheet])
+    let idxEngine = FormulaEngine()
+    idxEngine.rebuild(workbook: idxWorkbook, recalculate: false)
+    _ = idxEngine.recalculateEntireWorkbook(idxWorkbook, profile: true)
+    guard let idxProfile = idxEngine.lastWorkbookRecalcProfile else {
+      return Result(name: name, passed: false, detail: "COUNTIFS index profile missing")
+    }
+    guard idxProfile.countifsHistogramIndexBuilds >= 1, idxProfile.countifsHistogramIndexHits >= 1 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(
+          format: "COUNTIFS idxBuild %d idxHit %d",
+          idxProfile.countifsHistogramIndexBuilds,
+          idxProfile.countifsHistogramIndexHits
+        )
+      )
+    }
+
+    let iferr = evalFormula(
+      "=IFERROR(VLOOKUP(\"missing\",Config!$A:$B,2,FALSE),\"?\")",
+      cells: [
+        CellAddress(row: 0, col: 0): "ok",
+        CellAddress(row: 0, col: 1): "hit",
+      ]
+    )
+    guard case .string(let iferrText) = iferr, iferrText == "?" else {
+      return Result(name: name, passed: false, detail: "IFERROR VLOOKUP fast got \(iferr.displayString)")
+    }
+
+    return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean IFblank idxHit")
+  }
+
+  /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.
+  private static func sumproductBooleanFastPathSelfCheck() -> Result {
+    let name = "SUMPRODUCT boolean fast-path counters"
+    var january = Sheet(name: "January")
+    for row in 110...115 {
+      january.setCell(Cell(raw: "agent-1"), at: CellAddress(row: row, col: 2))
+      january.setCell(Cell(raw: "Yes"), at: CellAddress(row: row, col: 17))
+      january.setCell(Cell(raw: "3"), at: CellAddress(row: row, col: 18))
+      january.setCell(Cell(raw: "1"), at: CellAddress(row: row, col: 1))
+    }
+    var ytd = Sheet(name: "YTD Summary")
+    ytd.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 4, col: 0))
+    let multiArg = """
+    =SUMPRODUCT(--(January!$C$110:$C$115=$A5),--(January!$R$110:$R$115="Yes"),--(January!$S$110:$S$115<>""),--((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
+    """
+    let kpiJanuary = """
+    =SUMPRODUCT((January!$C$110:$C$115=$A5)*(January!$R$110:$R$115="Yes")*(January!$S$110:$S$115<>"")*((January!$S$110:$S$115-January!$B$110:$B$115)>=0)*((January!$S$110:$S$115-January!$B$110:$B$115)<=60))
+    """
+    ytd.setCell(Cell(raw: multiArg), at: CellAddress(row: 4, col: 4))
+    ytd.setCell(Cell(raw: kpiJanuary), at: CellAddress(row: 5, col: 4))
+    let workbook = Workbook(sheets: [january, ytd], activeSheetIndex: 1)
+    let engine = FormulaEngine()
+    engine.rebuild(workbook: workbook, recalculate: false)
+    _ = engine.recalculateEntireWorkbook(workbook, profile: true)
+    guard let profile = engine.lastWorkbookRecalcProfile else {
+      return Result(name: name, passed: false, detail: "missing recalc profile")
+    }
+    guard profile.sumproductBooleanHits >= 2 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(
+          format: "sumproductBooleanHits %d sumproductBooleanFallbacks %d",
+          profile.sumproductBooleanHits,
+          profile.sumproductBooleanFallbacks
+        )
+      )
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: String(
+        format: "sumproductBooleanHits %d sumproductBooleanFallbacks %d",
+        profile.sumproductBooleanHits,
+        profile.sumproductBooleanFallbacks
+      )
+    )
+  }
+
   private static func kpiJuneStyleCountifs() -> Result {
     let name = "KPI June COUNTIFS COLUMN CHAR"
     var cells: [CellAddress: String] = [:]
@@ -3420,7 +3660,7 @@ enum BugBashRunner {
         detail: "value \(value.displayString) in \(String(format: "%.2fs", elapsed))"
       )
     }
-    guard elapsed < 2.5 else {
+    guard elapsed < 0.35 else {
       return Result(
         name: name,
         passed: false,
@@ -3432,6 +3672,240 @@ enum BugBashRunner {
       passed: true,
       detail: String(format: "799 matches in %.2fs", elapsed)
     )
+  }
+
+  private static func syntheticCountifsHeavySheet(
+    name: String,
+    summaryRows: Int,
+    dataStartRow: Int,
+    dataRows: Int
+  ) -> Sheet {
+    var sheet = Sheet(name: name)
+    let lastDataRow = dataStartRow + dataRows - 1
+    let bStart = dataStartRow + 1
+    let bEnd = lastDataRow + 1
+    for row in 0..<summaryRows {
+      sheet.setCell(Cell(raw: "k\(row % 5)"), at: CellAddress(row: row, col: 0))
+    }
+    for row in dataStartRow...lastDataRow {
+      sheet.setCell(Cell(raw: "k\(row % 5)"), at: CellAddress(row: row, col: 1))
+      sheet.setCell(Cell(raw: row.isMultiple(of: 2) ? "UNIQUE" : "ORIGINAL"), at: CellAddress(row: row, col: 2))
+      sheet.setCell(Cell(raw: "1"), at: CellAddress(row: row, col: 3))
+    }
+    for row in 0..<summaryRows {
+      let formula =
+        "=COUNTIFS($B$\(bStart):$B$\(bEnd),$A\(row + 1),$C$\(bStart):$C$\(bEnd),\"UNIQUE\")"
+      sheet.setCell(Cell(raw: formula), at: CellAddress(row: row, col: 4))
+    }
+    return sheet
+  }
+
+  private static func syntheticAggregateWorkbook() -> Workbook {
+    let sheets = (0..<5).map { index in
+      syntheticCountifsHeavySheet(
+        name: "Month\(index)",
+        summaryRows: 1_200,
+        dataStartRow: 10,
+        dataRows: 1_200
+      )
+    }
+    return Workbook(sheets: sheets, activeSheetIndex: 0)
+  }
+
+  /// Multi-sheet COUNTIFS workbook: full recalc must stay under ~1s (grouped range scans).
+  private static func syntheticWorkbookAggregateRecalcBudget() -> Result {
+    let name = "synthetic workbook aggregate recalc budget"
+    let workbook = syntheticAggregateWorkbook()
+    let formulaCount = workbook.sheets.reduce(0) { partial, sheet in
+      partial + sheet.cells.values.count(where: { FormulaSyntax.isFormula($0.raw) })
+    }
+    let engine = FormulaEngine()
+    engine.rebuild(workbook: workbook, recalculate: false)
+    let recalc = engine.recalculateEntireWorkbook(workbook)
+    guard recalc < 1.0 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "%d formulas full recalc %.2fs", formulaCount, recalc)
+      )
+    }
+    let sample = engine.displayValue(at: CellAddress(row: 0, col: 4), sheet: workbook.sheets[0])
+    guard case .number(let count) = sample, count > 0 else {
+      return Result(name: name, passed: false, detail: "sample COUNTIFS empty after recalc")
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: String(format: "%d formulas across %d sheets in %.2fs", formulaCount, workbook.sheets.count, recalc)
+    )
+  }
+
+  /// One edited source cell in a COUNTIFS data column: dependent summary recalc ~50ms.
+  private static func syntheticWorkbookAggregateEditBudget() -> Result {
+    let name = "synthetic workbook aggregate edit budget"
+    let workbook = syntheticAggregateWorkbook()
+    var sheet = workbook.sheets[0]
+    let engine = FormulaEngine()
+    engine.rebuild(workbook: workbook, recalculate: false)
+    _ = engine.recalculateEntireWorkbook(workbook)
+    let dataCell = CellAddress(row: 50, col: 1)
+    sheet.setCell(Cell(raw: "k9"), at: dataCell)
+    let start = CFAbsoluteTimeGetCurrent()
+    engine.cellsDidChange([dataCell], sheet: sheet)
+    let summary = CellAddress(row: 0, col: 4)
+    _ = engine.displayValue(at: summary, sheet: sheet)
+    let elapsed = CFAbsoluteTimeGetCurrent() - start
+    guard elapsed < 0.05 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(format: "edit+summary %.2fs", elapsed)
+      )
+    }
+    return Result(name: name, passed: true, detail: String(format: "edit path %.2fs", elapsed))
+  }
+
+  private static func kpiWorkbookFixtureURL() throws -> URL? {
+    let env = ProcessInfo.processInfo.environment
+    let envPath = env["SPARK_GRID_FIXTURE_BDC_KPI"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !envPath.isEmpty, FileManager.default.fileExists(atPath: envPath) {
+      return URL(fileURLWithPath: envPath)
+    }
+    let fixturesDir = env["SPARK_GRID_FIXTURES"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !fixturesDir.isEmpty {
+      let fixturesPath = (fixturesDir as NSString).appendingPathComponent("BDC-Digital-KPI-2026.xlsx")
+      if FileManager.default.fileExists(atPath: fixturesPath) {
+        return URL(fileURLWithPath: fixturesPath)
+      }
+    }
+    return nil
+  }
+
+  /// Optional KPI workbook: full grouped recalc under ~1s; June E/F still match Excel cache.
+  private static func kpiWorkbookFullRecalcBudget() -> Result {
+    let name = "KPI workbook full recalc budget"
+    guard (try? kpiWorkbookFixtureURL()) != nil else {
+      return Result(name: name, passed: true, detail: "skipped (no KPI fixture source)")
+    }
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "BDC-Digital-KPI-2026.xlsx",
+        envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
+        fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
+      )
+      let imported = try XLSXCodec.importWorkbook(from: url)
+      let formulaCount = imported.sheets.reduce(0) { partial, sheet in
+        partial + sheet.cells.values.count(where: { FormulaSyntax.isFormula($0.raw) })
+      }
+      let engine = FormulaEngine()
+      let openStart = CFAbsoluteTimeGetCurrent()
+      engine.rebuild(workbook: imported, recalculate: false)
+      let openElapsed = CFAbsoluteTimeGetCurrent() - openStart
+      guard openElapsed < 2.5 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(format: "open blocked %.2fs", openElapsed)
+        )
+      }
+      let recalc = engine.recalculateEntireWorkbook(imported, profile: true)
+      let phaseDetail = engine.lastWorkbookRecalcProfile?.detailSummary(totalSeconds: recalc)
+        ?? String(format: "%.2fs", recalc)
+      guard recalc < 1.0 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(format: "%d formulas | %@", formulaCount, phaseDetail)
+        )
+      }
+      guard let juneIndex = imported.sheets.firstIndex(where: {
+        $0.name.caseInsensitiveCompare("June") == .orderedSame
+      }) else {
+        return Result(name: name, passed: false, detail: "June sheet missing")
+      }
+      let june = imported.sheets[juneIndex]
+      var juneErrors = 0
+      for row in 5...61 {
+        for col in 4...5 {
+          let addr = CellAddress(row: row, col: col)
+          guard FormulaSyntax.isFormula(june.cell(at: addr).raw) else { continue }
+          guard let cached = excelCachedNumericValue(url: url, sheetName: "June", address: addr) else {
+            continue
+          }
+          let value = engine.displayValue(at: addr, sheet: june)
+          if case .error = value { juneErrors += 1 }
+          if case .number(let actual) = value, abs(actual - cached) >= 0.000_001 {
+            return Result(
+              name: name,
+              passed: false,
+              detail: "\(addr.a1) got \(actual) cached \(cached) after recalc"
+            )
+          }
+        }
+      }
+      guard juneErrors == 0 else {
+        return Result(name: name, passed: false, detail: "\(juneErrors) June E/F errors after recalc")
+      }
+      return Result(
+        name: name,
+        passed: true,
+        detail: String(
+          format: "%d formulas open %.2fs | %@",
+          formulaCount,
+          openElapsed,
+          phaseDetail
+        )
+      )
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
+  }
+
+  /// Optional KPI workbook: one daily data edit recalculates dependents in ~50ms.
+  private static func kpiWorkbookAggregateEditBudget() -> Result {
+    let name = "KPI workbook aggregate edit budget"
+    guard (try? kpiWorkbookFixtureURL()) != nil else {
+      return Result(name: name, passed: true, detail: "skipped (no KPI fixture source)")
+    }
+    do {
+      let url = try sandboxReadableWorkbookURL(
+        cacheFileName: "BDC-Digital-KPI-2026.xlsx",
+        envKeys: ["SPARK_GRID_FIXTURE_BDC_KPI"],
+        fixturesFileName: "BDC-Digital-KPI-2026.xlsx"
+      )
+      var imported = try XLSXCodec.importWorkbook(from: url)
+      guard let juneIndex = imported.sheets.firstIndex(where: {
+        $0.name.caseInsensitiveCompare("June") == .orderedSame
+      }) else {
+        return Result(name: name, passed: false, detail: "June sheet missing")
+      }
+      imported.activeSheetIndex = juneIndex
+      let engine = FormulaEngine()
+      engine.rebuild(workbook: imported, recalculate: false)
+      _ = engine.recalculateEntireWorkbook(imported)
+      var june = imported.sheets[juneIndex]
+      let dataCell = CellAddress(row: 120, col: 2)
+      guard june.cells[dataCell] != nil else {
+        return Result(name: name, passed: false, detail: "June daily cell missing")
+      }
+      june.setCell(Cell(raw: "EDIT-\(june.cell(at: dataCell).raw)"), at: dataCell)
+      imported.sheets[juneIndex] = june
+      let summary = CellAddress(row: 5, col: 4)
+      let start = CFAbsoluteTimeGetCurrent()
+      engine.cellsDidChange([dataCell], sheet: june)
+      _ = engine.displayValue(at: summary, sheet: june)
+      let elapsed = CFAbsoluteTimeGetCurrent() - start
+      guard elapsed < 0.05 else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: String(format: "June edit+summary %.2fs", elapsed)
+        )
+      }
+      return Result(name: name, passed: true, detail: String(format: "June edit path %.2fs", elapsed))
+    } catch {
+      return Result(name: name, passed: false, detail: error.localizedDescription)
+    }
   }
 
   private static func everydayFormulas() -> Result {
