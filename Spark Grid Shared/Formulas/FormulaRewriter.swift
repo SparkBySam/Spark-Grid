@@ -60,7 +60,7 @@ enum FormulaRewriter {
 
   /// Expected stored formula text after shifting `expr` by row/column delta.
   static func adjustedFormulaText(expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> String {
-    serializedFormulaText(expr: adjustExpression(expr, rowDelta: rowDelta, colDelta: colDelta))
+    serializedFormulaText(adjustExpression(expr, rowDelta: rowDelta, colDelta: colDelta))
   }
 
   /// Stored workbook formula text for a parsed expression (leading `=`).
