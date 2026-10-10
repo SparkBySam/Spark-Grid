@@ -68,6 +68,14 @@ final class FormulaRecalcProfile {
   /// YTD Summary column strip plan miss (same fields as `ob`).
   var ifStripYtdPlanRejectEntries: [IfStripOtherBranchEntry] = []
 
+  /// First `makeColumnYtdSumproductQuotientPlan` exit recorded for YTD column S (diagnostic).
+  var ytdSpQuotientPlanExit: (sheet: String, masterA1: String, exitCode: String)?
+
+  func recordYtdSpQuotientPlanExit(sheet: String, masterA1: String, exitCode: String) {
+    guard ytdSpQuotientPlanExit == nil else { return }
+    ytdSpQuotientPlanExit = (sheet, masterA1, exitCode)
+  }
+
   func recordIfStripPlanMiss(_ reason: String) {
     ifStripPlanMiss[reason, default: 0] += 1
   }
@@ -168,6 +176,9 @@ final class FormulaRecalcProfile {
     }
     ifStripOtherBranchEntries.append(contentsOf: other.ifStripOtherBranchEntries)
     ifStripYtdPlanRejectEntries.append(contentsOf: other.ifStripYtdPlanRejectEntries)
+    if ytdSpQuotientPlanExit == nil {
+      ytdSpQuotientPlanExit = other.ytdSpQuotientPlanExit
+    }
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
     sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
@@ -190,6 +201,11 @@ final class FormulaRecalcProfile {
       "\(entry.sheet)!\(entry.masterA1):\(entry.rejectCode):\(entry.formula)"
     }
     return " | ytd " + parts.joined(separator: ";")
+  }
+
+  private func ytdSpQuotientPlanExitSummary() -> String {
+    guard let exit = ytdSpQuotientPlanExit else { return "" }
+    return " | ytdSpPlan \(exit.sheet)!\(exit.masterA1):\(exit.exitCode)"
   }
 
   private func ifStripMissSummary() -> String {
@@ -256,6 +272,6 @@ final class FormulaRecalcProfile {
       ifStripYtdCountifsSumRows,
       ifStripYtdSumproductQuotientRows,
       topEval.isEmpty ? "—" : topEval
-    ) + ifStripMissSummary() + sheetPhaseWallSummary()
+    ) + ifStripMissSummary() + ytdSpQuotientPlanExitSummary() + sheetPhaseWallSummary()
   }
 }

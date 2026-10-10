@@ -1062,6 +1062,14 @@ final class FormulaEngine {
     for address in addresses where formulaAST[address] != nil && !visited.contains(address) {
       eval(address)
     }
+    if sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame {
+      let sColMaster = CellAddress(row: 4, col: Self.ytdSumproductRibbonFirstCol)
+      evaluator.probeYtdSumproductQuotientPlanExitForSColumn(
+        sheetName: sheet.name,
+        master: sColMaster,
+        expr: formulaAST[sColMaster]
+      )
+    }
     revision &+= 1
   }
 

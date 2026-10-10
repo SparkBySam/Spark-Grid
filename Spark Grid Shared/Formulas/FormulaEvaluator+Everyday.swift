@@ -1498,21 +1498,77 @@ extension FormulaEvaluator {
     var sumproductCalls: [FormulaExpr]
   }
 
+  private static let ytdSumproductDiagnosticSCol = 18
+
+  private func recordYtdSpQuotientPlanExitIfSColumn(_ exitCode: String, master: CellAddress) {
+    guard master.col == Self.ytdSumproductDiagnosticSCol else { return }
+    let sheet = stripPlanDiagnosticContext?.sheetName ?? "YTD Summary"
+    recalcProfile?.recordYtdSpQuotientPlanExit(sheet: sheet, masterA1: master.a1, exitCode: exitCode)
+  }
+
+  private func diagnoseColumnYtdSumproductQuotientPlanExit(
+    _ expr: FormulaExpr,
+    master: CellAddress
+  ) -> String {
+    guard let quotient = stripYtdIfErrorQuotient(expr) else {
+      return "stripYtdIfErrorQuotient"
+    }
+    guard stripFormulaCellRef(quotient.denominator) != nil else {
+      return "stripFormulaCellRef"
+    }
+    guard let terms = ytdSumproductAddChainTerms(quotient.numerator) else {
+      return "ytdSumproductAddChainTerms"
+    }
+    prepareForCellEvaluation(origin: master)
+    for term in terms {
+      guard case .call(_, let spArgs) = stripUnwrap(term),
+            parseSumProductBooleanPlan(spArgs) != nil
+      else { return "parseSumProductBooleanPlan" }
+    }
+    return "ok"
+  }
+
+  /// KPI diagnostic: log `makeColumnYtdSumproductQuotientPlan` exit for column S at `master` (e.g. S5).
+  func probeYtdSumproductQuotientPlanExitForSColumn(
+    sheetName: String,
+    master: CellAddress,
+    expr: FormulaExpr?
+  ) {
+    guard master.col == Self.ytdSumproductDiagnosticSCol else { return }
+    guard let expr else { return }
+    guard recalcProfile?.ytdSpQuotientPlanExit == nil else { return }
+    let exit = diagnoseColumnYtdSumproductQuotientPlanExit(expr, master: master)
+    recalcProfile?.recordYtdSpQuotientPlanExit(sheet: sheetName, masterA1: master.a1, exitCode: exit)
+  }
+
   private func makeColumnYtdSumproductQuotientPlan(
     _ expr: FormulaExpr,
     master: CellAddress
   ) -> ColumnYtdSumproductQuotientPlan? {
-    guard let quotient = stripYtdIfErrorQuotient(expr) else { return nil }
-    guard let divisorRef = stripFormulaCellRef(quotient.denominator) else { return nil }
-    guard let terms = ytdSumproductAddChainTerms(quotient.numerator) else { return nil }
+    guard let quotient = stripYtdIfErrorQuotient(expr) else {
+      recordYtdSpQuotientPlanExitIfSColumn("stripYtdIfErrorQuotient", master: master)
+      return nil
+    }
+    guard let divisorRef = stripFormulaCellRef(quotient.denominator) else {
+      recordYtdSpQuotientPlanExitIfSColumn("stripFormulaCellRef", master: master)
+      return nil
+    }
+    guard let terms = ytdSumproductAddChainTerms(quotient.numerator) else {
+      recordYtdSpQuotientPlanExitIfSColumn("ytdSumproductAddChainTerms", master: master)
+      return nil
+    }
     var calls: [FormulaExpr] = []
     prepareForCellEvaluation(origin: master)
     for term in terms {
       guard case .call(_, let spArgs) = stripUnwrap(term),
             let _ = parseSumProductBooleanPlan(spArgs)
-      else { return nil }
+      else {
+        recordYtdSpQuotientPlanExitIfSColumn("parseSumProductBooleanPlan", master: master)
+        return nil
+      }
       calls.append(stripUnwrap(term))
     }
+    recordYtdSpQuotientPlanExitIfSColumn("ok", master: master)
     return ColumnYtdSumproductQuotientPlan(divisorRef: divisorRef, sumproductCalls: calls)
   }
 
