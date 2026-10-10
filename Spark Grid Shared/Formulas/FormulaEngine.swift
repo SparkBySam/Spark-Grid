@@ -571,18 +571,21 @@ final class FormulaEngine {
         var deps: Set<CellAddress>
         var shapeKey: String
 
-        if let runMaster, let runMasterExpr, let runMasterDeps,
-           let previousRow = lastRow, address.row == previousRow + 1 {
-          let rowDelta = address.row - runMaster.row
-          let colDelta = address.col - runMaster.col
+        if let master = runMaster,
+           let masterExpr = runMasterExpr,
+           let masterDeps = runMasterDeps,
+           let previousRow = lastRow,
+           address.row == previousRow + 1 {
+          let rowDelta = address.row - master.row
+          let colDelta = address.col - master.col
           let expected = FormulaRewriter.adjustedFormulaText(
-            expr: runMasterExpr,
+            expr: masterExpr,
             rowDelta: rowDelta,
             colDelta: colDelta
           )
           if expected == trimmed {
-            expr = FormulaRewriter.adjustExpression(runMasterExpr, rowDelta: rowDelta, colDelta: colDelta)
-            deps = self.shiftDependencies(runMasterDeps, rowDelta: rowDelta, colDelta: colDelta)
+            expr = FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
+            deps = self.shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: colDelta)
             shapeKey = runMasterShapeKey
               ?? FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
             profileLock.lock()
