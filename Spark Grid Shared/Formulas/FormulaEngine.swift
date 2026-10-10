@@ -586,9 +586,7 @@ final class FormulaEngine {
 
       for (address, trimmed) in columnEntries {
         let index = entryIndex[address] ?? 0
-        var expr: FormulaExpr
-        var deps: Set<CellAddress>
-        var shapeKey: String
+        var resolved: BulkIngestMasterParse?
 
         if let master = runMaster,
            let masterExpr = runMasterExpr,
@@ -596,75 +594,44 @@ final class FormulaEngine {
            let previousRow = lastRow,
            address.row == previousRow + 1,
            address.col == master.col {
-          var matched = false
           if let nextExpected = runNextExpectedTrimmed,
              let lastExpr = runLastExpr,
              nextExpected == trimmed {
             let adjustStart = CFAbsoluteTimeGetCurrent()
-            expr = FormulaRewriter.adjustExpression(lastExpr, rowDelta: 1, colDelta: 0)
+            let expr = FormulaRewriter.adjustExpression(lastExpr, rowDelta: 1, colDelta: 0)
             localMetrics.adjustSeconds += CFAbsoluteTimeGetCurrent() - adjustStart
             let rowDelta = address.row - master.row
-            deps = self.shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: 0)
-            shapeKey = runMasterShapeKey
+            let deps = self.shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: 0)
+            let shapeKey = runMasterShapeKey
               ?? FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
             localMetrics.templateCacheHits += 1
             localMetrics.rollingVerifyHits += 1
             runMembers.append(address)
             runLastExpr = expr
             runNextExpectedTrimmed = prepareRollingStepExpectation(expr: expr, metrics: &localMetrics)
-            matched = true
-          }
-          if !matched {
-            if let filled = fillFollowerMatchesMaster(
-              master: master,
-              masterExpr: masterExpr,
-              masterDeps: masterDeps,
-              address: address,
-              trimmed: trimmed,
-              metrics: &localMetrics
-            ) {
-              expr = filled.expr
-              deps = filled.deps
-              shapeKey = runMasterShapeKey
-                ?? FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
-              localMetrics.templateCacheHits += 1
-              runMembers.append(address)
-              runLastExpr = expr
-              runNextExpectedTrimmed = prepareRollingStepExpectation(expr: expr, metrics: &localMetrics)
-              matched = true
-            }
-          }
-          if matched {
+            resolved = BulkIngestMasterParse(expr: expr, deps: deps, shapeKey: shapeKey)
+            lastRow = address.row
+          } else if let filled = fillFollowerMatchesMaster(
+            master: master,
+            masterExpr: masterExpr,
+            masterDeps: masterDeps,
+            address: address,
+            trimmed: trimmed,
+            metrics: &localMetrics
+          ) {
+            let expr = filled.expr
+            let deps = filled.deps
+            let shapeKey = runMasterShapeKey
+              ?? FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
+            localMetrics.templateCacheHits += 1
+            runMembers.append(address)
+            runLastExpr = expr
+            runNextExpectedTrimmed = prepareRollingStepExpectation(expr: expr, metrics: &localMetrics)
+            resolved = BulkIngestMasterParse(expr: expr, deps: deps, shapeKey: shapeKey)
             lastRow = address.row
           } else {
             flushRun()
-            guard
-              let parsed = self.parseBulkIngestMaster(
-                trimmed: trimmed,
-                address: address,
-                sheetName: sheetName,
-                maxRow: maxRow,
-                maxCol: maxCol,
-                cacheLock: cacheLock,
-                metrics: &localMetrics
-              )
-            else {
-              templates[index] = nil
-              lastRow = address.row
-              continue
-            }
-            expr = parsed.expr
-            deps = parsed.deps
-            shapeKey = parsed.shapeKey
-            beginRun(address: address, expr: expr, deps: deps, shapeKey: shapeKey)
-            lastRow = address.row
-          }
-        } else {
-          if runMaster != nil {
-            flushRun()
-          }
-          guard
-            let parsed = self.parseBulkIngestMaster(
+            if let parsed = self.parseBulkIngestMaster(
               trimmed: trimmed,
               address: address,
               sheetName: sheetName,
@@ -672,21 +639,52 @@ final class FormulaEngine {
               maxCol: maxCol,
               cacheLock: cacheLock,
               metrics: &localMetrics
-            )
-          else {
-            templates[index] = nil
-            lastRow = address.row
-            continue
+            ) {
+              beginRun(
+                address: address,
+                expr: parsed.expr,
+                deps: parsed.deps,
+                shapeKey: parsed.shapeKey
+              )
+              resolved = parsed
+              lastRow = address.row
+            }
           }
-          expr = parsed.expr
-          deps = parsed.deps
-          shapeKey = parsed.shapeKey
-          beginRun(address: address, expr: expr, deps: deps, shapeKey: shapeKey)
-          lastRow = address.row
+        } else {
+          if runMaster != nil {
+            flushRun()
+          }
+          if let parsed = self.parseBulkIngestMaster(
+            trimmed: trimmed,
+            address: address,
+            sheetName: sheetName,
+            maxRow: maxRow,
+            maxCol: maxCol,
+            cacheLock: cacheLock,
+            metrics: &localMetrics
+          ) {
+            beginRun(
+              address: address,
+              expr: parsed.expr,
+              deps: parsed.deps,
+              shapeKey: parsed.shapeKey
+            )
+            resolved = parsed
+            lastRow = address.row
+          }
         }
 
-        shapeKeys[index] = shapeKey
-        templates[index] = IngestedFormulaTemplate(expr: expr, deps: deps, ranges: [])
+        guard let resolved else {
+          templates[index] = nil
+          lastRow = address.row
+          continue
+        }
+        shapeKeys[index] = resolved.shapeKey
+        templates[index] = IngestedFormulaTemplate(
+          expr: resolved.expr,
+          deps: resolved.deps,
+          ranges: []
+        )
       }
       flushRun()
       if !localStripPlans.isEmpty {
