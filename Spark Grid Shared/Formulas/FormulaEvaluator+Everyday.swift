@@ -1233,7 +1233,7 @@ extension FormulaEvaluator {
   // MARK: - Column shape strip (tight eval loop)
 
   /// Vertical shared-shape column: tight loops for KPI fill patterns; falls back to `false`.
-  mutating func evaluateColumnShapeStrip(
+  func evaluateColumnShapeStrip(
     master: CellAddress,
     members: [CellAddress],
     masterExpr: FormulaExpr,

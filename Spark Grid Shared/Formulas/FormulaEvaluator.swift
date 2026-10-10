@@ -31,16 +31,26 @@ struct FormulaEvaluator {
   var namedRangeLookup: NamedRangeLookup = { _ in nil }
   /// Defaults to a modest grid so open ranges don't explode when extent isn't wired.
   var sheetExtent: SheetExtentLookup = { _ in (maxRow: 999, maxCol: 25) }
-  /// Cell being evaluated (`COLUMN()` / `ROW()` with no argument).
-  var evaluationOrigin: CellAddress?
+  /// Cell being evaluated (`COLUMN()` / `ROW()` with no argument). Held in a class cell so batch strip eval can set origin without mutating the evaluator struct.
+  final class EvaluationOriginCell {
+    var address: CellAddress?
+  }
+
+  var evaluationOriginCell = EvaluationOriginCell()
+
+  var evaluationOrigin: CellAddress? {
+    get { evaluationOriginCell.address }
+    set { evaluationOriginCell.address = newValue }
+  }
+
   /// Shared range snapshots for COUNTIFS / SUMIFS-style functions (one scan per range per batch).
   var aggregateRangeCache: FormulaAggregateRangeCache?
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
 
-  mutating func prepareForCellEvaluation(origin: CellAddress?) {
-    evaluationOrigin = origin
+  func prepareForCellEvaluation(origin: CellAddress?) {
+    evaluationOriginCell.address = origin
   }
 
   final class ArrayEvalCacheBox {
