@@ -1296,8 +1296,8 @@ extension FormulaEvaluator {
 
   private func stripBlankEqualityGuardRef(_ condition: FormulaExpr) -> FormulaRef? {
     guard case .binary(.eq, let lhs, let rhs) = stripUnwrap(condition) else { return nil }
-    if stripIsStaticEmptyLiteral(rhs), let ref = stripFormulaCellRef(lhs) { return ref }
-    if stripIsStaticEmptyLiteral(lhs), let ref = stripFormulaCellRef(rhs) { return ref }
+    if stripIsStaticEmptyLiteral(rhs), let ref = stripNeedleRef(lhs) { return ref }
+    if stripIsStaticEmptyLiteral(lhs), let ref = stripNeedleRef(rhs) { return ref }
     return nil
   }
 
@@ -1312,10 +1312,12 @@ extension FormulaEvaluator {
     }
   }
 
-  private func stripFormulaCellRef(_ expr: FormulaExpr) -> FormulaRef? {
+  private func stripNeedleRef(_ expr: FormulaExpr) -> FormulaRef? {
     switch stripUnwrap(expr) {
     case .cellRef(let ref):
       return ref
+    case .unary(.plus, let inner), .unary(.negate, let inner):
+      return stripNeedleRef(inner)
     default:
       return nil
     }
@@ -1329,12 +1331,23 @@ extension FormulaEvaluator {
 
   private struct ColumnIFERRORVlookupPlan {
     var needleRef: FormulaRef
+    var vlookupArgsAtMaster: [FormulaExpr]
+    var exactMatch: Bool
     var tableStart: FormulaRef
     var tableEnd: FormulaRef
-    var tableKey: LookupTableKey
+    var tableKey: LookupTableKey?
     var bounds: (minRow: Int, maxRow: Int, minCol: Int, maxCol: Int)
     var resultOffset: Int
     var fallbackAtMaster: FormulaExpr
+  }
+
+  private struct ColumnCOUNTIFSPlan {
+    var rangeAnchors: [RangeAnchor]
+    var staticCriteria: [CellValue]
+    var staticTests: [CriteriaTest]
+    var dynamicCriterionRefs: [FormulaRef]
+    var columns: [[CellValue]]
+    var rangeKeys: [AggregateRangeKey]
   }
 
   private func stripResolveTableRange(_ expr: FormulaExpr) -> (FormulaRef, FormulaRef)? {
@@ -1351,6 +1364,38 @@ extension FormulaEvaluator {
     }
   }
 
+  private func stripVlookupExactMatchFlag(_ vargs: [FormulaExpr], master: CellAddress) -> Bool? {
+    guard vargs.count == 4 else { return false }
+    switch stripUnwrap(vargs[3]) {
+    case .boolean(let flag):
+      return !flag
+    case .number(let value):
+      return value == 0
+    default:
+      prepareForCellEvaluation(origin: master)
+      let flag = evaluate(vargs[3])
+      if case .error = flag { return nil }
+      return !(flag.asBool ?? true)
+    }
+  }
+
+  private func diagnoseIfStripVlookupMiss(_ expr: FormulaExpr, master: CellAddress) -> String {
+    guard case .call(let outer, let outerArgs) = stripUnwrap(expr), outer.uppercased() == "IFERROR", outerArgs.count == 2
+    else { return "notIFERROR" }
+    guard case .call(let inner, let vargs) = stripUnwrap(outerArgs[0]),
+          inner.uppercased() == "VLOOKUP",
+          vargs.count >= 3, vargs.count <= 4
+    else { return "notVLOOKUP" }
+    if stripNeedleRef(vargs[0]) == nil { return "needleNotRef" }
+    if stripResolveTableRange(vargs[1]) == nil { return "tableRange" }
+    prepareForCellEvaluation(origin: master)
+    let indexValue = evaluate(vargs[2])
+    if case .error = indexValue { return "colIndex" }
+    if indexValue.asNumber == nil { return "colIndex" }
+    if stripVlookupExactMatchFlag(vargs, master: master) == nil { return "matchFlag" }
+    return "otherVlk"
+  }
+
   private func makeColumnIFERRORVlookupPlan(_ expr: FormulaExpr, master: CellAddress) -> ColumnIFERRORVlookupPlan? {
     guard case .call(let outer, let outerArgs) = stripUnwrap(expr), outer.uppercased() == "IFERROR", outerArgs.count == 2
     else { return nil }
@@ -1358,21 +1403,14 @@ extension FormulaEvaluator {
           inner.uppercased() == "VLOOKUP",
           vargs.count >= 3, vargs.count <= 4
     else { return nil }
-    guard let needleRef = stripFormulaCellRef(vargs[0]) else { return nil }
+    guard let needleRef = stripNeedleRef(vargs[0]) else { return nil }
 
     prepareForCellEvaluation(origin: master)
     let indexValue = evaluate(vargs[2])
     if case .error = indexValue { return nil }
     guard let indexNumber = indexValue.asNumber else { return nil }
     let index = Int(indexNumber.rounded(.down))
-
-    var exact = false
-    if vargs.count == 4 {
-      let flag = evaluate(vargs[3])
-      if case .error = flag { return nil }
-      exact = !(flag.asBool ?? true)
-    }
-    guard exact, lookupTableCache != nil else { return nil }
+    guard let exact = stripVlookupExactMatchFlag(vargs, master: master) else { return nil }
 
     guard let (start, end) = stripResolveTableRange(vargs[1]) else { return nil }
     let n = normalizedBounds(start: start, end: end)
@@ -1380,17 +1418,24 @@ extension FormulaEvaluator {
     guard index >= 1, index <= span else { return nil }
     let resultOffset = n.minCol + index - 1
 
-    let tableKey = LookupTableKey(
-      sheet: (start.sheet ?? "").lowercased(),
-      minRow: n.minRow,
-      minCol: n.minCol,
-      maxRow: n.maxRow,
-      maxCol: n.maxCol,
-      resultIndex: index,
-      horizontal: false
-    )
+    let tableKey: LookupTableKey?
+    if exact, lookupTableCache != nil {
+      tableKey = LookupTableKey(
+        sheet: (start.sheet ?? "").lowercased(),
+        minRow: n.minRow,
+        minCol: n.minCol,
+        maxRow: n.maxRow,
+        maxCol: n.maxCol,
+        resultIndex: index,
+        horizontal: false
+      )
+    } else {
+      tableKey = nil
+    }
     return ColumnIFERRORVlookupPlan(
       needleRef: needleRef,
+      vlookupArgsAtMaster: vargs,
+      exactMatch: exact,
       tableStart: start,
       tableEnd: end,
       tableKey: tableKey,
@@ -1400,6 +1445,133 @@ extension FormulaEvaluator {
     )
   }
 
+  private func shiftedVlookupArgs(
+    _ vargs: [FormulaExpr],
+    master: CellAddress,
+    origin: CellAddress
+  ) -> [FormulaExpr] {
+    let rowDelta = origin.row - master.row
+    let colDelta = origin.col - master.col
+    guard rowDelta != 0 || colDelta != 0 else { return vargs }
+    var out = vargs
+    if let ref = stripNeedleRef(vargs[0]) {
+      out[0] = .cellRef(shiftedRef(ref, master: master, origin: origin))
+    } else {
+      out[0] = FormulaRewriter.adjustExpression(vargs[0], rowDelta: rowDelta, colDelta: colDelta)
+    }
+    return out
+  }
+
+  private func makeColumnCOUNTIFSPlan(_ expr: FormulaExpr, master: CellAddress) -> ColumnCOUNTIFSPlan? {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIFS" else { return nil }
+    guard args.count >= 2, args.count.isMultiple(of: 2) else { return nil }
+    guard let firstAnchor = rangeAnchor(args[0]) else { return nil }
+
+    var rangeAnchors: [RangeAnchor] = []
+    var criterionExprs: [FormulaExpr] = []
+    var index = 0
+    while index < args.count {
+      guard let anchor = rangeAnchor(args[index]) else { return nil }
+      if anchor.rows != firstAnchor.rows || anchor.cols != firstAnchor.cols { return nil }
+      rangeAnchors.append(anchor)
+      criterionExprs.append(args[index + 1])
+      index += 2
+    }
+
+    prepareForCellEvaluation(origin: master)
+    var staticCriteria: [CellValue] = []
+    var staticTests: [CriteriaTest] = []
+    var dynamicCriterionRefs: [FormulaRef] = []
+    for criterionExpr in criterionExprs {
+      if let ref = stripNeedleRef(criterionExpr) {
+        dynamicCriterionRefs.append(ref)
+        staticCriteria.append(.blank)
+        staticTests.append(CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: false))
+      } else {
+        let value = evaluate(criterionExpr)
+        if case .error = value { return nil }
+        staticCriteria.append(value)
+        staticTests.append(criteriaTest(from: value))
+        dynamicCriterionRefs.append(
+          FormulaRef(sheet: nil, row: -1, col: -1, absRow: true, absCol: true)
+        )
+      }
+    }
+
+    var snapMemo: [LookupMemoKey: CellValue] = [:]
+    let columns = rangeAnchors.map { snapshotValues(anchor: $0, memo: &snapMemo) }
+    let rangeKeys = rangeAnchors.map { aggregateRangeKey(for: $0) }
+    return ColumnCOUNTIFSPlan(
+      rangeAnchors: rangeAnchors,
+      staticCriteria: staticCriteria,
+      staticTests: staticTests,
+      dynamicCriterionRefs: dynamicCriterionRefs,
+      columns: columns,
+      rangeKeys: rangeKeys
+    )
+  }
+
+  private func diagnoseIfStripCountifsMiss(_ expr: FormulaExpr) -> String {
+    guard case .call(let name, _) = stripUnwrap(expr), name.uppercased() == "COUNTIFS" else { return "notCOUNTIFS" }
+    return "countifsShape"
+  }
+
+  private func emitColumnCOUNTIFSRow(
+    plan: ColumnCOUNTIFSPlan,
+    master: CellAddress,
+    origin: CellAddress,
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    prepareForCellEvaluation(origin: origin)
+    var criteriaValues = plan.staticCriteria
+    var tests = plan.staticTests
+    var criterionError: CellValue?
+    for (pairIndex, ref) in plan.dynamicCriterionRefs.enumerated() where ref.row >= 0 {
+      let shifted = shiftedRef(ref, master: master, origin: origin)
+      let value = lookup(shifted)
+      if case .error = value {
+        criterionError = value
+        break
+      }
+      criteriaValues[pairIndex] = value
+      tests[pairIndex] = criteriaTest(from: value)
+    }
+    if let criterionError {
+      sink(origin, criterionError)
+      return
+    }
+    if let cache = aggregateRangeCache,
+       let lookupKeys = aggregateLookupKeys(criteria: criteriaValues, tests: tests) {
+      let matches = cache.countForCriteria(
+        rangeKeys: plan.rangeKeys,
+        criteriaKeys: lookupKeys,
+        supplyColumns: { plan.columns }
+      )
+      recalcProfile?.countifsHistogramLookups += 1
+      sink(origin, .number(Double(matches)))
+      return
+    }
+    let count = plan.columns[0].count
+    var matches = 0
+    recalcProfile?.countifsRowScanCells += count
+    for offset in 0..<count {
+      var matched = true
+      for rangeIndex in 0..<tests.count {
+        let value = plan.columns[rangeIndex][offset]
+        if aggregateRowError(value) {
+          matched = false
+          break
+        }
+        if !criteriaMatch(value, tests[rangeIndex]) {
+          matched = false
+          break
+        }
+      }
+      if matched { matches += 1 }
+    }
+    sink(origin, .number(Double(matches)))
+  }
+
   private func emitColumnIFERRORVlookupRow(
     plan: ColumnIFERRORVlookupPlan,
     master: CellAddress,
@@ -1407,8 +1579,6 @@ extension FormulaEvaluator {
     sink: (CellAddress, CellValue) -> Void
   ) {
     prepareForCellEvaluation(origin: origin)
-    let needle = lookup(shiftedRef(plan.needleRef, master: master, origin: origin))
-    recalcProfile?.iferrorVlookupFastHits += 1
     let rowDelta = origin.row - master.row
     let colDelta = origin.col - master.col
     let fallbackExpr = FormulaRewriter.adjustExpression(
@@ -1416,29 +1586,43 @@ extension FormulaEvaluator {
       rowDelta: rowDelta,
       colDelta: colDelta
     )
-    if case .error = needle {
-      recalcProfile?.ifStripFallbacks += 1
+
+    func useFallbackExpr() {
+      recalcProfile?.ifStripVlkNA += 1
       sink(origin, evaluate(fallbackExpr))
+    }
+
+    let shiftedArgs = shiftedVlookupArgs(plan.vlookupArgsAtMaster, master: master, origin: origin)
+    if plan.exactMatch, let tableKey = plan.tableKey, let cache = lookupTableCache {
+      let needle = lookup(shiftedRef(plan.needleRef, master: master, origin: origin))
+      recalcProfile?.iferrorVlookupFastHits += 1
+      if case .error = needle {
+        useFallbackExpr()
+        return
+      }
+      if let hit = cache.exactLookup(key: tableKey, needle: needle, build: {
+        buildExactLookupMap(
+          horizontal: false,
+          bounds: plan.bounds,
+          start: plan.tableStart,
+          resultOffset: plan.resultOffset
+        )
+      }) {
+        recalcProfile?.ifStripHits += 1
+        sink(origin, hit)
+        return
+      }
+      useFallbackExpr()
       return
     }
-    guard let cache = lookupTableCache else {
-      recalcProfile?.ifStripFallbacks += 1
-      sink(origin, evaluate(fallbackExpr))
-      return
-    }
-    if let hit = cache.exactLookup(key: plan.tableKey, needle: needle, build: {
-      buildExactLookupMap(
-        horizontal: false,
-        bounds: plan.bounds,
-        start: plan.tableStart,
-        resultOffset: plan.resultOffset
-      )
-    }) {
-      recalcProfile?.ifStripHits += 1
-      sink(origin, hit)
+
+    recalcProfile?.iferrorVlookupFastHits += 1
+    let value = tableLookup(shiftedArgs, horizontal: false)
+    if case .error = value {
+      useFallbackExpr()
     } else {
-      recalcProfile?.ifStripFallbacks += 1
-      sink(origin, evaluate(fallbackExpr))
+      recalcProfile?.ifStripHits += 1
+      sink(origin, value)
     }
   }
 
@@ -1463,6 +1647,25 @@ extension FormulaEvaluator {
         emitColumnIFERRORVlookupRow(plan: vlookupPlan, master: master, origin: origin, sink: sink)
       }
       return true
+    }
+    if let countifsPlan = makeColumnCOUNTIFSPlan(branchExpr, master: master) {
+      for origin in members {
+        prepareForCellEvaluation(origin: origin)
+        let guardCell = shiftedRef(guardRef, master: master, origin: origin)
+        if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+          recalcProfile?.ifBlankEqualityFastHits += 1
+          sink(origin, .string(""))
+          continue
+        }
+        recalcProfile?.ifBlankEqualityFastHits += 1
+        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
+        recalcProfile?.ifStripCountifsRows += 1
+      }
+      return true
+    }
+    recalcProfile?.recordIfStripPlanMiss(diagnoseIfStripVlookupMiss(branchExpr, master: master))
+    if case .call(let name, _) = branchExpr, name.uppercased() == "COUNTIFS" {
+      recalcProfile?.recordIfStripPlanMiss(diagnoseIfStripCountifsMiss(branchExpr))
     }
     for origin in members {
       prepareForCellEvaluation(origin: origin)
@@ -1501,7 +1704,7 @@ extension FormulaEvaluator {
     let rowDelta = origin.row - master.row
     let colDelta = origin.col - master.col
     let adjusted = FormulaRewriter.adjustExpression(branch, rowDelta: rowDelta, colDelta: colDelta)
-    recalcProfile?.ifStripFallbacks += 1
+    recalcProfile?.ifStripBranchTree += 1
     sink(origin, evaluate(adjusted))
     return true
   }
@@ -1512,93 +1715,9 @@ extension FormulaEvaluator {
     expr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    guard case .call(let name, let args) = expr, name.uppercased() == "COUNTIFS" else { return false }
-    guard args.count >= 2, args.count.isMultiple(of: 2) else { return false }
-    guard let firstAnchor = rangeAnchor(args[0]) else { return false }
-
-    var rangeAnchors: [RangeAnchor] = []
-    var criterionExprs: [FormulaExpr] = []
-    var index = 0
-    while index < args.count {
-      guard let anchor = rangeAnchor(args[index]) else { return false }
-      if anchor.rows != firstAnchor.rows || anchor.cols != firstAnchor.cols { return false }
-      rangeAnchors.append(anchor)
-      criterionExprs.append(args[index + 1])
-      index += 2
-    }
-
-    var staticCriteria: [CellValue] = []
-    var staticTests: [CriteriaTest] = []
-    var dynamicCriterionRefs: [FormulaRef] = []
-    for criterionExpr in criterionExprs {
-      if let ref = stripFormulaCellRef(criterionExpr) {
-        dynamicCriterionRefs.append(ref)
-        staticCriteria.append(.blank)
-        staticTests.append(CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: false))
-      } else {
-        let value = evaluate(criterionExpr)
-        if case .error = value { return false }
-        staticCriteria.append(value)
-        staticTests.append(criteriaTest(from: value))
-        dynamicCriterionRefs.append(
-          FormulaRef(sheet: nil, row: -1, col: -1, absRow: true, absCol: true)
-        )
-      }
-    }
-
-    var snapMemo: [LookupMemoKey: CellValue] = [:]
-    let columns = rangeAnchors.map { snapshotValues(anchor: $0, memo: &snapMemo) }
-    let rangeKeys = rangeAnchors.map { aggregateRangeKey(for: $0) }
-
+    guard let plan = makeColumnCOUNTIFSPlan(expr, master: master) else { return false }
     for origin in members {
-      prepareForCellEvaluation(origin: origin)
-      var criteriaValues = staticCriteria
-      var tests = staticTests
-      var criterionError: CellValue?
-      for (pairIndex, ref) in dynamicCriterionRefs.enumerated() where ref.row >= 0 {
-        let shifted = shiftedRef(ref, master: master, origin: origin)
-        let value = lookup(shifted)
-        if case .error = value {
-          criterionError = value
-          break
-        }
-        criteriaValues[pairIndex] = value
-        tests[pairIndex] = criteriaTest(from: value)
-      }
-      if let criterionError {
-        sink(origin, criterionError)
-        continue
-      }
-      if let cache = aggregateRangeCache,
-         let lookupKeys = aggregateLookupKeys(criteria: criteriaValues, tests: tests) {
-        let matches = cache.countForCriteria(
-          rangeKeys: rangeKeys,
-          criteriaKeys: lookupKeys,
-          supplyColumns: { columns }
-        )
-        recalcProfile?.countifsHistogramLookups += 1
-        sink(origin, .number(Double(matches)))
-        continue
-      }
-      let count = columns[0].count
-      var matches = 0
-      recalcProfile?.countifsRowScanCells += count
-      for offset in 0..<count {
-        var matched = true
-        for rangeIndex in 0..<tests.count {
-          let value = columns[rangeIndex][offset]
-          if aggregateRowError(value) {
-            matched = false
-            break
-          }
-          if !criteriaMatch(value, tests[rangeIndex]) {
-            matched = false
-            break
-          }
-        }
-        if matched { matches += 1 }
-      }
-      sink(origin, .number(Double(matches)))
+      emitColumnCOUNTIFSRow(plan: plan, master: master, origin: origin, sink: sink)
     }
     return true
   }
