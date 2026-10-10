@@ -869,6 +869,10 @@ extension FormulaEvaluator {
 
   private func tryEvalBooleanSumProduct(_ args: [FormulaExpr]) -> CellValue? {
     guard let plan = parseSumProductBooleanPlan(args) else { return nil }
+    return evalBooleanSumProductPlan(plan)
+  }
+
+  private func evalBooleanSumProductPlan(_ plan: SumProductBooleanPlan) -> CellValue? {
     guard let cache = aggregateRangeCache else { return nil }
     var memo: [LookupMemoKey: CellValue] = [:]
     let columns = plan.anchors.map { snapshotValues(anchor: $0, memo: &memo) }
@@ -1266,7 +1270,184 @@ extension FormulaEvaluator {
     ) {
       return true
     }
+    if evaluateColumnCrossSheetCountifsSumStrip(
+      master: master,
+      members: members,
+      expr: stripUnwrap(masterExpr),
+      sink: sink
+    ) {
+      return true
+    }
+    if evaluateColumnYtdSumproductQuotientStrip(
+      master: master,
+      members: members,
+      expr: stripUnwrap(masterExpr),
+      sink: sink
+    ) {
+      return true
+    }
     return false
+  }
+
+  private func stripAddChain(_ expr: FormulaExpr) -> [FormulaExpr] {
+    var terms: [FormulaExpr] = []
+    var node = stripUnwrap(expr)
+    while case .binary(.add, let lhs, let rhs) = node {
+      terms.append(stripUnwrap(rhs))
+      node = stripUnwrap(lhs)
+    }
+    terms.append(node)
+    terms.reverse()
+    return terms
+  }
+
+  // MARK: - YTD Summary: Σ month COUNTIFS($C,$A,"Yes" on $O/$Q/$R)
+
+  private struct ColumnCrossSheetCountifsSumPlan {
+    var needleRef: FormulaRef
+    var termPlans: [ColumnCOUNTIFSPlan]
+  }
+
+  private func makeColumnCrossSheetCountifsSumPlan(
+    _ expr: FormulaExpr,
+    master: CellAddress
+  ) -> ColumnCrossSheetCountifsSumPlan? {
+    let terms = stripAddChain(expr)
+    guard terms.count >= 2 else { return nil }
+    var termPlans: [ColumnCOUNTIFSPlan] = []
+    var needleRef: FormulaRef?
+    for term in terms {
+      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else { return nil }
+      guard let plan = makeColumnCOUNTIFSPlan(stripUnwrap(term), master: master) else { return nil }
+      guard plan.dynamicCriterionRefs.count == 1,
+            plan.dynamicCriterionRefs[0].row >= 0,
+            plan.staticTests.count == 2,
+            plan.staticTests[1].op == .eq,
+            plan.staticTests[1].text.caseInsensitiveCompare("Yes") == .orderedSame
+      else { return nil }
+      let critRef = plan.dynamicCriterionRefs[0]
+      if let needleRef {
+        guard stripRefSameCellAs(critRef, keyRef: needleRef) else { return nil }
+      } else {
+        needleRef = critRef
+      }
+      guard !plan.rangeKeys[0].sheet.isEmpty else { return nil }
+      termPlans.append(plan)
+    }
+    guard let needleRef, termPlans.count >= 12 else { return nil }
+    return ColumnCrossSheetCountifsSumPlan(needleRef: needleRef, termPlans: termPlans)
+  }
+
+  private func evaluateColumnCrossSheetCountifsSumStrip(
+    master: CellAddress,
+    members: [CellAddress],
+    expr: FormulaExpr,
+    sink: (CellAddress, CellValue) -> Void
+  ) -> Bool {
+    guard let plan = makeColumnCrossSheetCountifsSumPlan(expr, master: master) else { return false }
+    for origin in members {
+      var total = 0.0
+      var rowError: CellValue?
+      for termPlan in plan.termPlans {
+        emitColumnCOUNTIFSRow(plan: termPlan, master: master, origin: origin) { _, value in
+          if case .error = value {
+            rowError = value
+          } else if let number = value.asNumber {
+            total += number
+          }
+        }
+        if rowError != nil { break }
+      }
+      if let rowError {
+        sink(origin, rowError)
+      } else {
+        sink(origin, .number(total))
+      }
+      recalcProfile?.ifStripYtdCountifsSumRows += 1
+    }
+    return true
+  }
+
+  // MARK: - YTD Summary: IFERROR(Σ month KPI SUMPRODUCT / divisor, "")
+
+  private struct ColumnYtdSumproductQuotientPlan {
+    var divisorRef: FormulaRef
+    var sumproductCalls: [FormulaExpr]
+  }
+
+  private func makeColumnYtdSumproductQuotientPlan(
+    _ expr: FormulaExpr,
+    master: CellAddress
+  ) -> ColumnYtdSumproductQuotientPlan? {
+    guard case .call(let name, let args) = stripUnwrap(expr),
+          name.uppercased() == "IFERROR",
+          args.count == 2
+    else { return nil }
+    guard stripIsStaticEmptyLiteral(args[1]) else { return nil }
+    guard case .binary(.div, let numerator, let denominator) = stripUnwrap(args[0]) else { return nil }
+    guard let divisorRef = stripFormulaCellRef(denominator) else { return nil }
+    let terms = stripAddChain(stripUnwrap(numerator))
+    guard terms.count >= 12 else { return nil }
+    var calls: [FormulaExpr] = []
+    prepareForCellEvaluation(origin: master)
+    for term in terms {
+      guard case .call(let spName, let spArgs) = stripUnwrap(term),
+            spName.uppercased() == "SUMPRODUCT",
+            let _ = parseSumProductBooleanPlan(spArgs)
+      else { return nil }
+      calls.append(stripUnwrap(term))
+    }
+    return ColumnYtdSumproductQuotientPlan(divisorRef: divisorRef, sumproductCalls: calls)
+  }
+
+  private func evaluateColumnYtdSumproductQuotientStrip(
+    master: CellAddress,
+    members: [CellAddress],
+    expr: FormulaExpr,
+    sink: (CellAddress, CellValue) -> Void
+  ) -> Bool {
+    guard let plan = makeColumnYtdSumproductQuotientPlan(expr, master: master) else { return false }
+    for origin in members {
+      prepareForCellEvaluation(origin: origin)
+      let rowDelta = origin.row - master.row
+      let colDelta = origin.col - master.col
+      var sum = 0.0
+      var rowError: CellValue?
+      for call in plan.sumproductCalls {
+        let adjusted = FormulaRewriter.adjustExpression(call, rowDelta: rowDelta, colDelta: colDelta)
+        guard case .call(_, let spArgs) = stripUnwrap(adjusted),
+              let value = tryEvalBooleanSumProduct(spArgs)
+        else {
+          rowError = .error(.value)
+          break
+        }
+        if case .error = value {
+          rowError = value
+          break
+        }
+        guard let number = value.asNumber else {
+          rowError = .error(.value)
+          break
+        }
+        sum += number
+        recalcProfile?.sumproductBooleanHits += 1
+      }
+      if let rowError {
+        sink(origin, .string(""))
+        recalcProfile?.ifStripYtdSumproductQuotientRows += 1
+        continue
+      }
+      let divisor = lookup(shiftedRef(plan.divisorRef, master: master, origin: origin))
+      if case .error = divisor {
+        sink(origin, .string(""))
+      } else if let number = divisor.asNumber, number != 0 {
+        sink(origin, .number(sum / number))
+      } else {
+        sink(origin, .string(""))
+      }
+      recalcProfile?.ifStripYtdSumproductQuotientRows += 1
+    }
+    return true
   }
 
   private enum IFBlankGuard {
