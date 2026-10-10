@@ -173,8 +173,10 @@ final class FormulaAggregateRangeCache {
     let indexKey = CompositeCountIndexKey(rangeKeys: rangeKeys)
     let tuple = AggregateCriteriaTupleKey(parts: criteriaKeys)
     if let map = countIndexes[indexKey] {
+      profile?.countifsHistogramIndexHits += 1
       return map[tuple, default: 0]
     }
+    profile?.countifsHistogramIndexBuilds += 1
     let map = buildCountIndex(indexKey: indexKey, columns: supplyColumns())
     return map[tuple, default: 0]
   }

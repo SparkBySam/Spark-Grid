@@ -233,30 +233,37 @@ struct FormulaEvaluator {
   /// `IF(Cn="","",…)` — skip heavy false-branch work on blank KPI month rows.
   private func fastIFBlankEquality(_ args: [FormulaExpr]) -> CellValue? {
     guard args.count == 3 else { return nil }
-    guard case .binary(.eq, let lhs, let rhs) = unwrapFormulaExpr(args[0]) else { return nil }
-    guard isEmptyCriterion(rhs) else { return nil }
-    guard let ref = formulaCellRef(lhs) else { return nil }
+    guard isStaticEmptyLiteral(args[1]) else { return nil }
+    guard let ref = blankEqualityGuardRef(args[0]) else { return nil }
     let value = lookup(ref)
     if valueIsBlankForIfGuard(value) {
-      return evaluate(args[2])
+      recalcProfile?.ifBlankEqualityFastHits += 1
+      return .string("")
     }
-    return evaluate(args[1])
+    recalcProfile?.ifBlankEqualityFastHits += 1
+    return evaluate(args[2])
+  }
+
+  /// `Cn=""` or `""=Cn` with a single cell reference (KPI month lookup guard).
+  private func blankEqualityGuardRef(_ condition: FormulaExpr) -> FormulaRef? {
+    guard case .binary(.eq, let lhs, let rhs) = unwrapFormulaExpr(condition) else { return nil }
+    if isStaticEmptyLiteral(rhs), let ref = formulaCellRef(lhs) { return ref }
+    if isStaticEmptyLiteral(lhs), let ref = formulaCellRef(rhs) { return ref }
+    return nil
+  }
+
+  private func isStaticEmptyLiteral(_ expr: FormulaExpr) -> Bool {
+    switch unwrapFormulaExpr(expr) {
+    case .string(let text):
+      return text.isEmpty
+    default:
+      return false
+    }
   }
 
   private func unwrapFormulaExpr(_ expr: FormulaExpr) -> FormulaExpr {
     if case .unary(.plus, let inner) = expr { return unwrapFormulaExpr(inner) }
     return expr
-  }
-
-  private func isEmptyCriterion(_ expr: FormulaExpr) -> Bool {
-    switch evaluate(expr) {
-    case .string(let text):
-      return text.isEmpty
-    case .blank:
-      return true
-    default:
-      return false
-    }
   }
 
   private func formulaCellRef(_ expr: FormulaExpr) -> FormulaRef? {

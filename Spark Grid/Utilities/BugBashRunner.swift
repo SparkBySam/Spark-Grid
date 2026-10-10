@@ -3423,7 +3423,79 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "sumproductBooleanHits \(hits) expected >= 2")
     }
 
-    return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean")
+    var config = Sheet(name: "Config")
+    config.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 0, col: 0))
+    config.setCell(Cell(raw: "Agent One"), at: CellAddress(row: 0, col: 1))
+    var jan = Sheet(name: "January")
+    jan.setCell(Cell(raw: ""), at: CellAddress(row: 109, col: 2))
+    jan.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 110, col: 2))
+    jan.setCell(
+      Cell(raw: "=IF(C110=\"\",\"\",IFERROR(VLOOKUP(C110,Config!$A:$B,2,0),\"?\"))"),
+      at: CellAddress(row: 109, col: 5)
+    )
+    jan.setCell(
+      Cell(raw: "=IF(C111=\"\",\"\",IFERROR(VLOOKUP(C111,Config!$A:$B,2,0),\"?\"))"),
+      at: CellAddress(row: 110, col: 5)
+    )
+    let ifWorkbook = Workbook(sheets: [config, jan], activeSheetIndex: 1)
+    let ifEngine = FormulaEngine()
+    ifEngine.rebuild(workbook: ifWorkbook, recalculate: false)
+    _ = ifEngine.recalculateEntireWorkbook(ifWorkbook, profile: true)
+    let blankDisplay = ifEngine.displayString(
+      at: CellAddress(row: 109, col: 5),
+      sheet: jan,
+      format: nil
+    )
+    let filledDisplay = ifEngine.displayString(
+      at: CellAddress(row: 110, col: 5),
+      sheet: jan,
+      format: nil
+    )
+    guard blankDisplay.isEmpty, filledDisplay == "Agent One" else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: "IF blank guard blank=\(blankDisplay) filled=\(filledDisplay)"
+      )
+    }
+    let ifBlankHits = ifEngine.lastWorkbookRecalcProfile?.ifBlankEqualityFastHits ?? 0
+    guard ifBlankHits >= 2 else {
+      return Result(name: name, passed: false, detail: "ifBlankEqualityFastHits \(ifBlankHits) expected >= 2")
+    }
+
+    var idxCells: [CellAddress: String] = [:]
+    idxCells[CellAddress(row: 5, col: 0)] = "k"
+    for row in 10..<20 {
+      idxCells[CellAddress(row: row, col: 0)] = "k"
+      idxCells[CellAddress(row: row, col: 2)] = "k"
+    }
+    let idxFormula = "=COUNTIFS($C$11:$C$19,$A6,$C$11:$C$19,\"k\")"
+    idxCells[CellAddress(row: 5, col: 1)] = idxFormula
+    idxCells[CellAddress(row: 5, col: 2)] = idxFormula
+    var idxSheet = Sheet(name: "Sheet1")
+    for (address, raw) in idxCells {
+      idxSheet.setCell(Cell(raw: raw), at: address)
+    }
+    let idxWorkbook = Workbook(sheets: [idxSheet])
+    let idxEngine = FormulaEngine()
+    idxEngine.rebuild(workbook: idxWorkbook, recalculate: false)
+    _ = idxEngine.recalculateEntireWorkbook(idxWorkbook, profile: true)
+    guard let idxProfile = idxEngine.lastWorkbookRecalcProfile else {
+      return Result(name: name, passed: false, detail: "COUNTIFS index profile missing")
+    }
+    guard idxProfile.countifsHistogramIndexBuilds >= 1, idxProfile.countifsHistogramIndexHits >= 1 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(
+          format: "COUNTIFS idxBuild %d idxHit %d",
+          idxProfile.countifsHistogramIndexBuilds,
+          idxProfile.countifsHistogramIndexHits
+        )
+      )
+    }
+
+    return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean IFblank idxHit")
   }
 
   /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.
