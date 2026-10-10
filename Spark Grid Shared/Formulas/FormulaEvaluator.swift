@@ -49,6 +49,14 @@ struct FormulaEvaluator {
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
 
+  /// Sheet + stored master formula for IF-blank strip plan-miss diagnostics (KPI line).
+  struct StripPlanDiagnosticContext {
+    var sheetName: String
+    var masterFormulaText: String
+  }
+
+  var stripPlanDiagnosticContext: StripPlanDiagnosticContext?
+
   func prepareForCellEvaluation(origin: CellAddress?) {
     evaluationOriginCell.address = origin
   }

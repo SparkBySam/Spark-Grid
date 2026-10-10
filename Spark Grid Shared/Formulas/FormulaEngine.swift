@@ -877,6 +877,13 @@ final class FormulaEngine {
           eval(dep)
         }
       }
+      let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
+      evaluator.stripPlanDiagnosticContext = FormulaEvaluator.StripPlanDiagnosticContext(
+        sheetName: sheet.name,
+        masterFormulaText: masterFormulaText
+      )
+      defer { evaluator.stripPlanDiagnosticContext = nil }
       if plan.isColumnStrip,
          evaluator.evaluateColumnShapeStrip(
            master: plan.master,

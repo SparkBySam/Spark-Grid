@@ -51,8 +51,34 @@ final class FormulaRecalcProfile {
   var ifStripDupStatusRows: Int = 0
   var ifStripPlanMiss: [String: Int] = [:]
 
+  /// One row per `otherBranch` IF-blank strip plan miss (KPI diagnostics).
+  struct IfStripOtherBranchEntry: Sendable {
+    var sheet: String
+    var masterA1: String
+    var formula: String
+    var rejectCode: String
+  }
+
+  var ifStripOtherBranchEntries: [IfStripOtherBranchEntry] = []
+
   func recordIfStripPlanMiss(_ reason: String) {
     ifStripPlanMiss[reason, default: 0] += 1
+  }
+
+  func recordIfStripOtherBranch(
+    sheet: String,
+    masterA1: String,
+    formula: String,
+    rejectCode: String
+  ) {
+    ifStripOtherBranchEntries.append(
+      IfStripOtherBranchEntry(
+        sheet: sheet,
+        masterA1: masterA1,
+        formula: formula,
+        rejectCode: rejectCode
+      )
+    )
   }
   /// `SUMPRODUCT` boolean-product fast path (masked histogram / column snapshots).
   var sumproductBooleanHits: Int = 0
@@ -115,12 +141,21 @@ final class FormulaRecalcProfile {
     for (reason, count) in other.ifStripPlanMiss {
       ifStripPlanMiss[reason, default: 0] += count
     }
+    ifStripOtherBranchEntries.append(contentsOf: other.ifStripOtherBranchEntries)
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
     sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
     for (name, seconds) in other.evalByFunctionSeconds {
       evalByFunctionSeconds[name, default: 0] += seconds
     }
+  }
+
+  private func ifStripOtherBranchSummary() -> String {
+    guard !ifStripOtherBranchEntries.isEmpty else { return "" }
+    let parts = ifStripOtherBranchEntries.map { entry in
+      "\(entry.sheet)!\(entry.masterA1):\(entry.rejectCode):\(entry.formula)"
+    }
+    return " | ob " + parts.joined(separator: ";")
   }
 
   private func ifStripMissSummary() -> String {
@@ -132,7 +167,7 @@ final class FormulaRecalcProfile {
       parts.append("planMiss \(miss)")
     }
     guard !parts.isEmpty else { return "" }
-    return " | stripFB " + parts.joined(separator: " ")
+    return " | stripFB " + parts.joined(separator: " ") + ifStripOtherBranchSummary()
   }
 
   private func sheetPhaseWallSummary() -> String {

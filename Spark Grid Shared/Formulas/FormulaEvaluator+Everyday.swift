@@ -1704,6 +1704,170 @@ extension FormulaEvaluator {
     )
   }
 
+  // MARK: - L duplicate-status plan reject diagnostics (match guards; no behavior change)
+
+  private func diagnoseStripGrowingCountifsPrefixReject(
+    _ rangeExpr: FormulaExpr,
+    criterion: FormulaExpr,
+    keyRef: FormulaRef
+  ) -> String {
+    guard case .range(let start, let end) = resolvedExpr(stripUnwrap(rangeExpr)) else {
+      return "dup.prefix.notRange"
+    }
+    guard start.absRow, !end.absRow, start.col == end.col else {
+      return "dup.prefix.startEndShape"
+    }
+    guard end.row == keyRef.row, end.col == keyRef.col else {
+      return "dup.prefix.endKeyRowCol"
+    }
+    guard let critRef = stripFormulaCellRef(criterion) else {
+      return "dup.prefix.criterionRef"
+    }
+    guard stripRefSameCellAs(critRef, keyRef: keyRef) else {
+      return "dup.prefix.critKeyCell"
+    }
+    guard critRef.row == end.row, critRef.col == end.col else {
+      return "dup.prefix.critEndRowCol"
+    }
+    return "dup.prefix.ok"
+  }
+
+  private func diagnoseStripCountifRangeCriterionReject(_ expr: FormulaExpr) -> String {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIF", args.count == 2 else {
+      return "dup.countif.notCall2"
+    }
+    guard let anchor = rangeAnchor(args[0]), anchor.cols == 1 else {
+      return "dup.countif.rangeCols"
+    }
+    guard stripFormulaCellRef(args[1]) != nil else {
+      return "dup.countif.criterionRef"
+    }
+    return "dup.countif.ok"
+  }
+
+  private func diagnoseDuplicateStatusArmReject(
+    _ expr: FormulaExpr,
+    keyRef: FormulaRef,
+    arm: String
+  ) -> String? {
+    let prefix = "dup.\(arm)."
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "IF", args.count == 3 else {
+      return prefix + "ifTop"
+    }
+    guard let countifsExpr = stripCountGreaterThanOneExpr(args[0]),
+          case .call(let countifsName, let countifsArgs) = stripUnwrap(countifsExpr),
+          countifsName.uppercased() == "COUNTIFS",
+          countifsArgs.count == 2
+    else {
+      return prefix + "countifsGt1"
+    }
+    guard stripStaticLabel(args[1], "DUPLICATE") else {
+      return prefix + "duplicateLabel"
+    }
+    guard case .call(let innerName, let innerArgs) = stripUnwrap(args[2]),
+          innerName.uppercased() == "IF",
+          innerArgs.count == 3
+    else {
+      return prefix + "innerIf"
+    }
+    guard let countifExpr = stripCountGreaterThanOneExpr(innerArgs[0]),
+          case .call(let countifName, let countifArgs) = stripUnwrap(countifExpr),
+          countifName.uppercased() == "COUNTIF",
+          countifArgs.count == 2
+    else {
+      return prefix + "countifGt1"
+    }
+    guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE") else {
+      return prefix + "originalUniqueLabel"
+    }
+    let prefixReject = diagnoseStripGrowingCountifsPrefixReject(
+      countifsArgs[0],
+      criterion: countifsArgs[1],
+      keyRef: keyRef
+    )
+    if prefixReject != "dup.prefix.ok" {
+      return prefix + String(prefixReject.dropFirst(4))
+    }
+    let countifReject = diagnoseStripCountifRangeCriterionReject(countifArgs[0])
+    if countifReject != "dup.countif.ok" {
+      return prefix + String(countifReject.dropFirst(4))
+    }
+    guard let (_, fixedCrit) = stripCountifRangeCriterion(countifArgs[0]) else {
+      return prefix + "countifRange"
+    }
+    guard stripRefSameCellAs(fixedCrit, keyRef: keyRef) else {
+      return prefix + "fixedCritKeyCell"
+    }
+    guard let growing = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
+          let (fixedAnchor, _) = stripCountifRangeCriterion(countifArgs[0])
+    else {
+      return prefix + "prefixOrCountif"
+    }
+    guard fixedAnchor.col == growing.keyCol else {
+      return prefix + "fixedColPrefixCol"
+    }
+    return nil
+  }
+
+  private func diagnoseColumnDuplicateStatusPlanReject(
+    branch: FormulaExpr,
+    pickRef: FormulaRef,
+    altRef: FormulaRef
+  ) -> String {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
+      return "dup.branch.ifTop"
+    }
+    guard let branchPick = stripNotEmptyPickRef(args[0]) else {
+      return "dup.branch.pickNotEmpty"
+    }
+    guard stripRefSameCellAs(branchPick, keyRef: pickRef) else {
+      return "dup.branch.pickKeyCell"
+    }
+    if let pickReject = diagnoseDuplicateStatusArmReject(args[1], keyRef: pickRef, arm: "pick") {
+      return pickReject
+    }
+    if let altReject = diagnoseDuplicateStatusArmReject(args[2], keyRef: altRef, arm: "alt") {
+      return altReject
+    }
+    return "dup.branch.ok"
+  }
+
+  private func diagnoseIfStripOtherBranchReject(
+    branch: FormulaExpr,
+    ifGuard: IFBlankGuard,
+    master: CellAddress
+  ) -> String {
+    switch ifGuard {
+    case .andBothBlank(let left, let right):
+      if makeColumnTextJoinPlan(branch, guardA: left, guardB: right) != nil {
+        return "ifBlank.textJoinUnexpected"
+      }
+      let dupReject = diagnoseColumnDuplicateStatusPlanReject(
+        branch: branch,
+        pickRef: left,
+        altRef: right
+      )
+      if dupReject != "dup.branch.ok" {
+        return dupReject
+      }
+      if makeColumnDuplicateStatusPlan(branch, pickRef: left, altRef: right, master: master) != nil {
+        return "ifBlank.dupUnexpected"
+      }
+      return "ifBlank.dupSnapshot"
+    case .single(let guardRef):
+      if makeColumnCountifPickPlan(branch, guardRef: guardRef, master: master) != nil {
+        return "ifBlank.countifPickUnexpected"
+      }
+      if let kernel = stripCountifsKernelExpr(branch) {
+        return makeColumnCOUNTIFSPlan(kernel, master: master) == nil ? "ifBlank.countifsPlan" : "ifBlank.countifsUnexpected"
+      }
+      if case .call(let name, _) = stripUnwrap(branch), name.uppercased() == "IFERROR" {
+        return "ifBlank.iferrorNotVlk"
+      }
+      return "ifBlank.singleOther"
+    }
+  }
+
   private func stripAggregateValueKey(_ value: CellValue) -> AggregateValueKey? {
     if case .error = value { return nil }
     return lookupKeyForCriterion(value, test: criteriaTest(from: value))
@@ -2138,9 +2302,21 @@ extension FormulaEvaluator {
         return true
       }
     }
-    recalcProfile?.recordIfStripPlanMiss(
-      diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifGuard, master: master)
-    )
+    let missReason = diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifGuard, master: master)
+    recalcProfile?.recordIfStripPlanMiss(missReason)
+    if missReason == "otherBranch", let diag = stripPlanDiagnosticContext {
+      let rejectCode = diagnoseIfStripOtherBranchReject(
+        branch: branchExpr,
+        ifGuard: ifGuard,
+        master: master
+      )
+      recalcProfile?.recordIfStripOtherBranch(
+        sheet: diag.sheetName,
+        masterA1: master.a1,
+        formula: diag.masterFormulaText,
+        rejectCode: rejectCode
+      )
+    }
     return false
   }
 
