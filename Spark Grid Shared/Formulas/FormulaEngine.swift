@@ -120,16 +120,43 @@ final class FormulaEngine {
     lookupTableCache.invalidateAll()
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
-    for sheet in workbookRecalcSheetOrder(workbook) {
-      activeSheetName = sheet.name
-      clearFormulaGraph()
-      let ingestStart = CFAbsoluteTimeGetCurrent()
-      for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-        ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
+    let ordered = workbookRecalcSheetOrder(workbook)
+    let monthSheets = ordered.filter { workbookRecalcSheetRank($0.name) == 1 }
+    let useParallelMonths = monthSheets.count >= 2
+
+    for sheet in ordered where workbookRecalcSheetRank(sheet.name) == 0 {
+      recalculateWorkbookSheet(sheet, profile: prof, useShapeStrips: true)
+    }
+
+    if useParallelMonths {
+      let profileLock = NSLock()
+      var parallelValues: [String: [CellAddress: CellValue]] = [:]
+      DispatchQueue.concurrentPerform(iterations: monthSheets.count) { index in
+        let sheet = monthSheets[index]
+        let worker = FormulaEngine()
+        let localProfile = FormulaRecalcProfile()
+        let values = worker.runIsolatedSheetRecalc(
+          workbook: workbook,
+          sheet: sheet,
+          profile: localProfile,
+          useShapeStrips: true
+        )
+        profileLock.lock()
+        prof?.mergeFrom(localProfile)
+        parallelValues[sheet.name.lowercased()] = values
+        profileLock.unlock()
       }
-      prof?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
-      recalculateAll(sheet: sheet, profile: prof)
-      mergeRecalculatedValues(for: sheet)
+      for (key, values) in parallelValues {
+        recalculatedSheetValues[key] = values
+      }
+    } else {
+      for sheet in monthSheets {
+        recalculateWorkbookSheet(sheet, profile: prof, useShapeStrips: true)
+      }
+    }
+
+    for sheet in ordered where workbookRecalcSheetRank(sheet.name) == 2 {
+      recalculateWorkbookSheet(sheet, profile: prof, useShapeStrips: true)
     }
     aggregateRangeCache.profile = nil
     lookupTableCache.profile = nil
@@ -375,11 +402,92 @@ final class FormulaEngine {
     return value
   }
 
-  private func recalculateAll(sheet: Sheet, profile: FormulaRecalcProfile? = nil) {
-    recalculate(addresses: Set(formulaAST.keys), sheet: sheet, profile: profile)
+  private struct ShapeStripPlan {
+    var master: CellAddress
+    var members: [CellAddress]
   }
 
-  private func recalculate(addresses: Set<CellAddress>, sheet: Sheet, profile: FormulaRecalcProfile? = nil) {
+  private func recalculateWorkbookSheet(
+    _ sheet: Sheet,
+    profile: FormulaRecalcProfile?,
+    useShapeStrips: Bool
+  ) {
+    activeSheetName = sheet.name
+    clearFormulaGraph()
+    let ingestStart = CFAbsoluteTimeGetCurrent()
+    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
+    }
+    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+    recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
+    mergeRecalculatedValues(for: sheet)
+  }
+
+  /// One sheet pass for parallel month workers (does not touch caller caches).
+  fileprivate func runIsolatedSheetRecalc(
+    workbook: Workbook,
+    sheet: Sheet,
+    profile: FormulaRecalcProfile?,
+    useShapeStrips: Bool
+  ) -> [CellAddress: CellValue] {
+    self.workbook = workbook
+    activeSheetName = sheet.name
+    clearFormulaGraph()
+    let ingestStart = CFAbsoluteTimeGetCurrent()
+    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+      ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
+    }
+    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+    recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
+    var values: [CellAddress: CellValue] = [:]
+    for address in formulaAST.keys {
+      if let value = valueCache[address] {
+        values[address] = value
+      }
+    }
+    return values
+  }
+
+  private func buildShapeStripPlans(sheet: Sheet) -> [ShapeStripPlan] {
+    var grouped: [String: [CellAddress]] = [:]
+    for address in formulaAST.keys {
+      let raw = sheet.cell(at: address).raw
+      let key = FormulaRewriter.shapeAnchorKey(raw: raw, anchor: address)
+      grouped[key, default: []].append(address)
+    }
+    let minimumMembers = 8
+    var plans: [ShapeStripPlan] = []
+    for (_, members) in grouped where members.count >= minimumMembers {
+      guard let master = members.min(by: {
+        if $0.row != $1.row { return $0.row < $1.row }
+        return $0.col < $1.col
+      }) else { continue }
+      let masterRaw = sheet.cell(at: master).raw
+      let matchesFill = members.allSatisfy { addr in
+        let rowDelta = addr.row - master.row
+        let colDelta = addr.col - master.col
+        return FormulaRewriter.adjust(masterRaw, rowDelta: rowDelta, colDelta: colDelta) == sheet.cell(at: addr).raw
+      }
+      guard matchesFill else { continue }
+      plans.append(ShapeStripPlan(master: master, members: members))
+    }
+    return plans
+  }
+
+  private func recalculateAll(
+    sheet: Sheet,
+    profile: FormulaRecalcProfile? = nil,
+    useShapeStrips: Bool = false
+  ) {
+    recalculate(addresses: Set(formulaAST.keys), sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
+  }
+
+  private func recalculate(
+    addresses: Set<CellAddress>,
+    sheet: Sheet,
+    profile: FormulaRecalcProfile? = nil,
+    useShapeStrips: Bool = false
+  ) {
     aggregateRangeCache.workbookBulkLoader = { [weak self] key in
       self?.workbookRangeValues(for: key) ?? []
     }
@@ -388,9 +496,58 @@ final class FormulaEngine {
     var visiting: Set<CellAddress> = []
     var visited: Set<CellAddress> = []
     var evaluator: FormulaEvaluator!
+    var stripByMaster: [CellAddress: ShapeStripPlan] = [:]
+    var memberToMaster: [CellAddress: CellAddress] = [:]
+    var stripExecuted: Set<CellAddress> = []
+    if useShapeStrips {
+      for plan in buildShapeStripPlans(sheet: sheet) {
+        stripByMaster[plan.master] = plan
+        for member in plan.members {
+          memberToMaster[member] = plan.master
+        }
+      }
+    }
+
+    func evalDependencies(_ address: CellAddress) {
+      guard let deps = dependencies[address] else { return }
+      for dep in deps {
+        if formulaAST[dep] != nil {
+          eval(dep)
+        } else if valueCache[dep] == nil {
+          valueCache[dep] = literalOrEmpty(sheet.cell(at: dep).raw)
+        }
+      }
+    }
+
+    func evalShapeStrip(_ plan: ShapeStripPlan) {
+      guard let masterExpr = formulaAST[plan.master] else { return }
+      let orderedMembers = plan.members.sorted {
+        if $0.row != $1.row { return $0.row < $1.row }
+        return $0.col < $1.col
+      }
+      for address in orderedMembers {
+        if visited.contains(address) { continue }
+        evalDependencies(address)
+        let rowDelta = address.row - plan.master.row
+        let colDelta = address.col - plan.master.col
+        let expr = FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
+        evaluator.prepareForCellEvaluation(origin: address)
+        valueCache[address] = evaluator.evaluate(expr)
+        visited.insert(address)
+      }
+    }
 
     func eval(_ address: CellAddress) {
       if visited.contains(address) { return }
+      if let master = memberToMaster[address] {
+        if !stripExecuted.contains(master) {
+          if let plan = stripByMaster[master] {
+            evalShapeStrip(plan)
+            stripExecuted.insert(master)
+          }
+        }
+        return
+      }
       if visiting.contains(address) {
         valueCache[address] = .error(.cycle)
         visited.insert(address)
@@ -409,15 +566,7 @@ final class FormulaEngine {
         return
       }
 
-      if let deps = dependencies[address] {
-        for dep in deps {
-          if formulaAST[dep] != nil {
-            eval(dep)
-          } else if valueCache[dep] == nil {
-            valueCache[dep] = literalOrEmpty(sheet.cell(at: dep).raw)
-          }
-        }
-      }
+      evalDependencies(address)
 
       evaluator.prepareForCellEvaluation(origin: address)
       valueCache[address] = evaluator.evaluate(expr)

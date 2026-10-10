@@ -28,6 +28,25 @@ final class FormulaRecalcProfile {
     evalByFunctionSeconds[function, default: 0] += seconds
   }
 
+  func mergeFrom(_ other: FormulaRecalcProfile) {
+    ingestSeconds += other.ingestSeconds
+    aggregateIndexBuildSeconds += other.aggregateIndexBuildSeconds
+    lookupIndexBuildSeconds += other.lookupIndexBuildSeconds
+    evalSeconds += other.evalSeconds
+    countifsHistogramLookups += other.countifsHistogramLookups
+    countifsHistogramIndexHits += other.countifsHistogramIndexHits
+    countifsHistogramIndexBuilds += other.countifsHistogramIndexBuilds
+    countifsRowScanCells += other.countifsRowScanCells
+    foreignFormulaEvaluations += other.foreignFormulaEvaluations
+    ifBlankEqualityFastHits += other.ifBlankEqualityFastHits
+    iferrorVlookupFastHits += other.iferrorVlookupFastHits
+    sumproductBooleanHits += other.sumproductBooleanHits
+    sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
+    for (name, seconds) in other.evalByFunctionSeconds {
+      evalByFunctionSeconds[name, default: 0] += seconds
+    }
+  }
+
   func detailSummary(totalSeconds: Double) -> String {
     let topEval = evalByFunctionSeconds.sorted { $0.value > $1.value }.prefix(4)
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
