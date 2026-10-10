@@ -539,6 +539,42 @@ extension FormulaEvaluator {
     return values
   }
 
+  // MARK: - Column batch range pins
+
+  /// Snapshot every range referenced by `expr` once at `origin` (column fill must not rescan per row).
+  func warmColumnRangeSnapshots(for expr: FormulaExpr, at origin: CellAddress) {
+    prepareForCellEvaluation(origin: origin)
+    var pinned = Set<AggregateRangeKey>()
+    var memo: [LookupMemoKey: CellValue] = [:]
+    warmColumnRangeSnapshotWalk(expr, pinned: &pinned, memo: &memo)
+  }
+
+  private func warmColumnRangeSnapshotWalk(
+    _ expr: FormulaExpr,
+    pinned: inout Set<AggregateRangeKey>,
+    memo: inout [LookupMemoKey: CellValue]
+  ) {
+    if let anchor = rangeAnchor(expr) {
+      let key = aggregateRangeKey(for: anchor)
+      if pinned.insert(key).inserted {
+        _ = snapshotValues(anchor: anchor, memo: &memo)
+      }
+    }
+    switch expr {
+    case .unary(_, let inner):
+      warmColumnRangeSnapshotWalk(inner, pinned: &pinned, memo: &memo)
+    case .binary(_, let lhs, let rhs):
+      warmColumnRangeSnapshotWalk(lhs, pinned: &pinned, memo: &memo)
+      warmColumnRangeSnapshotWalk(rhs, pinned: &pinned, memo: &memo)
+    case .call(_, let args):
+      for arg in args {
+        warmColumnRangeSnapshotWalk(arg, pinned: &pinned, memo: &memo)
+      }
+    default:
+      break
+    }
+  }
+
   // MARK: - Criteria
 
   private func criteriaTest(from value: CellValue) -> CriteriaTest {

@@ -81,6 +81,7 @@ enum BugBashRunner {
     results.append(formulaEvalRegressionGate())
     results.append(everydayFormulas())
     results.append(sumproductBooleanFastPathSelfCheck())
+    results.append(columnFilledScalarParity())
     results.append(kpiJuneStyleCountifs())
     results.append(countifsSkipsErrorRows())
     results.append(countifsRangeDependencyBudget())
@@ -3507,6 +3508,81 @@ enum BugBashRunner {
     }
 
     return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean IFblank idxHit")
+  }
+
+  /// Column fill batch eval must match per-cell scalar eval (range kernels + warm cache).
+  private static func columnFilledScalarParity() -> Result {
+    let name = "column fill vs scalar parity"
+    let masterRow = 4
+    let rowCount = 12
+    let formulaCols = 10...15
+
+    func makeSheet() -> Sheet {
+      var sheet = Sheet(name: "Sheet1")
+      for row in 0..<24 {
+        sheet.setCell(Cell(raw: String(row + 1)), at: CellAddress(row: row, col: 0))
+        sheet.setCell(Cell(raw: "pick"), at: CellAddress(row: row, col: 1))
+        sheet.setCell(Cell(raw: String((row % 4) + 1)), at: CellAddress(row: row, col: 2))
+        sheet.setCell(Cell(raw: row % 2 == 0 ? "1" : "0"), at: CellAddress(row: row, col: 3))
+        sheet.setCell(Cell(raw: "a\(row)"), at: CellAddress(row: row, col: 4))
+        sheet.setCell(Cell(raw: "b\(row)"), at: CellAddress(row: row, col: 5))
+        sheet.setCell(Cell(raw: "c\(row)"), at: CellAddress(row: row, col: 6))
+        sheet.setCell(Cell(raw: String(10 + row)), at: CellAddress(row: row, col: 7))
+        sheet.setCell(Cell(raw: "v\(row)"), at: CellAddress(row: row, col: 8))
+      }
+      let templates = [
+        "=A5+1",
+        "=IF(A5>10,\"big\",\"small\")",
+        "=COUNTIF($B$1:$B$24,$A5)",
+        "=SUMPRODUCT(($C$1:$C$24=$A5)*($D$1:$D$24>0))",
+        "=TEXTJOIN(\",\",TRUE,E5,G5)",
+        "=VLOOKUP(A5,$H$1:$I$24,2,FALSE)",
+      ]
+      for (offset, template) in templates.enumerated() {
+        let col = formulaCols.lowerBound + offset
+        for row in masterRow..<(masterRow + rowCount) {
+          let excelRow = row + 1
+          let formula = template.replacingOccurrences(of: "A5", with: "A\(excelRow)")
+            .replacingOccurrences(of: "E5", with: "E\(excelRow)")
+            .replacingOccurrences(of: "G5", with: "G\(excelRow)")
+          sheet.setCell(Cell(raw: formula), at: CellAddress(row: row, col: col))
+        }
+      }
+      return sheet
+    }
+
+    func formulaValues(useColumnBatch: Bool) -> [CellAddress: CellValue] {
+      let sheet = makeSheet()
+      let engine = FormulaEngine()
+      engine.useColumnBatchEvaluator = useColumnBatch
+      let workbook = Workbook(sheets: [sheet])
+      engine.rebuild(workbook: workbook, recalculate: false)
+      _ = engine.recalculateEntireWorkbook(workbook, profile: false)
+      var values: [CellAddress: CellValue] = [:]
+      for row in masterRow..<(masterRow + rowCount) {
+        for col in formulaCols {
+          let address = CellAddress(row: row, col: col)
+          values[address] = engine.displayValue(at: address, sheet: workbook.activeSheet)
+        }
+      }
+      return values
+    }
+
+    let scalar = formulaValues(useColumnBatch: false)
+    let column = formulaValues(useColumnBatch: true)
+    for address in scalar.keys.sorted() {
+      guard let batch = column[address] else {
+        return Result(name: name, passed: false, detail: "missing batch \(address.a1)")
+      }
+      guard sameCellValue(scalar[address]!, batch) else {
+        return Result(
+          name: name,
+          passed: false,
+          detail: "\(address.a1) scalar \(scalar[address]!.displayString) batch \(batch.displayString)"
+        )
+      }
+    }
+    return Result(name: name, passed: true, detail: "\(scalar.count) cells arithmetic IF COUNTIF SUMPRODUCT TEXTJOIN VLOOKUP")
   }
 
   /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.

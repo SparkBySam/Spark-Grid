@@ -53,6 +53,10 @@ final class FormulaRecalcProfile {
   var ifStripYtdCountifsSumRows: Int = 0
   /// YTD Summary **R–Y** `IFERROR(Σ SUMPRODUCT/E, "")` column strip rows.
   var ifStripYtdSumproductQuotientRows: Int = 0
+  /// Filled-column batch: rows evaluated via range-kernel column path (`FormulaColumnEvaluator`).
+  var columnBatchKernelRows: Int = 0
+  /// Filled-column batch: rows that fell back to warmed-cache scalar fill.
+  var columnBatchScalarRows: Int = 0
   var ifStripPlanMiss: [String: Int] = [:]
 
   /// One row per `otherBranch` IF-blank strip plan miss (KPI diagnostics).
@@ -176,6 +180,8 @@ final class FormulaRecalcProfile {
     ifStripDupStatusRows += other.ifStripDupStatusRows
     ifStripYtdCountifsSumRows += other.ifStripYtdCountifsSumRows
     ifStripYtdSumproductQuotientRows += other.ifStripYtdSumproductQuotientRows
+    columnBatchKernelRows += other.columnBatchKernelRows
+    columnBatchScalarRows += other.columnBatchScalarRows
     for (reason, count) in other.ifStripPlanMiss {
       ifStripPlanMiss[reason, default: 0] += count
     }
@@ -244,7 +250,7 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d textJoinStrip %d dupStrip %d ytdCntStrip %d ytdSpStrip %d | eval %@",
+      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d textJoinStrip %d dupStrip %d ytdCntStrip %d ytdSpStrip %d colBatchK %d colBatchS %d | eval %@",
       totalSeconds,
       ingestSeconds,
       ingestBulkSheetWallPeakSeconds,
@@ -276,6 +282,8 @@ final class FormulaRecalcProfile {
       ifStripDupStatusRows,
       ifStripYtdCountifsSumRows,
       ifStripYtdSumproductQuotientRows,
+      columnBatchKernelRows,
+      columnBatchScalarRows,
       topEval.isEmpty ? "—" : topEval
     ) + ifStripMissSummary() + ytdSpQuotientPlanExitSummary() + sheetPhaseWallSummary()
   }
