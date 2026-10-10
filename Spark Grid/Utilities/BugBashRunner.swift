@@ -3515,7 +3515,7 @@ enum BugBashRunner {
     let name = "column fill vs scalar parity"
     let masterRow = 4
     let rowCount = 12
-    let formulaCols = 10...15
+    let formulaCols = 10...17
 
     func makeSheet() -> Sheet {
       var sheet = Sheet(name: "Sheet1")
@@ -3537,6 +3537,8 @@ enum BugBashRunner {
         "=SUMPRODUCT(($C$1:$C$24=$A5)*($D$1:$D$24>0))",
         "=TEXTJOIN(\",\",TRUE,E5,G5)",
         "=VLOOKUP(A5,$H$1:$I$24,2,FALSE)",
+        "=IFERROR(AVERAGEIFS($B$1:$B$24,$C$1:$C$24,$A5),\"\")",
+        "=IF(A5=\"\",\"\",IFERROR(SUMPRODUCT(($C$1:$C$24=$A5)*($D$1:$D$24>0)),\"\"))",
       ]
       for (offset, template) in templates.enumerated() {
         let col = formulaCols.lowerBound + offset
@@ -3582,7 +3584,11 @@ enum BugBashRunner {
         )
       }
     }
-    return Result(name: name, passed: true, detail: "\(scalar.count) cells arithmetic IF COUNTIF SUMPRODUCT TEXTJOIN VLOOKUP")
+    return Result(
+      name: name,
+      passed: true,
+      detail: "\(scalar.count) cells arithmetic IF COUNTIF SUMPRODUCT TEXTJOIN VLOOKUP IFERROR AVERAGEIFS IF-blank SUMPRODUCT"
+    )
   }
 
   /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.
