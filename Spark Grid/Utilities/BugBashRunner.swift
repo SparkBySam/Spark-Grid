@@ -3495,41 +3495,6 @@ enum BugBashRunner {
       )
     }
 
-    var fuseJan = Sheet(name: "January")
-    var fuseFeb = Sheet(name: "February")
-    for row in 110...115 {
-      fuseJan.setCell(Cell(raw: "agent-1"), at: CellAddress(row: row, col: 2))
-      fuseJan.setCell(Cell(raw: "Yes"), at: CellAddress(row: row, col: 14))
-      fuseFeb.setCell(Cell(raw: "agent-1"), at: CellAddress(row: row, col: 2))
-      fuseFeb.setCell(Cell(raw: "Yes"), at: CellAddress(row: row, col: 14))
-    }
-    var fuseYtd = Sheet(name: "YTD Summary")
-    fuseYtd.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 4, col: 0))
-    fuseYtd.setCell(
-      Cell(
-        raw: """
-        =COUNTIFS(January!$C$110:$C$115,$A5,January!$O$110:$O$115,"Yes")+COUNTIFS(February!$C$110:$C$115,$A5,February!$O$110:$O$115,"Yes")
-        """
-      ),
-      at: CellAddress(row: 4, col: 4)
-    )
-    let fuseWorkbook = Workbook(sheets: [fuseJan, fuseFeb, fuseYtd], activeSheetIndex: 2)
-    let fuseEngine = FormulaEngine()
-    fuseEngine.rebuild(workbook: fuseWorkbook, recalculate: false)
-    _ = fuseEngine.recalculateEntireWorkbook(fuseWorkbook, profile: true)
-    let fusedValue = fuseEngine.displayValue(at: CellAddress(row: 4, col: 4), sheet: fuseYtd)
-    guard case .number(let fusedTotal) = fusedValue, fusedTotal == 12 else {
-      return Result(
-        name: name,
-        passed: false,
-        detail: "fused COUNTIFS sum got \(fusedValue.displayString) expected 12"
-      )
-    }
-    let fuseHits = fuseEngine.lastWorkbookRecalcProfile?.countifsFusedAddHits ?? 0
-    guard fuseHits >= 1 else {
-      return Result(name: name, passed: false, detail: "countifsFusedAddHits \(fuseHits)")
-    }
-
     let iferr = evalFormula(
       "=IFERROR(VLOOKUP(\"missing\",Config!$A:$B,2,FALSE),\"?\")",
       cells: [
@@ -3541,7 +3506,7 @@ enum BugBashRunner {
       return Result(name: name, passed: false, detail: "IFERROR VLOOKUP fast got \(iferr.displayString)")
     }
 
-    return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean IFblank idxHit fuse")
+    return Result(name: name, passed: true, detail: "SUMIF VLOOKUP COUNTIFS spell SUMPRODUCT boolean IFblank idxHit")
   }
 
   /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.

@@ -94,9 +94,6 @@ struct FormulaEvaluator {
   }
 
   private func evalBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> CellValue {
-    if op == .add, let fused = tryEvalFusedCountIFSSum(lhsExpr, rhsExpr) {
-      return fused
-    }
     let values = arrayBinary(op, lhsExpr, rhsExpr, cache: nil)
     if values.count == 1 { return values[0] }
     if values.isEmpty { return .blank }

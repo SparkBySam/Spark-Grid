@@ -91,113 +91,43 @@ extension FormulaEvaluator {
   }
 
   func evalCOUNTIFS(_ args: [FormulaExpr]) -> CellValue {
-    switch countIFSEvalResult(args) {
-    case .value(let count):
-      return .number(Double(count))
-    case .error(let value):
-      return value
-    }
-  }
-
-  /// KPI YTD: `COUNTIFS(Jan…)+COUNTIFS(Feb…)+…` with identical criterion expressions.
-  func tryEvalFusedCountIFSSum(_ lhs: FormulaExpr, _ rhs: FormulaExpr) -> CellValue? {
-    guard let terms = collectAddTreeCountIFS(lhs, rhs), terms.count >= 2 else { return nil }
-    guard let criteriaExprs = sharedCountIFSCriteriaExprs(in: terms) else { return nil }
-    var criteriaValues: [CellValue] = []
-    criteriaValues.reserveCapacity(criteriaExprs.count)
-    for expr in criteriaExprs {
-      let value = evaluate(expr)
-      if case .error = value { return value }
-      criteriaValues.append(value)
-    }
-    let tests = criteriaValues.map { criteriaTest(from: $0) }
-    guard aggregateLookupKeys(criteria: criteriaValues, tests: tests) != nil else { return nil }
-
-    var total = 0
-    for term in terms {
-      guard case .call(_, let args) = term else { return nil }
-      switch countIFSEvalResult(args, criteriaValues: criteriaValues, tests: tests) {
-      case .value(let count):
-        total += count
-      case .error(let value):
-        return value
-      }
-    }
-    recalcProfile?.countifsFusedAddHits += 1
-    return .number(Double(total))
-  }
-
-  private enum CountIFSOutcome {
-    case value(Int)
-    case error(CellValue)
-  }
-
-  private func countIFSEvalResult(
-    _ args: [FormulaExpr],
-    criteriaValues: [CellValue]? = nil,
-    tests: [CriteriaTest]? = nil
-  ) -> CountIFSOutcome {
-    guard args.count >= 2, args.count.isMultiple(of: 2) else { return .error(.error(.value)) }
-    guard let first = rangeAnchor(args[0]) else { return .error(.error(.value)) }
-
-    let resolvedCriteria: [CellValue]
-    let resolvedTests: [CriteriaTest]
-    if let criteriaValues, let tests, criteriaValues.count * 2 == args.count {
-      resolvedCriteria = criteriaValues
-      resolvedTests = tests
-    } else {
-      var builtValues: [CellValue] = []
-      var builtTests: [CriteriaTest] = []
-      var index = 0
-      while index < args.count {
-        guard let anchor = rangeAnchor(args[index]) else { return .error(.error(.value)) }
-        if anchor.rows != first.rows || anchor.cols != first.cols { return .error(.error(.value)) }
-        let criterion = evaluate(args[index + 1])
-        if case .error = criterion { return .error(criterion) }
-        builtValues.append(criterion)
-        builtTests.append(criteriaTest(from: criterion))
-        index += 2
-      }
-      resolvedCriteria = builtValues
-      resolvedTests = builtTests
-    }
-
-    var rangeTests: [(RangeAnchor, CriteriaTest, CellValue)] = []
-    rangeTests.reserveCapacity(resolvedTests.count)
+    guard args.count >= 2, args.count.isMultiple(of: 2) else { return .error(.value) }
+    guard let first = rangeAnchor(args[0]) else { return .error(.value) }
+    var tests: [(RangeAnchor, CriteriaTest, CellValue)] = []
     var index = 0
     while index < args.count {
-      guard let anchor = rangeAnchor(args[index]) else { return .error(.error(.value)) }
-      if anchor.rows != first.rows || anchor.cols != first.cols { return .error(.error(.value)) }
-      let testIndex = index / 2
-      rangeTests.append((anchor, resolvedTests[testIndex], resolvedCriteria[testIndex]))
+      guard let anchor = rangeAnchor(args[index]) else { return .error(.value) }
+      if anchor.rows != first.rows || anchor.cols != first.cols { return .error(.value) }
+      let criterion = evaluate(args[index + 1])
+      if case .error = criterion { return criterion }
+      tests.append((anchor, criteriaTest(from: criterion), criterion))
       index += 2
     }
-
     var memo: [LookupMemoKey: CellValue] = [:]
     if let cache = aggregateRangeCache,
        let lookupKeys = aggregateLookupKeys(
-         criteria: rangeTests.map(\.2),
-         tests: rangeTests.map(\.1)
+         criteria: tests.map(\.2),
+         tests: tests.map(\.1)
        ) {
-      let rangeKeys = rangeTests.map { aggregateRangeKey(for: $0.0) }
+      let rangeKeys = tests.map { aggregateRangeKey(for: $0.0) }
       let matches = cache.countForCriteria(
         rangeKeys: rangeKeys,
         criteriaKeys: lookupKeys,
         supplyColumns: {
           var snapMemo: [LookupMemoKey: CellValue] = [:]
-          return rangeTests.map { snapshotValues(anchor: $0.0, memo: &snapMemo) }
+          return tests.map { snapshotValues(anchor: $0.0, memo: &snapMemo) }
         }
       )
       recalcProfile?.countifsHistogramLookups += 1
-      return .value(matches)
+      return .number(Double(matches))
     }
-    let rangeSnapshots = rangeTests.map { snapshotValues(anchor: $0.0, memo: &memo) }
+    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
     let count = rangeSnapshots[0].count
     var matches = 0
     recalcProfile?.countifsRowScanCells += count
     for offset in 0..<count {
       var matched = true
-      for (rangeIndex, test) in rangeTests.map(\.1).enumerated() {
+      for (rangeIndex, test) in tests.map(\.1).enumerated() {
         let value = rangeSnapshots[rangeIndex][offset]
         if aggregateRowError(value) {
           matched = false
@@ -210,49 +140,7 @@ extension FormulaEvaluator {
       }
       if matched { matches += 1 }
     }
-    return .value(matches)
-  }
-
-  private func unwrapCountIFSExpr(_ expr: FormulaExpr) -> FormulaExpr {
-    if case .unary(.plus, let inner) = expr { return unwrapCountIFSExpr(inner) }
-    return expr
-  }
-
-  private func collectAddTreeCountIFS(_ lhs: FormulaExpr, _ rhs: FormulaExpr) -> [FormulaExpr]? {
-    var terms: [FormulaExpr] = []
-    func collect(_ expr: FormulaExpr) -> Bool {
-      let node = unwrapCountIFSExpr(expr)
-      if case .binary(.add, let left, let right) = node {
-        return collect(left) && collect(right)
-      }
-      guard case .call(let name, let args) = node,
-            name.uppercased() == "COUNTIFS",
-            args.count >= 4,
-            args.count.isMultiple(of: 2)
-      else { return false }
-      terms.append(node)
-      return true
-    }
-    guard collect(lhs), collect(rhs) else { return nil }
-    return terms
-  }
-
-  private func sharedCountIFSCriteriaExprs(in terms: [FormulaExpr]) -> [FormulaExpr]? {
-    guard let first = terms.first,
-          case .call(_, let firstArgs) = first
-    else { return nil }
-    let arity = firstArgs.count
-    var criteria: [FormulaExpr] = []
-    for index in stride(from: 1, to: arity, by: 2) {
-      let expr = firstArgs[index]
-      for term in terms.dropFirst() {
-        guard case .call(_, let args) = term, args.count == arity, args[index] == expr else {
-          return nil
-        }
-      }
-      criteria.append(expr)
-    }
-    return criteria
+    return .number(Double(matches))
   }
 
   func evalCOUNTBLANK(_ args: [FormulaExpr]) -> CellValue {

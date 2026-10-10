@@ -31,6 +31,8 @@ final class FormulaEngine {
 
   var cacheRevision: Int { revision }
   private(set) var lastWorkbookRecalcProfile: FormulaRecalcProfile?
+  /// During `recalculateEntireWorkbook`, month sheets use Excel cached values (open-on-snapshots).
+  private var useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc = false
 
   func displayValue(at address: CellAddress, sheet: Sheet) -> CellValue {
     // Literals always come from the sheet being painted. The address cache is not
@@ -120,6 +122,8 @@ final class FormulaEngine {
     lookupTableCache.invalidateAll()
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
+    useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc = true
+    defer { useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc = false }
     for sheet in workbookRecalcSheetOrder(workbook) {
       activeSheetName = sheet.name
       clearFormulaGraph()
@@ -409,6 +413,14 @@ final class FormulaEngine {
         return
       }
 
+      if useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc,
+         workbookRecalcSheetRank(activeSheetName) == 1,
+         let snapshot = sheet.cell(at: address).importedFormulaResult {
+        valueCache[address] = CellValue.fromImportedExcel(snapshot)
+        profile?.importedSnapshotFormulaSkips += 1
+        return
+      }
+
       if let deps = dependencies[address] {
         for dep in deps {
           if formulaAST[dep] != nil {
@@ -448,16 +460,17 @@ final class FormulaEngine {
   }
 
   /// Config and month data sheets before YTD/summary so cross-sheet COUNTIFS read stored values.
+  private func workbookRecalcSheetRank(_ name: String) -> Int {
+    let lower = name.lowercased()
+    if lower == "config" { return 0 }
+    if lower.contains("ytd") || lower.contains("summary") || lower == "dashboard" { return 2 }
+    return 1
+  }
+
   private func workbookRecalcSheetOrder(_ workbook: Workbook) -> [Sheet] {
-    func rank(_ name: String) -> Int {
-      let lower = name.lowercased()
-      if lower == "config" { return 0 }
-      if lower.contains("ytd") || lower.contains("summary") || lower == "dashboard" { return 2 }
-      return 1
-    }
     return workbook.sheets.sorted { lhs, rhs in
-      let l = rank(lhs.name)
-      let r = rank(rhs.name)
+      let l = workbookRecalcSheetRank(lhs.name)
+      let r = workbookRecalcSheetRank(rhs.name)
       if l != r { return l < r }
       return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
