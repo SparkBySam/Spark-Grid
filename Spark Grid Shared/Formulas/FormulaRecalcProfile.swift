@@ -11,12 +11,14 @@ final class FormulaRecalcProfile {
   var ingestFillAdjustSeconds: Double = 0
   /// `shapeAnchorKey` during bulk ingest (parse misses / fallback).
   var ingestShapeKeySeconds: Double = 0
-  /// Scan cells + column grouping before parallel column ingest.
+  /// Sum: scan cells + bucket by column (across all sheet ingests).
   var ingestEntryScanSeconds: Double = 0
-  /// Wall time inside `concurrentPerform` column ingest (overlaps across cores).
+  /// Sum: wall inside `concurrentPerform` column ingest (overlaps across cores per sheet).
   var ingestColumnParallelWallSeconds: Double = 0
-  /// Merge `formulaAST` / `dependencies` / `dependents` after column ingest.
+  /// Sum: merge `formulaAST` / `dependencies` / `dependents` after column ingest.
   var ingestGraphBuildSeconds: Double = 0
+  /// Max per-sheet `bulkIngestFormulas` wall (serial config + slowest month + serial YTD).
+  var ingestBulkSheetWallPeakSeconds: Double = 0
   var ingestTemplateCacheHits: Int = 0
   /// `buildShapeStripPlans` (AST anchor keys + fill validation); runs at eval start, not in `ingestSeconds`.
   var shapeStripPlanSeconds: Double = 0
@@ -55,6 +57,10 @@ final class FormulaRecalcProfile {
     ingestEntryScanSeconds += other.ingestEntryScanSeconds
     ingestColumnParallelWallSeconds += other.ingestColumnParallelWallSeconds
     ingestGraphBuildSeconds += other.ingestGraphBuildSeconds
+    ingestBulkSheetWallPeakSeconds = max(
+      ingestBulkSheetWallPeakSeconds,
+      other.ingestBulkSheetWallPeakSeconds
+    )
     ingestTemplateCacheHits += other.ingestTemplateCacheHits
     shapeStripPlanSeconds += other.shapeStripPlanSeconds
     aggregateIndexBuildSeconds += other.aggregateIndexBuildSeconds
@@ -79,9 +85,10 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs (parse %.2fs deps %.2fs fillVerify %.2fs fillAdjust %.2fs shapeKey %.2fs entryScan %.2fs colWall %.2fs graph %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
+      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
       totalSeconds,
       ingestSeconds,
+      ingestBulkSheetWallPeakSeconds,
       ingestParseSeconds,
       ingestDependencySeconds,
       ingestFillVerifySeconds,

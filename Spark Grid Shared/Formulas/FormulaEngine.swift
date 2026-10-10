@@ -284,6 +284,12 @@ final class FormulaEngine {
     return Set(deps.map { CellAddress(row: $0.row + rowDelta, col: $0.col + colDelta) })
   }
 
+  private func bulkIngestIsFormulaRaw(_ raw: String) -> Bool {
+    guard let first = raw.unicodeScalars.first else { return false }
+    if first == "=" { return true }
+    return FormulaSyntax.isFormula(raw)
+  }
+
   // MARK: - Private
 
   private func ensureIngested(address: CellAddress, raw: String, sheet: Sheet) {
@@ -434,7 +440,11 @@ final class FormulaEngine {
     clearFormulaGraph()
     let ingestStart = CFAbsoluteTimeGetCurrent()
     bulkIngestFormulas(on: sheet, profile: profile)
-    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+    let ingestWall = CFAbsoluteTimeGetCurrent() - ingestStart
+    profile?.ingestSeconds += ingestWall
+    if let profile {
+      profile.ingestBulkSheetWallPeakSeconds = max(profile.ingestBulkSheetWallPeakSeconds, ingestWall)
+    }
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
     mergeRecalculatedValues(for: sheet)
   }
@@ -451,7 +461,11 @@ final class FormulaEngine {
     clearFormulaGraph()
     let ingestStart = CFAbsoluteTimeGetCurrent()
     bulkIngestFormulas(on: sheet, profile: profile)
-    profile?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+    let ingestWall = CFAbsoluteTimeGetCurrent() - ingestStart
+    profile?.ingestSeconds += ingestWall
+    if let profile {
+      profile.ingestBulkSheetWallPeakSeconds = max(profile.ingestBulkSheetWallPeakSeconds, ingestWall)
+    }
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
     var values: [CellAddress: CellValue] = [:]
     for address in formulaAST.keys {
@@ -520,24 +534,18 @@ final class FormulaEngine {
     sheetShapeAnchorKeys.removeAll(keepingCapacity: true)
     ingestShapeStripPlans.removeAll(keepingCapacity: true)
     let entryScanStart = CFAbsoluteTimeGetCurrent()
-    var entries: [(CellAddress, String)] = []
-    entries.reserveCapacity(sheet.cells.count)
+    var columnBuckets: [Int: [(CellAddress, String)]] = [:]
     for (address, cell) in sheet.cells {
-      let trimmed = cell.raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard FormulaSyntax.isFormula(trimmed) else { continue }
-      entries.append((address, trimmed))
+      let raw = cell.raw
+      guard bulkIngestIsFormulaRaw(raw) else { continue }
+      let trimmed = raw.first == "=" ? raw : raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      columnBuckets[address.col, default: []].append((address, trimmed))
     }
-    guard !entries.isEmpty else { return }
-
-    let columns = Dictionary(grouping: entries) { $0.0.col }
+    guard !columnBuckets.isEmpty else { return }
     profile?.ingestEntryScanSeconds += CFAbsoluteTimeGetCurrent() - entryScanStart
-    let columnIndices = Array(columns.keys)
-    let count = entries.count
-    var templates: [IngestedFormulaTemplate?] = Array(repeating: nil, count: count)
-    var shapeKeys: [String?] = Array(repeating: nil, count: count)
-    let entryIndex: [CellAddress: Int] = Dictionary(
-      uniqueKeysWithValues: entries.enumerated().map { ($0.element.0, $0.offset) }
-    )
+
+    let columnIndices = Array(columnBuckets.keys)
+    var columnOutputs: [ColumnIngestOutput?] = Array(repeating: nil, count: columnIndices.count)
     let cacheLock = NSLock()
     let metricsLock = NSLock()
     let stripLock = NSLock()
@@ -546,10 +554,16 @@ final class FormulaEngine {
     DispatchQueue.concurrentPerform(iterations: columnIndices.count) { columnIndex in
       var columnMetrics = BulkIngestColumnMetrics()
       let col = columnIndices[columnIndex]
-      let columnEntries = (columns[col] ?? []).sorted {
+      var columnEntries = columnBuckets[col] ?? []
+      columnEntries.sort {
         if $0.0.row != $1.0.row { return $0.0.row < $1.0.row }
         return $0.0.col < $1.0.col
       }
+      var templatesByAddress: [CellAddress: IngestedFormulaTemplate] = [:]
+      templatesByAddress.reserveCapacity(columnEntries.count)
+      var shapeKeysByAddress: [CellAddress: String] = [:]
+      shapeKeysByAddress.reserveCapacity(columnEntries.count)
+      var errorAddresses: [CellAddress] = []
       var localStripPlans: [ShapeStripPlan] = []
       var runMaster: CellAddress?
       var runMasterExpr: FormulaExpr?
@@ -570,7 +584,6 @@ final class FormulaEngine {
       }
 
       for (address, trimmed) in columnEntries {
-        let index = entryIndex[address] ?? 0
         var resolved: BulkIngestMasterParse?
 
         if let master = runMaster,
@@ -648,18 +661,25 @@ final class FormulaEngine {
         }
 
         guard let resolved else {
-          templates[index] = nil
+          errorAddresses.append(address)
           lastRow = address.row
           continue
         }
-        shapeKeys[index] = resolved.shapeKey
-        templates[index] = IngestedFormulaTemplate(
+        shapeKeysByAddress[address] = resolved.shapeKey
+        templatesByAddress[address] = IngestedFormulaTemplate(
           expr: resolved.expr,
           deps: resolved.deps,
           ranges: []
         )
       }
       flushRun()
+      columnOutputs[columnIndex] = ColumnIngestOutput(
+        templatesByAddress: templatesByAddress,
+        shapeKeysByAddress: shapeKeysByAddress,
+        errorAddresses: errorAddresses,
+        stripPlans: localStripPlans,
+        metrics: columnMetrics
+      )
       if !localStripPlans.isEmpty {
         stripLock.lock()
         ingestShapeStripPlans.append(contentsOf: localStripPlans)
@@ -677,19 +697,22 @@ final class FormulaEngine {
     profile?.ingestColumnParallelWallSeconds += CFAbsoluteTimeGetCurrent() - columnParallelWallStart
 
     let graphStart = CFAbsoluteTimeGetCurrent()
-    for index in 0..<count {
-      let address = entries[index].0
-      guard let template = templates[index] else {
+    formulaAST.reserveCapacity(formulaAST.count + sheet.cells.count / 4)
+    dependencies.reserveCapacity(dependencies.count + sheet.cells.count / 4)
+    for output in columnOutputs {
+      guard let output else { continue }
+      for address in output.errorAddresses {
         valueCache[address] = .error(.error)
-        continue
       }
-      formulaAST[address] = template.expr
-      dependencies[address] = template.deps
-      if let shapeKey = shapeKeys[index] {
-        sheetShapeAnchorKeys[address] = shapeKey
-      }
-      if let snapshot = sheet.cell(at: address).importedFormulaResult {
-        valueCache[address] = CellValue.fromImportedExcel(snapshot)
+      for (address, template) in output.templatesByAddress {
+        formulaAST[address] = template.expr
+        dependencies[address] = template.deps
+        if let shapeKey = output.shapeKeysByAddress[address] {
+          sheetShapeAnchorKeys[address] = shapeKey
+        }
+        if let snapshot = sheet.cell(at: address).importedFormulaResult {
+          valueCache[address] = CellValue.fromImportedExcel(snapshot)
+        }
       }
     }
     dependents.removeAll(keepingCapacity: true)
@@ -699,6 +722,14 @@ final class FormulaEngine {
       }
     }
     profile?.ingestGraphBuildSeconds += CFAbsoluteTimeGetCurrent() - graphStart
+  }
+
+  private struct ColumnIngestOutput {
+    var templatesByAddress: [CellAddress: IngestedFormulaTemplate]
+    var shapeKeysByAddress: [CellAddress: String]
+    var errorAddresses: [CellAddress]
+    var stripPlans: [ShapeStripPlan]
+    var metrics: BulkIngestColumnMetrics
   }
 
   private struct BulkIngestColumnMetrics {

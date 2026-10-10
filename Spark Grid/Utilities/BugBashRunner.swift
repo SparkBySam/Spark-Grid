@@ -3783,13 +3783,8 @@ enum BugBashRunner {
   /// Emits KPI full-recalc profile before the rest of Bug Bash (flushed for early Mac kill).
   private static func emitKPIRecalcProfileLine(_ line: String) {
     let text = "KPI full recalc profile | \(line)\n"
-    if let data = text.data(using: .utf8) {
-      FileHandle.standardError.write(data)
-    }
     fputs(text, stderr)
     fflush(stderr)
-    print(text, terminator: "")
-    fflush(stdout)
   }
 
   /// Optional KPI workbook: full grouped recalc under ~1s; June E/F still match Excel cache.
