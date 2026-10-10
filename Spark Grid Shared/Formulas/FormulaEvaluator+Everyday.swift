@@ -1462,7 +1462,7 @@ extension FormulaEvaluator {
     guard let (rangeA, critA) = stripCountifRangeCriterion(args[1]),
           let (rangeG, critG) = stripCountifRangeCriterion(args[2])
     else { return nil }
-    guard stripRefSameShapeAs(critA, pickRef), stripRefSameShapeAs(critG, guardRef) else { return nil }
+    guard stripRefSameShapeAs(critA, other: pickRef), stripRefSameShapeAs(critG, other: guardRef) else { return nil }
 
     prepareForCellEvaluation(origin: master)
     var memo: [LookupMemoKey: CellValue] = [:]
@@ -1548,7 +1548,7 @@ extension FormulaEvaluator {
     guard case .string(let delimiter) = stripUnwrap(args[0]) else { return nil }
     guard case .boolean(let ignoreEmpty) = stripUnwrap(args[1]) else { return nil }
     guard let joinA = stripFormulaCellRef(args[2]), let joinB = stripFormulaCellRef(args[3]) else { return nil }
-    guard stripRefSameShapeAs(joinA, guardA), stripRefSameShapeAs(joinB, guardB) else { return nil }
+    guard stripRefSameShapeAs(joinA, other: guardA), stripRefSameShapeAs(joinB, other: guardB) else { return nil }
     return ColumnTextJoinPlan(joinRefA: joinA, joinRefB: joinB, delimiter: delimiter, ignoreEmpty: ignoreEmpty)
   }
 
@@ -1613,7 +1613,7 @@ extension FormulaEvaluator {
   ) -> (prefixStartRow: Int, keyCol: Int)? {
     guard case .range(let start, let end) = resolvedExpr(rangeExpr) else { return nil }
     guard start.absRow, !end.absRow, start.col == end.col else { return nil }
-    guard let critRef = stripFormulaCellRef(criterion), stripRefSameShapeAs(critRef, keyRef) else { return nil }
+    guard let critRef = stripFormulaCellRef(criterion), stripRefSameShapeAs(critRef, other: keyRef) else { return nil }
     guard critRef.col == end.col else { return nil }
     return (start.row, start.col)
   }
@@ -1644,7 +1644,7 @@ extension FormulaEvaluator {
     guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE") else { return nil }
     guard let prefix = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
           let (fixedAnchor, fixedCrit) = stripCountifRangeCriterion(countifArgs[0]),
-          stripRefSameShapeAs(fixedCrit, keyRef)
+          stripRefSameShapeAs(fixedCrit, other: keyRef)
     else { return nil }
     guard fixedAnchor.col == prefix.keyCol else { return nil }
 
@@ -1668,7 +1668,7 @@ extension FormulaEvaluator {
     guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
       return nil
     }
-    guard let branchPick = stripNotEmptyPickRef(args[0]), stripRefSameShapeAs(branchPick, pickRef) else { return nil }
+    guard let branchPick = stripNotEmptyPickRef(args[0]), stripRefSameShapeAs(branchPick, other: pickRef) else { return nil }
     guard let pickArm = parseDuplicateStatusArm(args[1], keyRef: pickRef, master: master),
           let altArm = parseDuplicateStatusArm(args[2], keyRef: altRef, master: master)
     else { return nil }
