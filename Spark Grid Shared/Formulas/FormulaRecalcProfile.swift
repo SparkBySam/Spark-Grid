@@ -37,6 +37,10 @@ final class FormulaRecalcProfile {
   var ifBlankEqualityFastHits: Int = 0
   /// `IFERROR(VLOOKUP(…),…)` without nested `evalCall` dispatch.
   var iferrorVlookupFastHits: Int = 0
+  /// Column IF-blank strip: non-blank row via IFERROR(VLOOKUP) kernel (not branch `evaluate`).
+  var ifStripHits: Int = 0
+  /// Column IF-blank strip: non-blank row fell back to full branch `evaluate`.
+  var ifStripFallbacks: Int = 0
   /// `SUMPRODUCT` boolean-product fast path (masked histogram / column snapshots).
   var sumproductBooleanHits: Int = 0
   /// Boolean-shaped `SUMPRODUCT` that did not use the fast path (parse miss or unsupported shape).
@@ -89,6 +93,8 @@ final class FormulaRecalcProfile {
     foreignFormulaEvaluations += other.foreignFormulaEvaluations
     ifBlankEqualityFastHits += other.ifBlankEqualityFastHits
     iferrorVlookupFastHits += other.iferrorVlookupFastHits
+    ifStripHits += other.ifStripHits
+    ifStripFallbacks += other.ifStripFallbacks
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
     sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
@@ -116,7 +122,7 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
+      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d ifStripFallback %d | eval %@",
       totalSeconds,
       ingestSeconds,
       ingestBulkSheetWallPeakSeconds,
@@ -142,6 +148,8 @@ final class FormulaRecalcProfile {
       sumproductBooleanFallbacks,
       ifBlankEqualityFastHits,
       iferrorVlookupFastHits,
+      ifStripHits,
+      ifStripFallbacks,
       topEval.isEmpty ? "—" : topEval
     ) + sheetPhaseWallSummary()
   }

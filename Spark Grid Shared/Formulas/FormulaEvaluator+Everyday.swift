@@ -1327,6 +1327,121 @@ extension FormulaEvaluator {
     return ref.adjusted(rowDelta: rowDelta, colDelta: colDelta) ?? ref
   }
 
+  private struct ColumnIFERRORVlookupPlan {
+    var needleRef: FormulaRef
+    var tableStart: FormulaRef
+    var tableEnd: FormulaRef
+    var tableKey: LookupTableKey
+    var bounds: (minRow: Int, maxRow: Int, minCol: Int, maxCol: Int)
+    var resultOffset: Int
+    var fallbackAtMaster: FormulaExpr
+  }
+
+  private func stripResolveTableRange(_ expr: FormulaExpr) -> (FormulaRef, FormulaRef)? {
+    switch resolvedExpr(expr) {
+    case .range(let start, let end):
+      return (start, end)
+    case .namedRange(let name):
+      guard let resolved = namedRangeLookup(name),
+            case .range(let start, let end) = resolved
+      else { return nil }
+      return (start, end)
+    default:
+      return nil
+    }
+  }
+
+  private func makeColumnIFERRORVlookupPlan(_ expr: FormulaExpr, master: CellAddress) -> ColumnIFERRORVlookupPlan? {
+    guard case .call(let outer, let outerArgs) = stripUnwrap(expr), outer.uppercased() == "IFERROR", outerArgs.count == 2
+    else { return nil }
+    guard case .call(let inner, let vargs) = stripUnwrap(outerArgs[0]),
+          inner.uppercased() == "VLOOKUP",
+          vargs.count >= 3, vargs.count <= 4
+    else { return nil }
+    guard let needleRef = stripFormulaCellRef(vargs[0]) else { return nil }
+
+    prepareForCellEvaluation(origin: master)
+    let indexValue = evaluate(vargs[2])
+    if case .error = indexValue { return nil }
+    guard let indexNumber = indexValue.asNumber else { return nil }
+    let index = Int(indexNumber.rounded(.down))
+
+    var exact = false
+    if vargs.count == 4 {
+      let flag = evaluate(vargs[3])
+      if case .error = flag { return nil }
+      exact = !(flag.asBool ?? true)
+    }
+    guard exact, lookupTableCache != nil else { return nil }
+
+    guard let (start, end) = stripResolveTableRange(vargs[1]) else { return nil }
+    let n = normalizedBounds(start: start, end: end)
+    let span = n.maxCol - n.minCol + 1
+    guard index >= 1, index <= span else { return nil }
+    let resultOffset = n.minCol + index - 1
+
+    let tableKey = LookupTableKey(
+      sheet: (start.sheet ?? "").lowercased(),
+      minRow: n.minRow,
+      minCol: n.minCol,
+      maxRow: n.maxRow,
+      maxCol: n.maxCol,
+      resultIndex: index,
+      horizontal: false
+    )
+    return ColumnIFERRORVlookupPlan(
+      needleRef: needleRef,
+      tableStart: start,
+      tableEnd: end,
+      tableKey: tableKey,
+      bounds: n,
+      resultOffset: resultOffset,
+      fallbackAtMaster: outerArgs[1]
+    )
+  }
+
+  private func emitColumnIFERRORVlookupRow(
+    plan: ColumnIFERRORVlookupPlan,
+    master: CellAddress,
+    origin: CellAddress,
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    prepareForCellEvaluation(origin: origin)
+    let needle = lookup(shiftedRef(plan.needleRef, master: master, origin: origin))
+    recalcProfile?.iferrorVlookupFastHits += 1
+    let rowDelta = origin.row - master.row
+    let colDelta = origin.col - master.col
+    let fallbackExpr = FormulaRewriter.adjustExpression(
+      plan.fallbackAtMaster,
+      rowDelta: rowDelta,
+      colDelta: colDelta
+    )
+    if case .error = needle {
+      recalcProfile?.ifStripFallbacks += 1
+      sink(origin, evaluate(fallbackExpr))
+      return
+    }
+    guard let cache = lookupTableCache else {
+      recalcProfile?.ifStripFallbacks += 1
+      sink(origin, evaluate(fallbackExpr))
+      return
+    }
+    if let hit = cache.exactLookup(key: plan.tableKey, needle: needle, build: {
+      buildExactLookupMap(
+        horizontal: false,
+        bounds: plan.bounds,
+        start: plan.tableStart,
+        resultOffset: plan.resultOffset
+      )
+    }) {
+      recalcProfile?.ifStripHits += 1
+      sink(origin, hit)
+    } else {
+      recalcProfile?.ifStripFallbacks += 1
+      sink(origin, evaluate(fallbackExpr))
+    }
+  }
+
   private func evaluateColumnIFBlankStrip(
     master: CellAddress,
     members: [CellAddress],
@@ -1334,6 +1449,21 @@ extension FormulaEvaluator {
     branch: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
+    let branchExpr = stripUnwrap(branch)
+    if let vlookupPlan = makeColumnIFERRORVlookupPlan(branchExpr, master: master) {
+      for origin in members {
+        prepareForCellEvaluation(origin: origin)
+        let guardCell = shiftedRef(guardRef, master: master, origin: origin)
+        if stripValueIsBlankForIfGuard(lookup(guardCell)) {
+          recalcProfile?.ifBlankEqualityFastHits += 1
+          sink(origin, .string(""))
+          continue
+        }
+        recalcProfile?.ifBlankEqualityFastHits += 1
+        emitColumnIFERRORVlookupRow(plan: vlookupPlan, master: master, origin: origin, sink: sink)
+      }
+      return true
+    }
     for origin in members {
       prepareForCellEvaluation(origin: origin)
       let guardCell = shiftedRef(guardRef, master: master, origin: origin)
@@ -1346,7 +1476,7 @@ extension FormulaEvaluator {
       if !evaluateColumnBranchShape(
         master: master,
         origin: origin,
-        branch: stripUnwrap(branch),
+        branch: branchExpr,
         sink: sink
       ) {
         return false
@@ -1364,12 +1494,14 @@ extension FormulaEvaluator {
     if evaluateColumnCOUNTIFSStrip(master: master, members: [origin], expr: branch, sink: sink) {
       return true
     }
-    if evaluateColumnIFERRORVlookupStrip(master: master, members: [origin], expr: branch, sink: sink) {
+    if let plan = makeColumnIFERRORVlookupPlan(branch, master: master) {
+      emitColumnIFERRORVlookupRow(plan: plan, master: master, origin: origin, sink: sink)
       return true
     }
     let rowDelta = origin.row - master.row
     let colDelta = origin.col - master.col
     let adjusted = FormulaRewriter.adjustExpression(branch, rowDelta: rowDelta, colDelta: colDelta)
+    recalcProfile?.ifStripFallbacks += 1
     sink(origin, evaluate(adjusted))
     return true
   }
@@ -1477,70 +1609,9 @@ extension FormulaEvaluator {
     expr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    guard case .call(let outer, let outerArgs) = expr, outer.uppercased() == "IFERROR", outerArgs.count == 2 else {
-      return false
-    }
-    guard case .call(let inner, let vargs) = stripUnwrap(outerArgs[0]),
-          inner.uppercased() == "VLOOKUP",
-          vargs.count >= 3, vargs.count <= 4
-    else { return false }
-    guard let needleRef = stripFormulaCellRef(vargs[0]) else { return false }
-
-    let indexValue = evaluate(vargs[2])
-    if case .error = indexValue { return false }
-    guard let indexNumber = indexValue.asNumber else { return false }
-    let index = Int(indexNumber.rounded(.down))
-
-    var exact = false
-    if vargs.count == 4 {
-      let flag = evaluate(vargs[3])
-      if case .error = flag { return false }
-      exact = !(flag.asBool ?? true)
-    }
-    guard exact, let cache = lookupTableCache else { return false }
-
-    guard case .range(let start, let end) = resolvedExpr(vargs[1]) else { return false }
-    let n = normalizedBounds(start: start, end: end)
-    let span = n.maxCol - n.minCol + 1
-    guard index >= 1, index <= span else { return false }
-    let resultOffset = n.minCol + index - 1
-
-    let tableKey = LookupTableKey(
-      sheet: (start.sheet ?? "").lowercased(),
-      minRow: n.minRow,
-      minCol: n.minCol,
-      maxRow: n.maxRow,
-      maxCol: n.maxCol,
-      resultIndex: index,
-      horizontal: false
-    )
-
-    func adjustedFallback(at origin: CellAddress) -> FormulaExpr {
-      let rowDelta = origin.row - master.row
-      let colDelta = origin.col - master.col
-      return FormulaRewriter.adjustExpression(outerArgs[1], rowDelta: rowDelta, colDelta: colDelta)
-    }
-
+    guard let plan = makeColumnIFERRORVlookupPlan(expr, master: master) else { return false }
     for origin in members {
-      prepareForCellEvaluation(origin: origin)
-      let needle = lookup(shiftedRef(needleRef, master: master, origin: origin))
-      recalcProfile?.iferrorVlookupFastHits += 1
-      if case .error = needle {
-        sink(origin, evaluate(adjustedFallback(at: origin)))
-        continue
-      }
-      if let hit = cache.exactLookup(key: tableKey, needle: needle, build: {
-        buildExactLookupMap(
-          horizontal: false,
-          bounds: n,
-          start: start,
-          resultOffset: resultOffset
-        )
-      }) {
-        sink(origin, hit)
-      } else {
-        sink(origin, evaluate(adjustedFallback(at: origin)))
-      }
+      emitColumnIFERRORVlookupRow(plan: plan, master: master, origin: origin, sink: sink)
     }
     return true
   }
