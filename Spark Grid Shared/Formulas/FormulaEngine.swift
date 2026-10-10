@@ -1063,11 +1063,14 @@ final class FormulaEngine {
       eval(address)
     }
     if sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame {
-      let sColMaster = CellAddress(row: 4, col: Self.ytdSumproductRibbonFirstCol)
-      evaluator.probeYtdSumproductQuotientPlanExitForSColumn(
+      let ytdS5 = CellAddress(row: 4, col: Self.ytdSumproductRibbonFirstCol)
+      let masterRaw = sheet.cell(at: ytdS5).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
+      let formulaPrefix = String(masterFormulaText.prefix(120))
+      evaluator.probeYtdSummaryS5SumproductQuotientPlanExit(
         sheetName: sheet.name,
-        master: sColMaster,
-        expr: formulaAST[sColMaster]
+        expr: formulaAST[ytdS5],
+        storedFormulaPrefix: formulaPrefix
       )
     }
     revision &+= 1

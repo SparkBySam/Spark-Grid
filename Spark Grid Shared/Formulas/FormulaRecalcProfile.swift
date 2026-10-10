@@ -68,12 +68,17 @@ final class FormulaRecalcProfile {
   /// YTD Summary column strip plan miss (same fields as `ob`).
   var ifStripYtdPlanRejectEntries: [IfStripOtherBranchEntry] = []
 
-  /// First `makeColumnYtdSumproductQuotientPlan` exit recorded for YTD column S (diagnostic).
-  var ytdSpQuotientPlanExit: (sheet: String, masterA1: String, exitCode: String)?
+  /// `makeColumnYtdSumproductQuotientPlan` exit for **YTD Summary!S5** only (KPI diagnostic).
+  var ytdSpQuotientPlanExit: (sheet: String, masterA1: String, exitCode: String, formulaPrefix: String)?
 
-  func recordYtdSpQuotientPlanExit(sheet: String, masterA1: String, exitCode: String) {
-    guard ytdSpQuotientPlanExit == nil else { return }
-    ytdSpQuotientPlanExit = (sheet, masterA1, exitCode)
+  func recordYtdSpQuotientPlanExit(
+    sheet: String,
+    masterA1: String,
+    exitCode: String,
+    formulaPrefix: String
+  ) {
+    guard sheet.caseInsensitiveCompare("YTD Summary") == .orderedSame, masterA1 == "S5" else { return }
+    ytdSpQuotientPlanExit = (sheet, masterA1, exitCode, formulaPrefix)
   }
 
   func recordIfStripPlanMiss(_ reason: String) {
@@ -205,7 +210,7 @@ final class FormulaRecalcProfile {
 
   private func ytdSpQuotientPlanExitSummary() -> String {
     guard let exit = ytdSpQuotientPlanExit else { return "" }
-    return " | ytdSpPlan \(exit.sheet)!\(exit.masterA1):\(exit.exitCode)"
+    return " | ytdSpPlan \(exit.sheet)!\(exit.masterA1):\(exit.exitCode):\(exit.formulaPrefix)"
   }
 
   private func ifStripMissSummary() -> String {
