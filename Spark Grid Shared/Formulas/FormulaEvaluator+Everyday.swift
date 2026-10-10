@@ -1384,7 +1384,7 @@ extension FormulaEvaluator {
           args.count == 2
     else { return nil }
     guard stripIsStaticEmptyLiteral(args[1]) else { return nil }
-    guard case .binary(.div, let numerator, let denominator) = stripUnwrap(args[0]) else { return nil }
+    guard case .binary(.divide, let numerator, let denominator) = stripUnwrap(args[0]) else { return nil }
     guard let divisorRef = stripFormulaCellRef(denominator) else { return nil }
     let terms = stripAddChain(stripUnwrap(numerator))
     guard terms.count >= 12 else { return nil }
