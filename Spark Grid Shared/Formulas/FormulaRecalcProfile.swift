@@ -37,20 +37,10 @@ final class FormulaRecalcProfile {
   var ifBlankEqualityFastHits: Int = 0
   /// `IFERROR(VLOOKUP(…),…)` without nested `evalCall` dispatch.
   var iferrorVlookupFastHits: Int = 0
-  /// Column strip: exact VLOOKUP table cache hit.
+  /// Column IF-blank strip: non-blank row via IFERROR(VLOOKUP) kernel (not branch `evaluate`).
   var ifStripHits: Int = 0
-  /// Column strip: VLOOKUP kernel ran but used IFERROR fallback expr (e.g. #N/A), not full branch tree.
-  var ifStripVlkNA: Int = 0
-  /// Column strip: full `evaluate` on the false branch (kernel plan miss).
-  var ifStripBranchTree: Int = 0
-  /// Column strip: COUNTIFS kernel on IF-blank branch (one snapshot per strip).
-  var ifStripCountifsRows: Int = 0
-  /// Per-column plan could not build a strip kernel (short reason key → count).
-  var ifStripPlanMiss: [String: Int] = [:]
-
-  func recordIfStripPlanMiss(_ reason: String) {
-    ifStripPlanMiss[reason, default: 0] += 1
-  }
+  /// Column IF-blank strip: non-blank row fell back to full branch `evaluate`.
+  var ifStripFallbacks: Int = 0
   /// `SUMPRODUCT` boolean-product fast path (masked histogram / column snapshots).
   var sumproductBooleanHits: Int = 0
   /// Boolean-shaped `SUMPRODUCT` that did not use the fast path (parse miss or unsupported shape).
@@ -104,36 +94,13 @@ final class FormulaRecalcProfile {
     ifBlankEqualityFastHits += other.ifBlankEqualityFastHits
     iferrorVlookupFastHits += other.iferrorVlookupFastHits
     ifStripHits += other.ifStripHits
-    ifStripVlkNA += other.ifStripVlkNA
-    ifStripBranchTree += other.ifStripBranchTree
-    ifStripCountifsRows += other.ifStripCountifsRows
-    for (reason, count) in other.ifStripPlanMiss {
-      ifStripPlanMiss[reason, default: 0] += count
-    }
+    ifStripFallbacks += other.ifStripFallbacks
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
     sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
     for (name, seconds) in other.evalByFunctionSeconds {
       evalByFunctionSeconds[name, default: 0] += seconds
     }
-  }
-
-  private func ifStripMissSummary() -> String {
-    var parts: [String] = []
-    if ifStripVlkNA > 0 {
-      parts.append(String(format: "vlkNA %d", ifStripVlkNA))
-    }
-    if ifStripBranchTree > 0 {
-      parts.append(String(format: "branchTree %d", ifStripBranchTree))
-    }
-    if !ifStripPlanMiss.isEmpty {
-      let miss = ifStripPlanMiss.sorted { $0.key < $1.key }
-        .map { "\($0.key) \($0.value)" }
-        .joined(separator: " ")
-      parts.append("planMiss \(miss)")
-    }
-    guard !parts.isEmpty else { return "" }
-    return " | stripFB " + parts.joined(separator: " ")
   }
 
   private func sheetPhaseWallSummary() -> String {
@@ -155,7 +122,7 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d | eval %@",
+      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d ifStripFallback %d | eval %@",
       totalSeconds,
       ingestSeconds,
       ingestBulkSheetWallPeakSeconds,
@@ -182,8 +149,8 @@ final class FormulaRecalcProfile {
       ifBlankEqualityFastHits,
       iferrorVlookupFastHits,
       ifStripHits,
-      ifStripCountifsRows,
+      ifStripFallbacks,
       topEval.isEmpty ? "—" : topEval
-    ) + ifStripMissSummary() + sheetPhaseWallSummary()
+    ) + sheetPhaseWallSummary()
   }
 }

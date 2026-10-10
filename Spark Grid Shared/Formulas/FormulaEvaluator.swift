@@ -870,7 +870,7 @@ struct FormulaEvaluator {
   }
 
   /// VLOOKUP walks the first column. HLOOKUP walks the first row. Same exact and approximate rules.
-  func tableLookup(_ args: [FormulaExpr], horizontal: Bool) -> CellValue {
+  private func tableLookup(_ args: [FormulaExpr], horizontal: Bool) -> CellValue {
     guard args.count >= 3, args.count <= 4 else { return .error(.value) }
     let needle = evaluate(args[0])
     if case .error = needle { return needle }
