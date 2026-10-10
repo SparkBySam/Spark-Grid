@@ -15,7 +15,15 @@ final class FormulaEngine {
     var deps: Set<CellAddress>
     var ranges: [CellRange]
   }
+  private struct AnchorParseTemplate {
+    var normalizedExpr: FormulaExpr
+    var shapeKey: String
+  }
   private var ingestTemplateCache: [String: IngestedFormulaTemplate] = [:]
+  /// Parsed formula normalized to sheet origin, keyed by fill-shape (bulk ingest only).
+  private var ingestAnchorTemplateCache: [String: AnchorParseTemplate] = [:]
+  /// Filled during bulk ingest; used for shape-strip grouping without re-serializing ASTs.
+  private var sheetShapeAnchorKeys: [CellAddress: String] = [:]
   /// Results from `recalculateEntireWorkbook` (and incremental edits), keyed by sheet name.
   private var recalculatedSheetValues: [String: [CellAddress: CellValue]] = [:]
 
@@ -120,6 +128,7 @@ final class FormulaEngine {
     lookupTableCache.invalidateAll()
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
+    ingestAnchorTemplateCache.removeAll(keepingCapacity: true)
     let ordered = workbookRecalcSheetOrder(workbook)
     let monthSheets = ordered.filter { workbookRecalcSheetRank($0.name) == 1 }
     let useParallelMonths = monthSheets.count >= 2
@@ -230,6 +239,7 @@ final class FormulaEngine {
     aggregateRangeCache.invalidateAll()
     lookupTableCache.invalidateAll()
     ingestTemplateCache.removeAll(keepingCapacity: true)
+    ingestAnchorTemplateCache.removeAll(keepingCapacity: true)
     recalculatedSheetValues.removeAll(keepingCapacity: true)
     revision &+= 1
   }
@@ -240,6 +250,15 @@ final class FormulaEngine {
 
   private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String) -> String {
     "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}\(formula)"
+  }
+
+  private func ingestAnchorShapeCacheKey(
+    sheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    shapeKey: String
+  ) -> String {
+    "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}a\u{1e}\(shapeKey)"
   }
 
   private func storedRecalculatedValue(sheetName: String, at address: CellAddress) -> CellValue? {
@@ -454,33 +473,44 @@ final class FormulaEngine {
     }
     var grouped: [String: [CellAddress]] = [:]
     for address in formulaAST.keys {
-      guard let expr = formulaAST[address] else { continue }
-      let key = FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
+      let key = sheetShapeAnchorKeys[address]
+        ?? {
+          guard let expr = formulaAST[address] else { return "" }
+          return FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
+        }()
+      guard !key.isEmpty else { continue }
       grouped[key, default: []].append(address)
     }
     let minimumMembers = 8
     var plans: [ShapeStripPlan] = []
     for (_, members) in grouped where members.count >= minimumMembers {
+      guard membersFormFillStrip(members) else { continue }
       guard let master = members.min(by: {
         if $0.row != $1.row { return $0.row < $1.row }
         return $0.col < $1.col
       }) else { continue }
-      guard let masterExpr = formulaAST[master] else { continue }
-      let matchesFill = members.allSatisfy { addr in
-        let rowDelta = addr.row - master.row
-        let colDelta = addr.col - master.col
-        let expected = FormulaRewriter.adjustedFormulaText(
-          expr: masterExpr,
-          rowDelta: rowDelta,
-          colDelta: colDelta
-        )
-        let actual = sheet.cell(at: addr).raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return expected == actual
-      }
-      guard matchesFill else { continue }
+      guard formulaAST[master] != nil else { continue }
       plans.append(ShapeStripPlan(master: master, members: members))
     }
     return plans
+  }
+
+  /// True when `members` share one row or one column and cover consecutive indices (Excel fill strip).
+  private func membersFormFillStrip(_ members: [CellAddress]) -> Bool {
+    guard members.count >= 8 else { return false }
+    let cols = Set(members.map(\.col))
+    if cols.count == 1 {
+      let rows = members.map(\.row).sorted()
+      guard let first = rows.first, let last = rows.last else { return false }
+      return last - first + 1 == members.count
+    }
+    let rows = Set(members.map(\.row))
+    if rows.count == 1 {
+      let cols = members.map(\.col).sorted()
+      guard let first = cols.first, let last = cols.last else { return false }
+      return last - first + 1 == members.count
+    }
+    return false
   }
 
   /// Full-sheet ingest after `clearFormulaGraph`: parallel parse/deps, no watched ranges, no stale cleanup.
@@ -488,6 +518,7 @@ final class FormulaEngine {
     let maxRow = sheet.effectiveRowCount - 1
     let maxCol = sheet.effectiveColumnCount - 1
     let sheetName = sheet.name
+    sheetShapeAnchorKeys.removeAll(keepingCapacity: true)
     var entries: [(CellAddress, String)] = []
     entries.reserveCapacity(sheet.cells.count)
     for (address, cell) in sheet.cells {
@@ -497,34 +528,86 @@ final class FormulaEngine {
     }
     guard !entries.isEmpty else { return }
 
+    let columns = Dictionary(grouping: entries) { $0.0.col }
+    let columnIndices = Array(columns.keys)
     let count = entries.count
     var templates: [IngestedFormulaTemplate?] = Array(repeating: nil, count: count)
+    var shapeKeys: [String?] = Array(repeating: nil, count: count)
+    let entryIndex: [CellAddress: Int] = Dictionary(
+      uniqueKeysWithValues: entries.enumerated().map { ($0.element.0, $0.offset) }
+    )
     let cacheLock = NSLock()
     let profileLock = NSLock()
 
-    DispatchQueue.concurrentPerform(iterations: count) { index in
-      let trimmed = entries[index].1
-      let templateKey = ingestTemplateKey(
-        sheetName: sheetName,
-        maxRow: maxRow,
-        maxCol: maxCol,
-        formula: trimmed
-      )
-      cacheLock.lock()
-      let cached = ingestTemplateCache[templateKey]
-      cacheLock.unlock()
-      if let cached {
-        templates[index] = cached
-        profileLock.lock()
-        profile?.ingestTemplateCacheHits += 1
-        profileLock.unlock()
-        return
+    DispatchQueue.concurrentPerform(iterations: columnIndices.count) { columnIndex in
+      let col = columnIndices[columnIndex]
+      let columnEntries = (columns[col] ?? []).sorted {
+        if $0.0.row != $1.0.row { return $0.0.row < $1.0.row }
+        return $0.0.col < $1.0.col
       }
+      var runningShapeKey: String?
+      var runningAnchor: AnchorParseTemplate?
+      var lastRow: Int?
 
-      do {
-        let parseStart = CFAbsoluteTimeGetCurrent()
-        let expr = try FormulaParser.parse(trimmed)
-        let parseElapsed = CFAbsoluteTimeGetCurrent() - parseStart
+      for (address, trimmed) in columnEntries {
+        if let lastRow, address.row != lastRow + 1 {
+          runningShapeKey = nil
+          runningAnchor = nil
+        }
+        lastRow = address.row
+        let index = entryIndex[address] ?? 0
+        let resolved: (FormulaExpr, String)?
+        if let runningAnchor, let runningShapeKey {
+          let expr = FormulaRewriter.adjustExpression(
+            runningAnchor.normalizedExpr,
+            rowDelta: address.row,
+            colDelta: address.col
+          )
+          profileLock.lock()
+          profile?.ingestTemplateCacheHits += 1
+          profileLock.unlock()
+          resolved = (expr, runningShapeKey)
+        } else {
+          resolved = self.resolveBulkIngestExpr(
+            trimmed: trimmed,
+            address: address,
+            sheetName: sheetName,
+            maxRow: maxRow,
+            maxCol: maxCol,
+            profile: profile,
+            cacheLock: cacheLock,
+            profileLock: profileLock
+          )
+        }
+        guard let (expr, shapeKey) = resolved, !shapeKey.isEmpty else {
+          templates[index] = nil
+          runningShapeKey = nil
+          runningAnchor = nil
+          continue
+        }
+
+        let anchorKey = ingestAnchorShapeCacheKey(
+          sheetName: sheetName,
+          maxRow: maxRow,
+          maxCol: maxCol,
+          shapeKey: shapeKey
+        )
+        cacheLock.lock()
+        if ingestAnchorTemplateCache[anchorKey] == nil {
+          let normalized = FormulaRewriter.adjustExpression(
+            expr,
+            rowDelta: -address.row,
+            colDelta: -address.col
+          )
+          ingestAnchorTemplateCache[anchorKey] = AnchorParseTemplate(
+            normalizedExpr: normalized,
+            shapeKey: shapeKey
+          )
+        }
+        runningAnchor = ingestAnchorTemplateCache[anchorKey]
+        runningShapeKey = runningAnchor?.shapeKey
+        cacheLock.unlock()
+
         let depStart = CFAbsoluteTimeGetCurrent()
         let collected = FormulaDependencies.collectForIngest(
           from: expr,
@@ -537,21 +620,15 @@ final class FormulaEngine {
           }
         )
         let depElapsed = CFAbsoluteTimeGetCurrent() - depStart
-        let template = IngestedFormulaTemplate(
+        profileLock.lock()
+        profile?.ingestDependencySeconds += depElapsed
+        profileLock.unlock()
+        shapeKeys[index] = shapeKey
+        templates[index] = IngestedFormulaTemplate(
           expr: expr,
           deps: collected.deps,
           ranges: []
         )
-        templates[index] = template
-        cacheLock.lock()
-        ingestTemplateCache[templateKey] = template
-        cacheLock.unlock()
-        profileLock.lock()
-        profile?.ingestParseSeconds += parseElapsed
-        profile?.ingestDependencySeconds += depElapsed
-        profileLock.unlock()
-      } catch {
-        templates[index] = nil
       }
     }
 
@@ -563,12 +640,85 @@ final class FormulaEngine {
       }
       formulaAST[address] = template.expr
       dependencies[address] = template.deps
+      if let shapeKey = shapeKeys[index] {
+        sheetShapeAnchorKeys[address] = shapeKey
+      }
       for dep in template.deps {
         dependents[dep, default: []].insert(address)
       }
       if let snapshot = sheet.cell(at: address).importedFormulaResult {
         valueCache[address] = CellValue.fromImportedExcel(snapshot)
       }
+    }
+  }
+
+  private func resolveBulkIngestExpr(
+    trimmed: String,
+    address: CellAddress,
+    sheetName: String,
+    maxRow: Int,
+    maxCol: Int,
+    profile: FormulaRecalcProfile?,
+    cacheLock: NSLock,
+    profileLock: NSLock
+  ) -> (FormulaExpr, String)? {
+    let exactKey = ingestTemplateKey(
+      sheetName: sheetName,
+      maxRow: maxRow,
+      maxCol: maxCol,
+      formula: trimmed
+    )
+    cacheLock.lock()
+    if let cached = ingestTemplateCache[exactKey] {
+      cacheLock.unlock()
+      profileLock.lock()
+      profile?.ingestTemplateCacheHits += 1
+      profileLock.unlock()
+      let shapeKey = FormulaRewriter.shapeAnchorKey(expr: cached.expr, anchor: address)
+      return (cached.expr, shapeKey)
+    }
+    cacheLock.unlock()
+
+    do {
+      let parseStart = CFAbsoluteTimeGetCurrent()
+      let parsed = try FormulaParser.parse(trimmed)
+      let parseElapsed = CFAbsoluteTimeGetCurrent() - parseStart
+      let shapeKey = FormulaRewriter.shapeAnchorKey(expr: parsed, anchor: address)
+      let anchorKey = ingestAnchorShapeCacheKey(
+        sheetName: sheetName,
+        maxRow: maxRow,
+        maxCol: maxCol,
+        shapeKey: shapeKey
+      )
+      cacheLock.lock()
+      if let cached = ingestAnchorTemplateCache[anchorKey] {
+        cacheLock.unlock()
+        let expr = FormulaRewriter.adjustExpression(
+          cached.normalizedExpr,
+          rowDelta: address.row,
+          colDelta: address.col
+        )
+        profileLock.lock()
+        profile?.ingestTemplateCacheHits += 1
+        profileLock.unlock()
+        return (expr, shapeKey)
+      }
+      let normalized = FormulaRewriter.adjustExpression(
+        parsed,
+        rowDelta: -address.row,
+        colDelta: -address.col
+      )
+      ingestAnchorTemplateCache[anchorKey] = AnchorParseTemplate(
+        normalizedExpr: normalized,
+        shapeKey: shapeKey
+      )
+      cacheLock.unlock()
+      profileLock.lock()
+      profile?.ingestParseSeconds += parseElapsed
+      profileLock.unlock()
+      return (parsed, shapeKey)
+    } catch {
+      return nil
     }
   }
 
