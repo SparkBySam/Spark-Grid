@@ -3571,12 +3571,14 @@ enum BugBashRunner {
           detail: String(format: "open blocked %.2fs", openElapsed)
         )
       }
-      let recalc = engine.recalculateEntireWorkbook(imported)
+      let recalc = engine.recalculateEntireWorkbook(imported, profile: true)
+      let phaseDetail = engine.lastWorkbookRecalcProfile?.detailSummary(totalSeconds: recalc)
+        ?? String(format: "%.2fs", recalc)
       guard recalc < 1.0 else {
         return Result(
           name: name,
           passed: false,
-          detail: String(format: "%d formulas full recalc %.2fs", formulaCount, recalc)
+          detail: String(format: "%d formulas | %@", formulaCount, phaseDetail)
         )
       }
       guard let juneIndex = imported.sheets.firstIndex(where: {
@@ -3611,10 +3613,10 @@ enum BugBashRunner {
         name: name,
         passed: true,
         detail: String(
-          format: "%d formulas open %.2fs recalc %.2fs",
+          format: "%d formulas open %.2fs | %@",
           formulaCount,
           openElapsed,
-          recalc
+          phaseDetail
         )
       )
     } catch {

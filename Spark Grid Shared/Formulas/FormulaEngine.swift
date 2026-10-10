@@ -30,6 +30,7 @@ final class FormulaEngine {
   }
 
   var cacheRevision: Int { revision }
+  private(set) var lastWorkbookRecalcProfile: FormulaRecalcProfile?
 
   func displayValue(at address: CellAddress, sheet: Sheet) -> CellValue {
     // Literals always come from the sheet being painted. The address cache is not
@@ -107,23 +108,31 @@ final class FormulaEngine {
 
   /// Re-evaluates every formula on every sheet (does not block open; call explicitly after import).
   @discardableResult
-  func recalculateEntireWorkbook(_ workbook: Workbook) -> TimeInterval {
+  func recalculateEntireWorkbook(_ workbook: Workbook, profile: Bool = true) -> TimeInterval {
     let start = CFAbsoluteTimeGetCurrent()
     self.workbook = workbook
+    let prof = profile ? FormulaRecalcProfile() : nil
+    lastWorkbookRecalcProfile = prof
+    aggregateRangeCache.profile = prof
+    lookupTableCache.profile = prof
     recalculatedSheetValues.removeAll(keepingCapacity: true)
     aggregateRangeCache.invalidateAll()
     lookupTableCache.invalidateAll()
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
-    for sheet in workbook.sheets {
+    for sheet in workbookRecalcSheetOrder(workbook) {
       activeSheetName = sheet.name
       clearFormulaGraph()
+      let ingestStart = CFAbsoluteTimeGetCurrent()
       for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
         ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
       }
-      recalculateAll(sheet: sheet)
+      prof?.ingestSeconds += CFAbsoluteTimeGetCurrent() - ingestStart
+      recalculateAll(sheet: sheet, profile: prof)
       mergeRecalculatedValues(for: sheet)
     }
+    aggregateRangeCache.profile = nil
+    lookupTableCache.profile = nil
     revision &+= 1
     return CFAbsoluteTimeGetCurrent() - start
   }
@@ -331,11 +340,11 @@ final class FormulaEngine {
     return value
   }
 
-  private func recalculateAll(sheet: Sheet) {
-    recalculate(addresses: Set(formulaAST.keys), sheet: sheet)
+  private func recalculateAll(sheet: Sheet, profile: FormulaRecalcProfile? = nil) {
+    recalculate(addresses: Set(formulaAST.keys), sheet: sheet, profile: profile)
   }
 
-  private func recalculate(addresses: Set<CellAddress>, sheet: Sheet) {
+  private func recalculate(addresses: Set<CellAddress>, sheet: Sheet, profile: FormulaRecalcProfile? = nil) {
     let order = topologicalOrder(of: addresses)
     var visiting: Set<CellAddress> = []
     var visited: Set<CellAddress> = []
@@ -384,6 +393,7 @@ final class FormulaEngine {
       }
       evaluator.aggregateRangeCache = aggregateRangeCache
       evaluator.lookupTableCache = lookupTableCache
+      evaluator.recalcProfile = profile
       valueCache[address] = evaluator.evaluate(expr)
     }
 
@@ -394,6 +404,22 @@ final class FormulaEngine {
       eval(address)
     }
     revision &+= 1
+  }
+
+  /// Config and month data sheets before YTD/summary so cross-sheet COUNTIFS read stored values.
+  private func workbookRecalcSheetOrder(_ workbook: Workbook) -> [Sheet] {
+    func rank(_ name: String) -> Int {
+      let lower = name.lowercased()
+      if lower == "config" { return 0 }
+      if lower.contains("ytd") || lower.contains("summary") || lower == "dashboard" { return 2 }
+      return 1
+    }
+    return workbook.sheets.sorted { lhs, rhs in
+      let l = rank(lhs.name)
+      let r = rank(rhs.name)
+      if l != r { return l < r }
+      return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
   }
 
   private func resolve(
@@ -433,15 +459,20 @@ final class FormulaEngine {
     if let cached = foreignCache[key] {
       return cached
     }
+    if let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
+      foreignCache[key] = stored
+      return stored
+    }
     if let literal = workbookLiteral(sheet: sheet, address: address) {
       foreignCache[key] = literal
       return literal
     }
-    let rawForStored = sheet.cell(at: address).raw
+    let rawForStored = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if FormulaSyntax.isFormula(rawForStored),
-       let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
-      foreignCache[key] = stored
-      return stored
+       let imported = sheet.cell(at: address).importedFormulaResult {
+      let value = CellValue.fromImportedExcel(imported)
+      foreignCache[key] = value
+      return value
     }
     if foreignVisiting.contains(key) {
       return .error(.cycle)
@@ -457,6 +488,7 @@ final class FormulaEngine {
     foreignVisiting.insert(key)
     defer { foreignVisiting.remove(key) }
 
+    lastWorkbookRecalcProfile?.foreignFormulaEvaluations += 1
     do {
       let expr = try FormulaParser.parse(trimmed)
       var evaluator = FormulaEvaluator { [weak self] ref in

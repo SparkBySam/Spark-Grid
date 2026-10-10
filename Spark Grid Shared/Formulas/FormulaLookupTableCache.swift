@@ -16,6 +16,7 @@ struct LookupTableKey: Hashable {
 
 /// Exact-match VLOOKUP / HLOOKUP: one scan per table, then O(1) needle lookup (KPI Config rows).
 final class FormulaLookupTableCache {
+  weak var profile: FormulaRecalcProfile?
   private var exactMaps: [LookupTableKey: [AggregateValueKey: CellValue]] = [:]
 
   func invalidateAll() {
@@ -36,7 +37,9 @@ final class FormulaLookupTableCache {
   ) -> CellValue? {
     guard let needleKey = AggregateValueKey.from(cellValue: needle) else { return nil }
     let map = exactMaps[key] ?? {
+      let buildStart = CFAbsoluteTimeGetCurrent()
       let built = build()
+      profile?.lookupIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
       exactMaps[key] = built
       return built
     }()

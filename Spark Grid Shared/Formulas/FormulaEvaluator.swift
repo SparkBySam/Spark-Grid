@@ -37,6 +37,7 @@ struct FormulaEvaluator {
   var aggregateRangeCache: FormulaAggregateRangeCache?
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
   var lookupTableCache: FormulaLookupTableCache?
+  weak var recalcProfile: FormulaRecalcProfile?
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
     switch expr {
@@ -194,6 +195,15 @@ struct FormulaEvaluator {
   }
 
   private func evalCall(_ name: String, _ args: [FormulaExpr]) -> CellValue {
+    let profileStart = recalcProfile != nil ? CFAbsoluteTimeGetCurrent() : 0
+    let result = evalCallBody(name, args)
+    if let profile = recalcProfile {
+      profile.recordEval(function: name.uppercased(), seconds: CFAbsoluteTimeGetCurrent() - profileStart)
+    }
+    return result
+  }
+
+  private func evalCallBody(_ name: String, _ args: [FormulaExpr]) -> CellValue {
     switch name {
     case "SUM": return aggregate(args, skipNonNumeric: true) { $0 + $1 }
     case "AVERAGE":

@@ -116,10 +116,12 @@ extension FormulaEvaluator {
         columns: rangeSnapshots,
         criteriaKeys: lookupKeys
       )
+      recalcProfile?.countifsHistogramLookups += 1
       return .number(Double(matches))
     }
     let count = rangeSnapshots[0].count
     var matches = 0
+    recalcProfile?.countifsRowScanCells += count
     for offset in 0..<count {
       var matched = true
       for (rangeIndex, test) in tests.map(\.1).enumerated() {

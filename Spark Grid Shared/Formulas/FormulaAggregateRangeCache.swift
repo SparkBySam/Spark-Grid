@@ -70,6 +70,7 @@ struct AggregateSumBucket {
 
 /// One scan per criteria range, then O(1) COUNTIFS / SUMIFS lookups via composite histograms.
 final class FormulaAggregateRangeCache {
+  weak var profile: FormulaRecalcProfile?
   private var snapshots: [AggregateRangeKey: [CellValue]] = [:]
   private var countIndexes: [CompositeCountIndexKey: [AggregateCriteriaTupleKey: Int]] = [:]
   private var sumIndexes: [CompositeSumIndexKey: [AggregateCriteriaTupleKey: AggregateSumBucket]] = [:]
@@ -105,12 +106,14 @@ final class FormulaAggregateRangeCache {
     if let cached = snapshots[key] {
       return cached
     }
+    let buildStart = CFAbsoluteTimeGetCurrent()
     var values = [CellValue]()
     values.reserveCapacity(count)
     for index in 0..<count {
       values.append(fill(index))
     }
     snapshots[key] = values
+    profile?.aggregateIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
     return values
   }
 
@@ -148,6 +151,10 @@ final class FormulaAggregateRangeCache {
     indexKey: CompositeCountIndexKey,
     columns: [[CellValue]]
   ) -> [AggregateCriteriaTupleKey: Int] {
+    let buildStart = CFAbsoluteTimeGetCurrent()
+    defer {
+      profile?.aggregateIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
+    }
     guard let rowCount = columns.first?.count, rowCount > 0 else {
       let empty: [AggregateCriteriaTupleKey: Int] = [:]
       countIndexes[indexKey] = empty
@@ -178,6 +185,10 @@ final class FormulaAggregateRangeCache {
     criteriaColumns: [[CellValue]],
     sumColumn: [CellValue]
   ) -> [AggregateCriteriaTupleKey: AggregateSumBucket] {
+    let buildStart = CFAbsoluteTimeGetCurrent()
+    defer {
+      profile?.aggregateIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
+    }
     let rowCount = sumColumn.count
     guard rowCount > 0 else {
       let empty: [AggregateCriteriaTupleKey: AggregateSumBucket] = [:]
