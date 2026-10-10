@@ -946,7 +946,7 @@ struct FormulaEvaluator {
     return approximate?.value ?? .error(.na)
   }
 
-  private func buildExactLookupMap(
+  func buildExactLookupMap(
     horizontal: Bool,
     bounds: (minRow: Int, minCol: Int, maxRow: Int, maxCol: Int),
     start: FormulaRef,

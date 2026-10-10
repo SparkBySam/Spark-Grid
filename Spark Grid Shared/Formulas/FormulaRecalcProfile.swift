@@ -42,6 +42,22 @@ final class FormulaRecalcProfile {
   /// Boolean-shaped `SUMPRODUCT` that did not use the fast path (parse miss or unsupported shape).
   var sumproductBooleanFallbacks: Int = 0
 
+  struct SheetPhaseWalls: Sendable {
+    var name: String
+    var ingestWall: Double
+    var evalWall: Double
+    /// CPU time in aggregate index builds during this sheet's eval (Σ attribution, may overlap).
+    var aggIdxCPU: Double
+  }
+
+  var sheetPhaseWalls: [SheetPhaseWalls] = []
+
+  func recordSheetPhaseWalls(name: String, ingestWall: Double, evalWall: Double, aggIdxCPU: Double) {
+    sheetPhaseWalls.append(
+      SheetPhaseWalls(name: name, ingestWall: ingestWall, evalWall: evalWall, aggIdxCPU: aggIdxCPU)
+    )
+  }
+
   func recordEval(function: String, seconds: Double) {
     evalSeconds += seconds
     evalByFunctionSeconds[function, default: 0] += seconds
@@ -75,9 +91,24 @@ final class FormulaRecalcProfile {
     iferrorVlookupFastHits += other.iferrorVlookupFastHits
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
+    sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
     for (name, seconds) in other.evalByFunctionSeconds {
       evalByFunctionSeconds[name, default: 0] += seconds
     }
+  }
+
+  private func sheetPhaseWallSummary() -> String {
+    guard !sheetPhaseWalls.isEmpty else { return "" }
+    let parts = sheetPhaseWalls.map {
+      String(
+        format: "%@ in%.2f ev%.2f ag%.2f",
+        $0.name,
+        $0.ingestWall,
+        $0.evalWall,
+        $0.aggIdxCPU
+      )
+    }
+    return " | sheets " + parts.joined(separator: " ")
   }
 
   func detailSummary(totalSeconds: Double) -> String {
@@ -112,6 +143,6 @@ final class FormulaRecalcProfile {
       ifBlankEqualityFastHits,
       iferrorVlookupFastHits,
       topEval.isEmpty ? "—" : topEval
-    )
+    ) + sheetPhaseWallSummary()
   }
 }

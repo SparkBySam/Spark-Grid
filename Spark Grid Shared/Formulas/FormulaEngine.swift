@@ -422,7 +422,9 @@ final class FormulaEngine {
 
   private struct ShapeStripPlan {
     var master: CellAddress
+    /// Sorted by row then column (ingest time).
     var members: [CellAddress]
+    var isColumnStrip: Bool
   }
 
   private func recalculateWorkbookSheet(
@@ -439,7 +441,17 @@ final class FormulaEngine {
     if let profile {
       profile.ingestBulkSheetWallPeakSeconds = max(profile.ingestBulkSheetWallPeakSeconds, ingestWall)
     }
+    let aggIdxBefore = profile?.aggregateIndexBuildSeconds ?? 0
+    let evalStart = CFAbsoluteTimeGetCurrent()
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
+    let evalWall = CFAbsoluteTimeGetCurrent() - evalStart
+    let aggIdxCPU = (profile?.aggregateIndexBuildSeconds ?? 0) - aggIdxBefore
+    profile?.recordSheetPhaseWalls(
+      name: sheet.name,
+      ingestWall: ingestWall,
+      evalWall: evalWall,
+      aggIdxCPU: aggIdxCPU
+    )
     mergeRecalculatedValues(for: sheet)
   }
 
@@ -460,7 +472,17 @@ final class FormulaEngine {
     if let profile {
       profile.ingestBulkSheetWallPeakSeconds = max(profile.ingestBulkSheetWallPeakSeconds, ingestWall)
     }
+    let aggIdxBefore = profile?.aggregateIndexBuildSeconds ?? 0
+    let evalStart = CFAbsoluteTimeGetCurrent()
     recalculateAll(sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
+    let evalWall = CFAbsoluteTimeGetCurrent() - evalStart
+    let aggIdxCPU = (profile?.aggregateIndexBuildSeconds ?? 0) - aggIdxBefore
+    profile?.recordSheetPhaseWalls(
+      name: sheet.name,
+      ingestWall: ingestWall,
+      evalWall: evalWall,
+      aggIdxCPU: aggIdxCPU
+    )
     var values: [CellAddress: CellValue] = [:]
     for address in formulaAST.keys {
       if let value = valueCache[address] {
@@ -497,7 +519,12 @@ final class FormulaEngine {
         return $0.col < $1.col
       }) else { continue }
       guard formulaAST[master] != nil else { continue }
-      plans.append(ShapeStripPlan(master: master, members: members))
+      let sorted = members.sorted {
+        if $0.row != $1.row { return $0.row < $1.row }
+        return $0.col < $1.col
+      }
+      let columnStrip = Set(sorted.map(\.col)).count == 1 && sorted.allSatisfy { $0.col == master.col }
+      plans.append(ShapeStripPlan(master: master, members: sorted, isColumnStrip: columnStrip))
     }
     return plans
   }
@@ -558,7 +585,12 @@ final class FormulaEngine {
 
       func flushRun() {
         if let master = runMaster, membersFormFillStrip(runMembers) {
-          localStripPlans.append(ShapeStripPlan(master: master, members: runMembers))
+          let sorted = runMembers.sorted {
+            if $0.row != $1.row { return $0.row < $1.row }
+            return $0.col < $1.col
+          }
+          let columnStrip = Set(sorted.map(\.col)).count == 1 && sorted.allSatisfy { $0.col == master.col }
+          localStripPlans.append(ShapeStripPlan(master: master, members: sorted, isColumnStrip: columnStrip))
         }
         runMaster = nil
         runMasterExpr = nil
@@ -837,16 +869,32 @@ final class FormulaEngine {
 
     func evalShapeStrip(_ plan: ShapeStripPlan) {
       guard let masterExpr = formulaAST[plan.master] else { return }
-      let orderedMembers = plan.members.sorted {
-        if $0.row != $1.row { return $0.row < $1.row }
-        return $0.col < $1.col
+      let orderedMembers = plan.members
+      let memberSet = Set(orderedMembers)
+      for address in orderedMembers {
+        guard let deps = dependencies[address] else { continue }
+        for dep in deps where !memberSet.contains(dep) {
+          eval(dep)
+        }
+      }
+      if plan.isColumnStrip,
+         evaluator.evaluateColumnShapeStrip(
+           master: plan.master,
+           members: orderedMembers,
+           masterExpr: masterExpr,
+           sink: { address, value in
+             valueCache[address] = value
+             visited.insert(address)
+           }
+         ) {
+        return
       }
       for address in orderedMembers {
         if visited.contains(address) { continue }
-        evalDependencies(address)
         let rowDelta = address.row - plan.master.row
         let colDelta = address.col - plan.master.col
-        let expr = FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
+        let expr = formulaAST[address]
+          ?? FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
         evaluator.prepareForCellEvaluation(origin: address)
         valueCache[address] = evaluator.evaluate(expr)
         visited.insert(address)
