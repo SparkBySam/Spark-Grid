@@ -154,10 +154,15 @@ extension FormulaEvaluator {
 
   func evalSUMPRODUCT(_ args: [FormulaExpr]) -> CellValue {
     guard !args.isEmpty else { return .error(.value) }
+    let booleanShaped = looksLikeBooleanSumProduct(args)
+    if let fast = tryEvalBooleanSumProduct(args) {
+      recalcProfile?.sumproductBooleanHits += 1
+      return fast
+    }
+    if booleanShaped {
+      recalcProfile?.sumproductBooleanFallbacks += 1
+    }
     if args.count == 1 {
-      if let fast = tryEvalBooleanProductCount(args[0]) {
-        return fast
-      }
       let cacheBox = FormulaEvaluator.ArrayEvalCacheBox()
       let values = arrayEvaluate(args[0], cache: cacheBox)
       var total = 0.0
@@ -854,9 +859,8 @@ extension FormulaEvaluator {
 
   // MARK: - SUMPRODUCT boolean products
 
-  /// KPI-style `SUMPRODUCT((C=$A5)*(R="Yes")*...)` via cached static masks and column snapshots.
-  private func tryEvalBooleanProductCount(_ expr: FormulaExpr) -> CellValue? {
-    guard let plan = parseSumProductBooleanPlan(expr) else { return nil }
+  private func tryEvalBooleanSumProduct(_ args: [FormulaExpr]) -> CellValue? {
+    guard let plan = parseSumProductBooleanPlan(args) else { return nil }
     guard let cache = aggregateRangeCache else { return nil }
     var memo: [LookupMemoKey: CellValue] = [:]
     let columns = plan.anchors.map { snapshotValues(anchor: $0, memo: &memo) }
@@ -956,9 +960,50 @@ extension FormulaEvaluator {
     case diffGe(RangeAnchor, RangeAnchor, Double)
   }
 
-  private func parseSumProductBooleanPlan(_ expr: FormulaExpr) -> SumProductBooleanPlan? {
-    var factors: [FormulaExpr] = []
-    guard collectMultiplyFactors(unwrapSumProductParen(expr), into: &factors) else { return nil }
+  private func looksLikeBooleanSumProduct(_ args: [FormulaExpr]) -> Bool {
+    guard let factors = booleanProductFactors(from: args), !factors.isEmpty else { return false }
+    let meaningful = factors.filter { !isIgnorableBooleanProductFactor($0) }
+    guard !meaningful.isEmpty else { return false }
+    if args.count == 1 {
+      return meaningful.contains { parseBooleanFactor($0) != nil }
+    }
+    return meaningful.allSatisfy { parseBooleanFactor($0) != nil }
+  }
+
+  private func booleanProductFactors(from args: [FormulaExpr]) -> [FormulaExpr]? {
+    guard !args.isEmpty else { return nil }
+    if args.count == 1 {
+      var factors: [FormulaExpr] = []
+      guard collectMultiplyFactors(unwrapSumProductParen(args[0]), into: &factors) else { return nil }
+      return factors.map { unwrapBooleanCoercion($0) }
+    }
+    return args.map { unwrapBooleanCoercion($0) }
+  }
+
+  private func isIgnorableBooleanProductFactor(_ expr: FormulaExpr) -> Bool {
+    switch unwrapBooleanCoercion(expr) {
+    case .number(let value):
+      return value == 1
+    case .boolean(let flag):
+      return flag
+    default:
+      return false
+    }
+  }
+
+  private func unwrapBooleanCoercion(_ expr: FormulaExpr) -> FormulaExpr {
+    var node = unwrapSumProductParen(expr)
+    while case .unary(.plus, let inner) = node {
+      node = unwrapSumProductParen(inner)
+    }
+    while case .unary(.negate, let inner) = node {
+      node = unwrapSumProductParen(inner)
+    }
+    return node
+  }
+
+  private func parseSumProductBooleanPlan(_ args: [FormulaExpr]) -> SumProductBooleanPlan? {
+    guard let factors = booleanProductFactors(from: args), !factors.isEmpty else { return nil }
     var anchors: [RangeAnchor] = []
     var staticTests: [SumProductBooleanPlan.StaticColumnTest] = []
     var dynamicTests: [SumProductBooleanPlan.DynamicColumnTest] = []
@@ -966,6 +1011,7 @@ extension FormulaEvaluator {
     var staticHasher = Hasher()
 
     for factor in factors {
+      if isIgnorableBooleanProductFactor(factor) { continue }
       guard let parsed = parseBooleanFactor(factor) else { return nil }
       switch parsed {
       case .staticTest(let anchor, let test):
@@ -983,6 +1029,7 @@ extension FormulaEvaluator {
       }
     }
 
+    guard !(staticTests.isEmpty && dynamicTests.isEmpty && diffGeTests.isEmpty) else { return nil }
     for anchor in anchors {
       mixSumProductAnchor(anchor, into: &staticHasher)
     }
@@ -1010,7 +1057,7 @@ extension FormulaEvaluator {
     case .unary(.plus, let inner):
       return collectMultiplyFactors(inner, into: &factors)
     default:
-      factors.append(expr)
+      factors.append(unwrapBooleanCoercion(expr))
       return true
     }
   }

@@ -79,6 +79,7 @@ enum BugBashRunner {
     results.append(legacyChartLandsUnderData())
     results.append(cfFillTextContrast())
     results.append(everydayFormulas())
+    results.append(sumproductBooleanFastPathSelfCheck())
     results.append(kpiJuneStyleCountifs())
     results.append(countifsSkipsErrorRows())
     results.append(countifsRangeDependencyBudget())
@@ -3319,6 +3320,55 @@ enum BugBashRunner {
       name: name,
       passed: true,
       detail: "\(listed.count) functions, grouped, caret inside parentheses"
+    )
+  }
+
+  /// KPI-style `SUMPRODUCT(--(Month!C=$A5),--(R="Yes"),…)` must increment `sumproductBooleanHits`.
+  private static func sumproductBooleanFastPathSelfCheck() -> Result {
+    let name = "SUMPRODUCT boolean fast-path counters"
+    var january = Sheet(name: "January")
+    for row in 110...115 {
+      january.setCell(Cell(raw: "agent-1"), at: CellAddress(row: row, col: 2))
+      january.setCell(Cell(raw: "Yes"), at: CellAddress(row: row, col: 17))
+      january.setCell(Cell(raw: "3"), at: CellAddress(row: row, col: 18))
+      january.setCell(Cell(raw: "1"), at: CellAddress(row: row, col: 1))
+    }
+    var ytd = Sheet(name: "YTD Summary")
+    ytd.setCell(Cell(raw: "agent-1"), at: CellAddress(row: 4, col: 0))
+    let multiArg = """
+    =SUMPRODUCT(--(January!$C$110:$C$115=$A5),--(January!$R$110:$R$115="Yes"),--(January!$S$110:$S$115<>""),--((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
+    """
+    let singleArg = """
+    =SUMPRODUCT((January!$C$110:$C$115=$A5)*(January!$R$110:$R$115="Yes")*(January!$S$110:$S$115<>"")*((January!$S$110:$S$115-January!$B$110:$B$115)>=0))
+    """
+    ytd.setCell(Cell(raw: multiArg), at: CellAddress(row: 4, col: 4))
+    ytd.setCell(Cell(raw: singleArg), at: CellAddress(row: 5, col: 4))
+    let workbook = Workbook(sheets: [january, ytd], activeSheetIndex: 1)
+    let engine = FormulaEngine()
+    engine.rebuild(workbook: workbook, recalculate: false)
+    _ = engine.recalculateEntireWorkbook(workbook, profile: true)
+    guard let profile = engine.lastWorkbookRecalcProfile else {
+      return Result(name: name, passed: false, detail: "missing recalc profile")
+    }
+    guard profile.sumproductBooleanHits > 0 else {
+      return Result(
+        name: name,
+        passed: false,
+        detail: String(
+          format: "sumproductBooleanHits %d sumproductBooleanFallbacks %d",
+          profile.sumproductBooleanHits,
+          profile.sumproductBooleanFallbacks
+        )
+      )
+    }
+    return Result(
+      name: name,
+      passed: true,
+      detail: String(
+        format: "sumproductBooleanHits %d sumproductBooleanFallbacks %d",
+        profile.sumproductBooleanHits,
+        profile.sumproductBooleanFallbacks
+      )
     )
   }
 
