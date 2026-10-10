@@ -1367,15 +1367,15 @@ extension FormulaEvaluator {
     return stripUnwrap(args[0])
   }
 
-  private func columnIFErrorSink(
-    _ sink: @escaping (CellAddress, CellValue) -> Void
-  ) -> (CellAddress, CellValue) -> Void {
-    { address, value in
-      if case .error = value {
-        sink(address, .string(""))
-      } else {
-        sink(address, value)
-      }
+  private func forwardColumnIFError(
+    address: CellAddress,
+    value: CellValue,
+    sink: (CellAddress, CellValue) -> Void
+  ) {
+    if case .error = value {
+      sink(address, .string(""))
+    } else {
+      sink(address, value)
     }
   }
 
@@ -1398,12 +1398,14 @@ extension FormulaEvaluator {
   ) -> Bool {
     guard let inner = stripIFErrorEmptyKernel(expr) else { return false }
     guard canEvaluateColumnIFERRORDelegating(inner, master: master) else { return false }
-    let wrapped = columnIFErrorSink(sink)
+    let iferrorSink: (CellAddress, CellValue) -> Void = { address, value in
+      forwardColumnIFError(address: address, value: value, sink: sink)
+    }
     if evaluateColumnYtdSumproductQuotientStrip(
       master: master,
       members: members,
       expr: inner,
-      sink: wrapped
+      sink: iferrorSink
     ) {
       return true
     }
@@ -1411,7 +1413,7 @@ extension FormulaEvaluator {
       master: master,
       members: members,
       expr: inner,
-      sink: wrapped
+      sink: iferrorSink
     ) {
       return true
     }
@@ -1419,12 +1421,12 @@ extension FormulaEvaluator {
       master: master,
       members: members,
       expr: inner,
-      sink: wrapped
+      sink: iferrorSink
     ) {
       return true
     }
     if let countifs = stripCountifsKernelExpr(inner),
-       evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifs, sink: wrapped) {
+       evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifs, sink: iferrorSink) {
       return true
     }
     return false
@@ -1478,7 +1480,9 @@ extension FormulaEvaluator {
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
     guard canEvaluateColumnIFERRORDelegating(inner, master: master) else { return false }
-    let rowSink = columnIFErrorSink(sink)
+    let iferrorSink: (CellAddress, CellValue) -> Void = { address, value in
+      forwardColumnIFError(address: address, value: value, sink: sink)
+    }
     if let ytdPlan = makeColumnYtdSumproductQuotientPlan(inner, master: master) {
       for origin in members {
         prepareForCellEvaluation(origin: origin)
@@ -1488,7 +1492,7 @@ extension FormulaEvaluator {
           continue
         }
         recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnYtdSumproductQuotientRow(plan: ytdPlan, master: master, origin: origin, sink: rowSink)
+        emitColumnYtdSumproductQuotientRow(plan: ytdPlan, master: master, origin: origin, sink: iferrorSink)
       }
       return true
     }
@@ -1501,7 +1505,7 @@ extension FormulaEvaluator {
           continue
         }
         recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnBooleanSumProductRow(expr: inner, master: master, origin: origin, sink: rowSink)
+        emitColumnBooleanSumProductRow(expr: inner, master: master, origin: origin, sink: iferrorSink)
       }
       return true
     }
@@ -1514,7 +1518,7 @@ extension FormulaEvaluator {
           continue
         }
         recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnAVERAGEIFSRow(plan: averagePlan, master: master, origin: origin, sink: rowSink)
+        emitColumnAVERAGEIFSRow(plan: averagePlan, master: master, origin: origin, sink: iferrorSink)
       }
       return true
     }
@@ -1528,7 +1532,7 @@ extension FormulaEvaluator {
           continue
         }
         recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: rowSink)
+        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: iferrorSink)
         recalcProfile?.ifStripCountifsRows += 1
       }
       return true
