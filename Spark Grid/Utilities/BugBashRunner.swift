@@ -3780,6 +3780,18 @@ enum BugBashRunner {
     return nil
   }
 
+  /// Emits KPI full-recalc profile before the rest of Bug Bash (flushed for early Mac kill).
+  private static func emitKPIRecalcProfileLine(_ line: String) {
+    let text = "KPI full recalc profile | \(line)\n"
+    if let data = text.data(using: .utf8) {
+      FileHandle.standardError.write(data)
+    }
+    fputs(text, stderr)
+    fflush(stderr)
+    print(text, terminator: "")
+    fflush(stdout)
+  }
+
   /// Optional KPI workbook: full grouped recalc under ~1s; June E/F still match Excel cache.
   private static func kpiWorkbookFullRecalcBudget() -> Result {
     let name = "KPI workbook full recalc budget"
@@ -3810,6 +3822,7 @@ enum BugBashRunner {
       let recalc = engine.recalculateEntireWorkbook(imported, profile: true)
       let phaseDetail = engine.lastWorkbookRecalcProfile?.detailSummary(totalSeconds: recalc)
         ?? String(format: "%.2fs", recalc)
+      emitKPIRecalcProfileLine(String(format: "%d formulas | %@", formulaCount, phaseDetail))
       guard recalc < 1.0 else {
         return Result(
           name: name,

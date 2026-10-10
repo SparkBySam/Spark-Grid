@@ -5,6 +5,18 @@ final class FormulaRecalcProfile {
   var ingestSeconds: Double = 0
   var ingestParseSeconds: Double = 0
   var ingestDependencySeconds: Double = 0
+  /// Fill-follower `adjustedFormulaText` vs stored raw (includes serialize).
+  var ingestFillVerifySeconds: Double = 0
+  /// `adjustExpression` on successful fill followers.
+  var ingestFillAdjustSeconds: Double = 0
+  /// `shapeAnchorKey` during bulk ingest (parse misses / fallback).
+  var ingestShapeKeySeconds: Double = 0
+  /// Scan cells + column grouping before parallel column ingest.
+  var ingestEntryScanSeconds: Double = 0
+  /// Wall time inside `concurrentPerform` column ingest (overlaps across cores).
+  var ingestColumnParallelWallSeconds: Double = 0
+  /// Merge `formulaAST` / `dependencies` / `dependents` after column ingest.
+  var ingestGraphBuildSeconds: Double = 0
   var ingestTemplateCacheHits: Int = 0
   /// `buildShapeStripPlans` (AST anchor keys + fill validation); runs at eval start, not in `ingestSeconds`.
   var shapeStripPlanSeconds: Double = 0
@@ -37,6 +49,12 @@ final class FormulaRecalcProfile {
     ingestSeconds += other.ingestSeconds
     ingestParseSeconds += other.ingestParseSeconds
     ingestDependencySeconds += other.ingestDependencySeconds
+    ingestFillVerifySeconds += other.ingestFillVerifySeconds
+    ingestFillAdjustSeconds += other.ingestFillAdjustSeconds
+    ingestShapeKeySeconds += other.ingestShapeKeySeconds
+    ingestEntryScanSeconds += other.ingestEntryScanSeconds
+    ingestColumnParallelWallSeconds += other.ingestColumnParallelWallSeconds
+    ingestGraphBuildSeconds += other.ingestGraphBuildSeconds
     ingestTemplateCacheHits += other.ingestTemplateCacheHits
     shapeStripPlanSeconds += other.shapeStripPlanSeconds
     aggregateIndexBuildSeconds += other.aggregateIndexBuildSeconds
@@ -61,11 +79,17 @@ final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs (parse %.2fs deps %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
+      format: "total %.2fs | ingest %.2fs (parse %.2fs deps %.2fs fillVerify %.2fs fillAdjust %.2fs shapeKey %.2fs entryScan %.2fs colWall %.2fs graph %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | eval %@",
       totalSeconds,
       ingestSeconds,
       ingestParseSeconds,
       ingestDependencySeconds,
+      ingestFillVerifySeconds,
+      ingestFillAdjustSeconds,
+      ingestShapeKeySeconds,
+      ingestEntryScanSeconds,
+      ingestColumnParallelWallSeconds,
+      ingestGraphBuildSeconds,
       ingestTemplateCacheHits,
       shapeStripPlanSeconds,
       aggregateIndexBuildSeconds,
