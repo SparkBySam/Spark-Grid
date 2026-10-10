@@ -31,8 +31,6 @@ final class FormulaEngine {
 
   var cacheRevision: Int { revision }
   private(set) var lastWorkbookRecalcProfile: FormulaRecalcProfile?
-  /// During `recalculateEntireWorkbook`, month sheets use Excel cached values (open-on-snapshots).
-  private var useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc = false
 
   func displayValue(at address: CellAddress, sheet: Sheet) -> CellValue {
     // Literals always come from the sheet being painted. The address cache is not
@@ -122,8 +120,6 @@ final class FormulaEngine {
     lookupTableCache.invalidateAll()
     foreignCache.removeAll(keepingCapacity: true)
     foreignVisiting.removeAll(keepingCapacity: true)
-    useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc = true
-    defer { useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc = false }
     for sheet in workbookRecalcSheetOrder(workbook) {
       activeSheetName = sheet.name
       clearFormulaGraph()
@@ -410,14 +406,6 @@ final class FormulaEngine {
         if valueCache[address] == nil {
           valueCache[address] = literalOrEmpty(sheet.cell(at: address).raw)
         }
-        return
-      }
-
-      if useImportedSnapshotsOnDataSheetsDuringWorkbookRecalc,
-         workbookRecalcSheetRank(activeSheetName) == 1,
-         let snapshot = sheet.cell(at: address).importedFormulaResult {
-        valueCache[address] = CellValue.fromImportedExcel(snapshot)
-        profile?.importedSnapshotFormulaSkips += 1
         return
       }
 

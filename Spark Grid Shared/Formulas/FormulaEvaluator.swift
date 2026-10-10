@@ -38,16 +38,16 @@ struct FormulaEvaluator {
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
   var lookupTableCache: FormulaLookupTableCache?
   weak var recalcProfile: FormulaRecalcProfile?
-  /// Repeated `$A5`-style refs within one formula (12× `COUNTIFS` chains, etc.).
-  private let scalarRefMemo = ScalarRefMemoBox()
+  /// Shared subexpressions within one formula (`$A5`, `DATE(COLUMN()-n)`, …).
+  private let exprResultMemo = ExprResultMemoBox()
 
   mutating func prepareForCellEvaluation(origin: CellAddress?) {
     evaluationOrigin = origin
-    scalarRefMemo.values.removeAll(keepingCapacity: true)
+    exprResultMemo.values.removeAll(keepingCapacity: true)
   }
 
-  final class ScalarRefMemoBox {
-    var values: [FormulaRef: CellValue] = [:]
+  final class ExprResultMemoBox {
+    var values: [FormulaExpr: CellValue] = [:]
   }
 
   final class ArrayEvalCacheBox {
@@ -55,6 +55,29 @@ struct FormulaEvaluator {
   }
 
   func evaluate(_ expr: FormulaExpr) -> CellValue {
+    if shouldMemoizeEvalResult(expr), let cached = exprResultMemo.values[expr] {
+      return cached
+    }
+    let result = evaluateImpl(expr)
+    if shouldMemoizeEvalResult(expr) {
+      exprResultMemo.values[expr] = result
+    }
+    return result
+  }
+
+  private func shouldMemoizeEvalResult(_ expr: FormulaExpr) -> Bool {
+    if case .call(let name, _) = expr {
+      switch name.uppercased() {
+      case "NOW", "TODAY", "RAND", "RANDBETWEEN", "OFFSET", "INDIRECT":
+        return false
+      default:
+        return true
+      }
+    }
+    return true
+  }
+
+  private func evaluateImpl(_ expr: FormulaExpr) -> CellValue {
     switch expr {
     case .number(let n):
       return .number(n)
@@ -68,10 +91,7 @@ struct FormulaEvaluator {
       guard let resolved = namedRangeLookup(name) else { return .error(.name) }
       return evaluate(resolved)
     case .cellRef(let ref):
-      if let cached = scalarRefMemo.values[ref] { return cached }
-      let value = lookup(ref)
-      scalarRefMemo.values[ref] = value
-      return value
+      return lookup(ref)
     case .range:
       // Bare ranges are multi-valued; scalar context matches Sheets `#VALUE!`.
       return .error(.arrayResult)
