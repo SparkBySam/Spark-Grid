@@ -65,6 +65,9 @@ final class FormulaRecalcProfile {
 
   var ifStripOtherBranchEntries: [IfStripOtherBranchEntry] = []
 
+  /// YTD Summary column strip plan miss (same fields as `ob`).
+  var ifStripYtdPlanRejectEntries: [IfStripOtherBranchEntry] = []
+
   func recordIfStripPlanMiss(_ reason: String) {
     ifStripPlanMiss[reason, default: 0] += 1
   }
@@ -76,6 +79,22 @@ final class FormulaRecalcProfile {
     rejectCode: String
   ) {
     ifStripOtherBranchEntries.append(
+      IfStripOtherBranchEntry(
+        sheet: sheet,
+        masterA1: masterA1,
+        formula: formula,
+        rejectCode: rejectCode
+      )
+    )
+  }
+
+  func recordIfStripYtdPlanReject(
+    sheet: String,
+    masterA1: String,
+    formula: String,
+    rejectCode: String
+  ) {
+    ifStripYtdPlanRejectEntries.append(
       IfStripOtherBranchEntry(
         sheet: sheet,
         masterA1: masterA1,
@@ -148,6 +167,7 @@ final class FormulaRecalcProfile {
       ifStripPlanMiss[reason, default: 0] += count
     }
     ifStripOtherBranchEntries.append(contentsOf: other.ifStripOtherBranchEntries)
+    ifStripYtdPlanRejectEntries.append(contentsOf: other.ifStripYtdPlanRejectEntries)
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
     sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
@@ -164,6 +184,14 @@ final class FormulaRecalcProfile {
     return " | ob " + parts.joined(separator: ";")
   }
 
+  private func ifStripYtdPlanRejectSummary() -> String {
+    guard !ifStripYtdPlanRejectEntries.isEmpty else { return "" }
+    let parts = ifStripYtdPlanRejectEntries.map { entry in
+      "\(entry.sheet)!\(entry.masterA1):\(entry.rejectCode):\(entry.formula)"
+    }
+    return " | ytd " + parts.joined(separator: ";")
+  }
+
   private func ifStripMissSummary() -> String {
     var parts: [String] = []
     if ifStripVlkNA > 0 { parts.append(String(format: "vlkNA %d", ifStripVlkNA)) }
@@ -173,7 +201,7 @@ final class FormulaRecalcProfile {
       parts.append("planMiss \(miss)")
     }
     guard !parts.isEmpty else { return "" }
-    return " | stripFB " + parts.joined(separator: " ") + ifStripOtherBranchSummary()
+    return " | stripFB " + parts.joined(separator: " ") + ifStripOtherBranchSummary() + ifStripYtdPlanRejectSummary()
   }
 
   private func sheetPhaseWallSummary() -> String {

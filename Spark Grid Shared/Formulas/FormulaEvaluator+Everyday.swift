@@ -1286,7 +1286,58 @@ extension FormulaEvaluator {
     ) {
       return true
     }
+    recordYtdStripPlanRejectsIfNeeded(master: master, expr: stripUnwrap(masterExpr))
     return false
+  }
+
+  private func isYtdSummaryStripDiagnosticContext(_ sheetName: String) -> Bool {
+    sheetName.caseInsensitiveCompare("YTD Summary") == .orderedSame
+  }
+
+  private func ytdCountifsSumStripCandidate(_ expr: FormulaExpr) -> Bool {
+    let terms = stripAddChain(expr)
+    guard terms.count >= 2 else { return false }
+    return terms.allSatisfy { term in
+      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else { return false }
+      return true
+    }
+  }
+
+  private func ytdSumproductQuotientStripCandidate(_ expr: FormulaExpr) -> Bool {
+    guard case .call(let name, let args) = stripUnwrap(expr),
+          name.uppercased() == "IFERROR",
+          args.count == 2
+    else { return false }
+    guard case .binary(.divide, _, _) = stripUnwrap(args[0]) else { return false }
+    return true
+  }
+
+  private func recordYtdStripPlanRejectsIfNeeded(master: CellAddress, expr: FormulaExpr) {
+    guard let diag = stripPlanDiagnosticContext,
+          isYtdSummaryStripDiagnosticContext(diag.sheetName)
+    else { return }
+    if ytdCountifsSumStripCandidate(expr) {
+      let reject = diagnoseColumnCrossSheetCountifsSumPlanReject(expr, master: master)
+      if reject != "ytd.cnt.ok" {
+        recalcProfile?.recordIfStripYtdPlanReject(
+          sheet: diag.sheetName,
+          masterA1: master.a1,
+          formula: diag.masterFormulaText,
+          rejectCode: reject
+        )
+      }
+    }
+    if ytdSumproductQuotientStripCandidate(expr) {
+      let reject = diagnoseColumnYtdSumproductQuotientPlanReject(expr, master: master)
+      if reject != "ytd.sp.ok" {
+        recalcProfile?.recordIfStripYtdPlanReject(
+          sheet: diag.sheetName,
+          masterA1: master.a1,
+          formula: diag.masterFormulaText,
+          rejectCode: reject
+        )
+      }
+    }
   }
 
   private func stripAddChain(_ expr: FormulaExpr) -> [FormulaExpr] {
@@ -1336,6 +1387,48 @@ extension FormulaEvaluator {
     }
     guard let needleRef, termPlans.count >= 12 else { return nil }
     return ColumnCrossSheetCountifsSumPlan(needleRef: needleRef, termPlans: termPlans)
+  }
+
+  private func diagnoseColumnCrossSheetCountifsSumPlanReject(
+    _ expr: FormulaExpr,
+    master: CellAddress
+  ) -> String {
+    let terms = stripAddChain(expr)
+    guard terms.count >= 2 else { return "ytd.cnt.addChain" }
+    var termPlans: [ColumnCOUNTIFSPlan] = []
+    var needleRef: FormulaRef?
+    for (index, term) in terms.enumerated() {
+      let label = String(format: "t%02d", index + 1)
+      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else {
+        return "ytd.cnt.\(label).notCountifs"
+      }
+      guard let plan = makeColumnCOUNTIFSPlan(stripUnwrap(term), master: master) else {
+        return "ytd.cnt.\(label).termPlan"
+      }
+      guard plan.dynamicCriterionRefs.count == 1,
+            plan.dynamicCriterionRefs[0].row >= 0,
+            plan.staticTests.count == 2,
+            plan.staticTests[1].op == .eq,
+            plan.staticTests[1].text.caseInsensitiveCompare("Yes") == .orderedSame
+      else {
+        return "ytd.cnt.\(label).termShape"
+      }
+      let critRef = plan.dynamicCriterionRefs[0]
+      if let needleRef {
+        guard stripRefSameCellAs(critRef, keyRef: needleRef) else {
+          return "ytd.cnt.\(label).needleCell"
+        }
+      } else {
+        needleRef = critRef
+      }
+      guard !plan.rangeKeys[0].sheet.isEmpty else {
+        return "ytd.cnt.\(label).foreignSheet"
+      }
+      termPlans.append(plan)
+    }
+    guard needleRef != nil else { return "ytd.cnt.needleRef" }
+    guard termPlans.count >= 12 else { return "ytd.cnt.termCount" }
+    return "ytd.cnt.ok"
   }
 
   private func evaluateColumnCrossSheetCountifsSumStrip(
@@ -1398,6 +1491,34 @@ extension FormulaEvaluator {
       calls.append(stripUnwrap(term))
     }
     return ColumnYtdSumproductQuotientPlan(divisorRef: divisorRef, sumproductCalls: calls)
+  }
+
+  private func diagnoseColumnYtdSumproductQuotientPlanReject(
+    _ expr: FormulaExpr,
+    master: CellAddress
+  ) -> String {
+    guard case .call(let name, let args) = stripUnwrap(expr),
+          name.uppercased() == "IFERROR",
+          args.count == 2
+    else { return "ytd.sp.iferrorTop" }
+    guard stripIsStaticEmptyLiteral(args[1]) else { return "ytd.sp.fallbackEmpty" }
+    guard case .binary(.divide, let numerator, let denominator) = stripUnwrap(args[0]) else {
+      return "ytd.sp.divide"
+    }
+    guard stripFormulaCellRef(denominator) != nil else { return "ytd.sp.divisorRef" }
+    let terms = stripAddChain(stripUnwrap(numerator))
+    guard terms.count >= 12 else { return "ytd.sp.addChainCount" }
+    prepareForCellEvaluation(origin: master)
+    for (index, term) in terms.enumerated() {
+      let label = String(format: "t%02d", index + 1)
+      guard case .call(let spName, let spArgs) = stripUnwrap(term), spName.uppercased() == "SUMPRODUCT" else {
+        return "ytd.sp.\(label).notSumproduct"
+      }
+      guard parseSumProductBooleanPlan(spArgs) != nil else {
+        return "ytd.sp.\(label).booleanPlan"
+      }
+    }
+    return "ytd.sp.ok"
   }
 
   private func evaluateColumnYtdSumproductQuotientStrip(
