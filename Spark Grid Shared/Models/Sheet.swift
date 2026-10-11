@@ -29,6 +29,9 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     private var cachedMaxPopulatedColumn: Int = -1
     private var populatedExtentsValid: Bool = false
 
+    /// Formula cells grouped by column, sorted by row — built at import / cell bulk replace, not each recalc.
+    var formulaIngestByColumn: [Int: [(CellAddress, String)]] = [:]
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -60,6 +63,7 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         self.gridColumnCount = gridColumnCount
         self.gridRowCount = gridRowCount
         recomputePopulatedExtents()
+        rebuildFormulaIngestIndex()
     }
 
     enum CodingKeys: String, CodingKey {
@@ -85,6 +89,7 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
         gridColumnCount = try c.decodeIfPresent(Int.self, forKey: .gridColumnCount)
         gridRowCount = try c.decodeIfPresent(Int.self, forKey: .gridRowCount)
         recomputePopulatedExtents()
+        rebuildFormulaIngestIndex()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -128,14 +133,17 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
 
     mutating func setCell(_ cell: Cell, at address: CellAddress) {
         if cell.isEmpty {
-            guard cells.removeValue(forKey: address) != nil else { return }
+            guard let removed = cells.removeValue(forKey: address) else { return }
+            removeFormulaIngestEntry(address: address, raw: removed.raw)
             if populatedExtentsValid,
                address.row == cachedMaxPopulatedRow || address.col == cachedMaxPopulatedColumn
             {
                 recomputePopulatedExtents()
             }
         } else {
+            let previous = cells[address]
             cells[address] = cell
+            updateFormulaIngestIndex(address: address, previousRaw: previous?.raw, newRaw: cell.raw)
             if populatedExtentsValid {
                 cachedMaxPopulatedRow = max(cachedMaxPopulatedRow, address.row)
                 cachedMaxPopulatedColumn = max(cachedMaxPopulatedColumn, address.col)
@@ -149,6 +157,55 @@ struct Sheet: Identifiable, Codable, Equatable, Sendable {
     mutating func replaceCells(_ newCells: [CellAddress: Cell]) {
         cells = newCells
         recomputePopulatedExtents()
+        rebuildFormulaIngestIndex()
+    }
+
+    /// Same formula detection / trim as `FormulaEngine.bulkIngestFormulas` (fast `=` prefix, else `FormulaSyntax`).
+    static func bulkIngestTrimmedFormulaRaw(_ raw: String) -> String? {
+        guard let first = raw.unicodeScalars.first else { return nil }
+        if first == "=" { return raw }
+        guard FormulaSyntax.isFormula(raw) else { return nil }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Rebuild `formulaIngestByColumn` from `cells` (import, decode, bulk replace — not each full recalc).
+    mutating func rebuildFormulaIngestIndex() {
+        var buckets: [Int: [(CellAddress, String)]] = [:]
+        for (address, cell) in cells {
+            guard let trimmed = Self.bulkIngestTrimmedFormulaRaw(cell.raw) else { continue }
+            buckets[address.col, default: []].append((address, trimmed))
+        }
+        for col in buckets.keys {
+            buckets[col]?.sort { $0.0.row < $1.0.row }
+        }
+        formulaIngestByColumn = buckets
+    }
+
+    private mutating func removeFormulaIngestEntry(address: CellAddress, raw: String) {
+        guard Self.bulkIngestTrimmedFormulaRaw(raw) != nil else { return }
+        guard var column = formulaIngestByColumn[address.col] else { return }
+        if let idx = column.firstIndex(where: { $0.0 == address }) {
+            column.remove(at: idx)
+            if column.isEmpty {
+                formulaIngestByColumn.removeValue(forKey: address.col)
+            } else {
+                formulaIngestByColumn[address.col] = column
+            }
+        }
+    }
+
+    private mutating func updateFormulaIngestIndex(address: CellAddress, previousRaw: String?, newRaw: String) {
+        let oldTrimmed = previousRaw.flatMap { Self.bulkIngestTrimmedFormulaRaw($0) }
+        let newTrimmed = Self.bulkIngestTrimmedFormulaRaw(newRaw)
+        if oldTrimmed == newTrimmed { return }
+        if oldTrimmed != nil {
+            removeFormulaIngestEntry(address: address, raw: previousRaw ?? "")
+        }
+        guard let trimmed = newTrimmed else { return }
+        var column = formulaIngestByColumn[address.col, default: []]
+        let insertIndex = column.firstIndex { $0.0.row >= address.row } ?? column.endIndex
+        column.insert((address, trimmed), at: insertIndex)
+        formulaIngestByColumn[address.col] = column
     }
 
     /// Call after direct `cells` dictionary surgery that may change extents.
