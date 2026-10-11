@@ -1284,7 +1284,7 @@ extension FormulaEvaluator {
     masterExpr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    lastColumnShapeStripKernel = nil
+    columnShapeStripKernelCell.name = nil
     guard members.count >= 2 else { return false }
     guard members.allSatisfy({ $0.col == master.col }) else { return false }
     let rows = members.map(\.row)
@@ -1299,7 +1299,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
-      lastColumnShapeStripKernel = "ytdSp"
+      columnShapeStripKernelCell.name = "ytdSp"
       return true
     }
     if let ifBlank = unpackIFBlankBranch(expr) {
@@ -1310,7 +1310,7 @@ extension FormulaEvaluator {
         branch: ifBlank.branch,
         sink: sink
       ) {
-        lastColumnShapeStripKernel = "ifBlank"
+        columnShapeStripKernelCell.name = "ifBlank"
         return true
       }
       return false
@@ -1321,7 +1321,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
-      lastColumnShapeStripKernel = "iferrorDelegate"
+      columnShapeStripKernelCell.name = "iferrorDelegate"
       return true
     }
     if evaluateColumnBooleanSumProductStrip(
@@ -1330,7 +1330,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
-      lastColumnShapeStripKernel = "sumproductBool"
+      columnShapeStripKernelCell.name = "sumproductBool"
       return true
     }
     if evaluateColumnAVERAGEIFSStrip(
@@ -1339,12 +1339,12 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
-      lastColumnShapeStripKernel = "averageifs"
+      columnShapeStripKernelCell.name = "averageifs"
       return true
     }
     if let countifsKernel = stripCountifsKernelExpr(expr),
        evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifsKernel, sink: sink) {
-      lastColumnShapeStripKernel = "countifs"
+      columnShapeStripKernelCell.name = "countifs"
       return true
     }
     if evaluateColumnIFERRORVlookupStrip(
@@ -1353,7 +1353,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
-      lastColumnShapeStripKernel = "iferrorVlookup"
+      columnShapeStripKernelCell.name = "iferrorVlookup"
       return true
     }
     if evaluateColumnCrossSheetCountifsSumStrip(
@@ -1362,7 +1362,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
-      lastColumnShapeStripKernel = "ytdCntSum"
+      columnShapeStripKernelCell.name = "ytdCntSum"
       return true
     }
     recordYtdStripPlanRejectsIfNeeded(master: master, expr: expr)
@@ -1430,12 +1430,12 @@ extension FormulaEvaluator {
       return
     }
     if legacyShapeStripAccepted {
-      let kernel = lastColumnShapeStripKernel ?? "?"
+      let kernel = columnShapeStripKernelCell.name ?? "?"
       recalcProfile?.ytdSpS5StripRecalcReject = "planOk-legacy:\(kernel)"
       return
     }
     if batchColumnStripAccepted {
-      let kernel = lastColumnShapeStripKernel ?? "?"
+      let kernel = columnShapeStripKernelCell.name ?? "?"
       recalcProfile?.ytdSpS5StripRecalcReject = "planOk-batch:\(kernel)"
       return
     }
