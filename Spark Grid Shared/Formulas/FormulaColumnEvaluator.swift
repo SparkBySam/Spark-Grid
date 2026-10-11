@@ -49,25 +49,15 @@ enum FormulaColumnEvaluator {
     )
     evaluator.warmColumnRangeSnapshots(for: batch.expr, at: batch.master)
 
-    if evaluator.evaluateColumnShapeStrip(
+    guard evaluator.evaluateColumnShapeStrip(
       master: batch.master,
       members: batch.members,
       masterExpr: batch.expr,
       sink: sink
-    ) {
-      evaluator.recalcProfile?.columnBatchKernelRows += batch.members.count
-      return true
+    ) else {
+      return false
     }
-
-    for origin in batch.members {
-      let rowDelta = origin.row - batch.master.row
-      let colDelta = origin.col - batch.master.col
-      let expr = formulaAST[origin]
-        ?? FormulaRewriter.adjustExpression(batch.expr, rowDelta: rowDelta, colDelta: colDelta)
-      evaluator.prepareForCellEvaluation(origin: origin)
-      sink(origin, evaluator.evaluate(expr))
-    }
-    evaluator.recalcProfile?.columnBatchScalarRows += batch.members.count
+    evaluator.recalcProfile?.columnBatchKernelRows += batch.members.count
     return true
   }
 }

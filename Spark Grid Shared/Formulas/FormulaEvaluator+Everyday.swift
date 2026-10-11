@@ -1380,12 +1380,12 @@ extension FormulaEvaluator {
   }
 
   private func canEvaluateColumnIFERRORDelegating(_ inner: FormulaExpr, master: CellAddress) -> Bool {
-    if makeColumnYtdSumproductQuotientPlan(inner, master: master) != nil { return true }
-    if booleanSumProductColumnShape(inner, master: master) != nil { return true }
-    if makeColumnAVERAGEIFSPlan(inner, master: master) != nil { return true }
     if let countifs = stripCountifsKernelExpr(inner), makeColumnCOUNTIFSPlan(countifs, master: master) != nil {
       return true
     }
+    if makeColumnYtdSumproductQuotientPlan(inner, master: master) != nil { return true }
+    if booleanSumProductColumnShape(inner, master: master) != nil { return true }
+    if makeColumnAVERAGEIFSPlan(inner, master: master) != nil { return true }
     return false
   }
 
@@ -1400,6 +1400,10 @@ extension FormulaEvaluator {
     guard canEvaluateColumnIFERRORDelegating(inner, master: master) else { return false }
     let iferrorSink: (CellAddress, CellValue) -> Void = { address, value in
       forwardColumnIFError(address: address, value: value, sink: sink)
+    }
+    if let countifs = stripCountifsKernelExpr(inner),
+       evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifs, sink: iferrorSink) {
+      return true
     }
     if evaluateColumnYtdSumproductQuotientStrip(
       master: master,
@@ -1423,10 +1427,6 @@ extension FormulaEvaluator {
       expr: inner,
       sink: iferrorSink
     ) {
-      return true
-    }
-    if let countifs = stripCountifsKernelExpr(inner),
-       evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifs, sink: iferrorSink) {
       return true
     }
     return false
@@ -1483,6 +1483,21 @@ extension FormulaEvaluator {
     let iferrorSink: (CellAddress, CellValue) -> Void = { address, value in
       forwardColumnIFError(address: address, value: value, sink: sink)
     }
+    if let countifs = stripCountifsKernelExpr(inner),
+       let countifsPlan = makeColumnCOUNTIFSPlan(countifs, master: master) {
+      for origin in members {
+        prepareForCellEvaluation(origin: origin)
+        if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+          recalcProfile?.ifBlankEqualityFastHits += 1
+          sink(origin, .string(""))
+          continue
+        }
+        recalcProfile?.ifBlankEqualityFastHits += 1
+        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: iferrorSink)
+        recalcProfile?.ifStripCountifsRows += 1
+      }
+      return true
+    }
     if let ytdPlan = makeColumnYtdSumproductQuotientPlan(inner, master: master) {
       for origin in members {
         prepareForCellEvaluation(origin: origin)
@@ -1522,21 +1537,6 @@ extension FormulaEvaluator {
       }
       return true
     }
-    if let countifs = stripCountifsKernelExpr(inner),
-       let countifsPlan = makeColumnCOUNTIFSPlan(countifs, master: master) {
-      for origin in members {
-        prepareForCellEvaluation(origin: origin)
-        if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-          recalcProfile?.ifBlankEqualityFastHits += 1
-          sink(origin, .string(""))
-          continue
-        }
-        recalcProfile?.ifBlankEqualityFastHits += 1
-        emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: iferrorSink)
-        recalcProfile?.ifStripCountifsRows += 1
-      }
-      return true
-    }
     return false
   }
 
@@ -1567,14 +1567,9 @@ extension FormulaEvaluator {
     }
   }
 
-  /// `IFERROR( Σ SUMPRODUCT / divisor , "" )` quotient, peeling grouping `+` on the IFERROR value.
-  private func stripYtdIfErrorQuotient(_ expr: FormulaExpr) -> (numerator: FormulaExpr, denominator: FormulaExpr)? {
-    guard case .call(let name, let args) = stripUnwrap(expr),
-          name.uppercased() == "IFERROR",
-          args.count == 2,
-          stripIsStaticEmptyLiteral(args[1])
-    else { return nil }
-    var inner = stripUnwrap(args[0])
+  /// `numerator / divisor` inside YTD `IFERROR(…,"")`, with optional leading unary `+`.
+  private func stripYtdBareQuotient(_ expr: FormulaExpr) -> (numerator: FormulaExpr, denominator: FormulaExpr)? {
+    var inner = stripUnwrap(expr)
     for _ in 0..<6 {
       if case .binary(.divide, let numerator, let denominator) = inner {
         return (numerator, denominator)
@@ -1586,6 +1581,21 @@ extension FormulaEvaluator {
       break
     }
     return nil
+  }
+
+  /// `IFERROR( Σ SUMPRODUCT / divisor , "" )` quotient, peeling grouping `+` on the IFERROR value.
+  private func stripYtdIfErrorQuotient(_ expr: FormulaExpr) -> (numerator: FormulaExpr, denominator: FormulaExpr)? {
+    guard case .call(let name, let args) = stripUnwrap(expr),
+          name.uppercased() == "IFERROR",
+          args.count == 2,
+          stripIsStaticEmptyLiteral(args[1])
+    else { return nil }
+    return stripYtdBareQuotient(args[0])
+  }
+
+  /// IFERROR-wrapped or peeled quotient body (`IFERROR` delegating passes the value expr only).
+  private func stripYtdSumproductQuotientParts(_ expr: FormulaExpr) -> (numerator: FormulaExpr, denominator: FormulaExpr)? {
+    stripYtdIfErrorQuotient(expr) ?? stripYtdBareQuotient(expr)
   }
 
   private func ytdSumproductAddChainTerms(_ numerator: FormulaExpr) -> [FormulaExpr]? {
@@ -1789,7 +1799,7 @@ extension FormulaEvaluator {
     _ expr: FormulaExpr,
     master: CellAddress
   ) -> ColumnYtdSumproductQuotientPlan? {
-    guard let quotient = stripYtdIfErrorQuotient(expr) else { return nil }
+    guard let quotient = stripYtdSumproductQuotientParts(expr) else { return nil }
     guard let divisorRef = stripFormulaCellRef(quotient.denominator) else { return nil }
     guard let terms = ytdSumproductAddChainTerms(quotient.numerator) else { return nil }
     var calls: [FormulaExpr] = []
@@ -3073,6 +3083,31 @@ extension FormulaEvaluator {
         }
         return true
       }
+      if let iferrorInner = stripIFErrorEmptyKernel(branchExpr),
+         evaluateColumnIFERRORDelegatingUnderIfBlank(
+           master: master,
+           members: members,
+           ifGuard: ifGuard,
+           inner: iferrorInner,
+           sink: sink
+         ) {
+        return true
+      }
+      if let countifsExpr = stripCountifsKernelExpr(branchExpr),
+         let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
+        for origin in members {
+          prepareForCellEvaluation(origin: origin)
+          if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
+            recalcProfile?.ifBlankEqualityFastHits += 1
+            sink(origin, .string(""))
+            continue
+          }
+          recalcProfile?.ifBlankEqualityFastHits += 1
+          emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
+          recalcProfile?.ifStripCountifsRows += 1
+        }
+        return true
+      }
       if let averagePlan = makeColumnAVERAGEIFSPlan(branchExpr, master: master) {
         for origin in members {
           prepareForCellEvaluation(origin: origin)
@@ -3096,31 +3131,6 @@ extension FormulaEvaluator {
           }
           recalcProfile?.ifBlankEqualityFastHits += 1
           emitColumnBooleanSumProductRow(expr: branchExpr, master: master, origin: origin, sink: sink)
-        }
-        return true
-      }
-      if let iferrorInner = stripIFErrorEmptyKernel(branchExpr),
-         evaluateColumnIFERRORDelegatingUnderIfBlank(
-           master: master,
-           members: members,
-           ifGuard: ifGuard,
-           inner: iferrorInner,
-           sink: sink
-         ) {
-        return true
-      }
-      if let countifsExpr = stripCountifsKernelExpr(branchExpr),
-         let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
-        for origin in members {
-          prepareForCellEvaluation(origin: origin)
-          if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
-            recalcProfile?.ifBlankEqualityFastHits += 1
-            sink(origin, .string(""))
-            continue
-          }
-          recalcProfile?.ifBlankEqualityFastHits += 1
-          emitColumnCOUNTIFSRow(plan: countifsPlan, master: master, origin: origin, sink: sink)
-          recalcProfile?.ifStripCountifsRows += 1
         }
         return true
       }
