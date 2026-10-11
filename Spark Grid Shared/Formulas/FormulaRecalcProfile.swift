@@ -74,6 +74,8 @@ final class FormulaRecalcProfile {
 
   /// `makeColumnYtdSumproductQuotientPlan` exit for **YTD Summary!S5** only (KPI diagnostic).
   var ytdSpQuotientPlanExit: (sheet: String, masterA1: String, exitCode: String, formulaPrefix: String)?
+  /// YTD Summary!S5 strip outcome during real recalc (plan probe may still read `ok`).
+  var ytdSpS5StripRecalcReject: String?
 
   func recordYtdSpQuotientPlanExit(
     sheet: String,
@@ -190,6 +192,9 @@ final class FormulaRecalcProfile {
     if ytdSpQuotientPlanExit == nil {
       ytdSpQuotientPlanExit = other.ytdSpQuotientPlanExit
     }
+    if ytdSpS5StripRecalcReject == nil {
+      ytdSpS5StripRecalcReject = other.ytdSpS5StripRecalcReject
+    }
     sumproductBooleanHits += other.sumproductBooleanHits
     sumproductBooleanFallbacks += other.sumproductBooleanFallbacks
     sheetPhaseWalls.append(contentsOf: other.sheetPhaseWalls)
@@ -217,6 +222,11 @@ final class FormulaRecalcProfile {
   private func ytdSpQuotientPlanExitSummary() -> String {
     guard let exit = ytdSpQuotientPlanExit else { return "" }
     return " | ytdSpPlan \(exit.sheet)!\(exit.masterA1):\(exit.exitCode):\(exit.formulaPrefix)"
+  }
+
+  private func ytdSpS5StripRecalcRejectSummary() -> String {
+    guard let reject = ytdSpS5StripRecalcReject else { return "" }
+    return " | ytdSpStripS5 \(reject)"
   }
 
   private func ifStripMissSummary() -> String {
@@ -285,6 +295,7 @@ final class FormulaRecalcProfile {
       columnBatchKernelRows,
       columnBatchScalarRows,
       topEval.isEmpty ? "—" : topEval
-    ) + ifStripMissSummary() + ytdSpQuotientPlanExitSummary() + sheetPhaseWallSummary()
+    ) + ifStripMissSummary() + ytdSpQuotientPlanExitSummary() + ytdSpS5StripRecalcRejectSummary()
+      + sheetPhaseWallSummary()
   }
 }

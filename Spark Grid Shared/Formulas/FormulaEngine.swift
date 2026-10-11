@@ -928,17 +928,57 @@ final class FormulaEngine {
       )
       defer { evaluator.stripPlanDiagnosticContext = nil }
 
-      if plan.isColumnStrip,
-         useColumnBatchEvaluator,
-         FormulaColumnEvaluator.evaluateFilledColumn(
-           planMaster: plan.master,
-           members: orderedMembers,
-           masterExpr: masterExpr,
-           formulaAST: formulaAST,
-           evaluator: evaluator,
-           sink: stripSink
-         ) {
-        return
+      let ytdS5Probe = CellAddress(row: 4, col: Self.ytdSumproductRibbonFirstCol)
+      let touchesYtdS5 = plan.isColumnStrip
+        && sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame
+        && memberSet.contains(ytdS5Probe)
+
+      func recordYtdS5StripOutcomeIfNeeded(
+        legacyAccepted: Bool,
+        batchAccepted: Bool,
+        ytdRowsBefore: Int
+      ) {
+        guard touchesYtdS5 else { return }
+        let ytdRowsAfter = evaluator.recalcProfile?.ifStripYtdSumproductQuotientRows ?? 0
+        evaluator.recordYtdSummaryS5StripRecalcOutcome(
+          formulaAtS5: formulaAST[ytdS5Probe],
+          stripMaster: plan.master,
+          stripMembers: orderedMembers,
+          legacyShapeStripAccepted: legacyAccepted,
+          batchColumnStripAccepted: batchAccepted,
+          ytdRowsBefore: ytdRowsBefore,
+          ytdRowsAfter: ytdRowsAfter
+        )
+      }
+
+      if plan.isColumnStrip {
+        let ytdRowsBefore = evaluator.recalcProfile?.ifStripYtdSumproductQuotientRows ?? 0
+        let legacyHit = evaluator.evaluateColumnShapeStrip(
+          master: plan.master,
+          members: orderedMembers,
+          masterExpr: masterExpr,
+          sink: stripSink
+        )
+        if legacyHit {
+          recordYtdS5StripOutcomeIfNeeded(legacyAccepted: true, batchAccepted: false, ytdRowsBefore: ytdRowsBefore)
+          return
+        }
+        if useColumnBatchEvaluator,
+           FormulaColumnEvaluator.evaluateFilledColumn(
+             planMaster: plan.master,
+             members: orderedMembers,
+             masterExpr: masterExpr,
+             formulaAST: formulaAST,
+             evaluator: evaluator,
+             sink: stripSink
+           ) {
+          recordYtdS5StripOutcomeIfNeeded(legacyAccepted: false, batchAccepted: true, ytdRowsBefore: ytdRowsBefore)
+          return
+        }
+        recordYtdS5StripOutcomeIfNeeded(legacyAccepted: false, batchAccepted: false, ytdRowsBefore: ytdRowsBefore)
+      } else if touchesYtdS5 {
+        let ytdRowsBefore = evaluator.recalcProfile?.ifStripYtdSumproductQuotientRows ?? 0
+        recordYtdS5StripOutcomeIfNeeded(legacyAccepted: false, batchAccepted: false, ytdRowsBefore: ytdRowsBefore)
       }
       for address in orderedMembers {
         if visited.contains(address) { continue }
@@ -1018,6 +1058,10 @@ final class FormulaEngine {
         expr: formulaAST[ytdS5],
         storedFormulaPrefix: formulaPrefix
       )
+      if profile.ifStripYtdSumproductQuotientRows == 0,
+         profile.ytdSpS5StripRecalcReject == nil {
+        profile.ytdSpS5StripRecalcReject = "S5:noStripTouch"
+      }
     }
     revision &+= 1
   }

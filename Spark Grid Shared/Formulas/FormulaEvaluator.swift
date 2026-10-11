@@ -56,6 +56,8 @@ struct FormulaEvaluator {
   }
 
   var stripPlanDiagnosticContext: StripPlanDiagnosticContext?
+  /// Last kernel name accepted by `evaluateColumnShapeStrip` (KPI strip diagnostics).
+  var lastColumnShapeStripKernel: String?
 
   func prepareForCellEvaluation(origin: CellAddress?) {
     evaluationOriginCell.address = origin

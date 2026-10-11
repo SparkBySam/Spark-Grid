@@ -1284,6 +1284,7 @@ extension FormulaEvaluator {
     masterExpr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
+    lastColumnShapeStripKernel = nil
     guard members.count >= 2 else { return false }
     guard members.allSatisfy({ $0.col == master.col }) else { return false }
     let rows = members.map(\.row)
@@ -1298,16 +1299,21 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
+      lastColumnShapeStripKernel = "ytdSp"
       return true
     }
     if let ifBlank = unpackIFBlankBranch(expr) {
-      return evaluateColumnIFBlankStrip(
+      if evaluateColumnIFBlankStrip(
         master: master,
         members: members,
         ifGuard: ifBlank.ifGuard,
         branch: ifBlank.branch,
         sink: sink
-      )
+      ) {
+        lastColumnShapeStripKernel = "ifBlank"
+        return true
+      }
+      return false
     }
     if evaluateColumnIFERRORDelegatingStrip(
       master: master,
@@ -1315,6 +1321,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
+      lastColumnShapeStripKernel = "iferrorDelegate"
       return true
     }
     if evaluateColumnBooleanSumProductStrip(
@@ -1323,6 +1330,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
+      lastColumnShapeStripKernel = "sumproductBool"
       return true
     }
     if evaluateColumnAVERAGEIFSStrip(
@@ -1331,10 +1339,12 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
+      lastColumnShapeStripKernel = "averageifs"
       return true
     }
     if let countifsKernel = stripCountifsKernelExpr(expr),
        evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifsKernel, sink: sink) {
+      lastColumnShapeStripKernel = "countifs"
       return true
     }
     if evaluateColumnIFERRORVlookupStrip(
@@ -1343,6 +1353,7 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
+      lastColumnShapeStripKernel = "iferrorVlookup"
       return true
     }
     if evaluateColumnCrossSheetCountifsSumStrip(
@@ -1351,10 +1362,89 @@ extension FormulaEvaluator {
       expr: expr,
       sink: sink
     ) {
+      lastColumnShapeStripKernel = "ytdCntSum"
       return true
     }
     recordYtdStripPlanRejectsIfNeeded(master: master, expr: expr)
     return false
+  }
+
+  /// Why `evaluateColumnShapeStrip` would reject (no eval); used for YTD Summary!S5 recalc diagnostics.
+  func diagnoseColumnShapeStripReject(
+    masterExpr: FormulaExpr,
+    master: CellAddress,
+    members: [CellAddress]
+  ) -> String {
+    let expr = stripUnwrap(masterExpr)
+    guard members.count >= 2 else { return "members" }
+    guard members.allSatisfy({ $0.col == master.col }) else { return "column" }
+    let rows = members.map(\.row)
+    guard let firstRow = rows.first, let lastRow = rows.last else { return "rows" }
+    guard lastRow - firstRow + 1 == members.count, rows == rows.sorted() else { return "contiguous" }
+    if makeColumnYtdSumproductQuotientPlan(expr, master: master) != nil { return "unexpected-ytdPlan" }
+    if let ifBlank = unpackIFBlankBranch(expr) {
+      let branchExpr = stripUnwrap(ifBlank.branch)
+      let miss = diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifBlank.ifGuard, master: master)
+      if let inner = stripIFErrorEmptyKernel(branchExpr),
+         makeColumnYtdSumproductQuotientPlan(inner, master: master) != nil {
+        return "ifBlankMiss-ytdInnerOk:\(miss)"
+      }
+      return "ifBlankMiss:\(miss)"
+    }
+    if let iferrorInner = stripIFErrorEmptyKernel(expr) {
+      if !canEvaluateColumnIFERRORDelegating(iferrorInner, master: master) {
+        return "iferrorDelegate-noKernel"
+      }
+      return "iferrorDelegate-unexpected"
+    }
+    if booleanSumProductColumnShape(expr, master: master) != nil { return "unexpected-sumproduct" }
+    if makeColumnAVERAGEIFSPlan(expr, master: master) != nil { return "unexpected-averageifs" }
+    if let countifs = stripCountifsKernelExpr(expr), makeColumnCOUNTIFSPlan(countifs, master: master) != nil {
+      return "unexpected-countifs"
+    }
+    return "noKernel"
+  }
+
+  /// Record strip outcome for **YTD Summary!S5** when a column-S shape strip runs during recalc.
+  func recordYtdSummaryS5StripRecalcOutcome(
+    formulaAtS5: FormulaExpr?,
+    stripMaster: CellAddress,
+    stripMembers: [CellAddress],
+    legacyShapeStripAccepted: Bool,
+    batchColumnStripAccepted: Bool,
+    ytdRowsBefore: Int,
+    ytdRowsAfter: Int
+  ) {
+    let s5 = Self.ytdSummaryS5Probe
+    guard let formulaAtS5 else {
+      recalcProfile?.ytdSpS5StripRecalcReject = "noAST"
+      return
+    }
+    let planExit = diagnoseColumnYtdSumproductQuotientPlanExit(formulaAtS5, master: s5)
+    guard planExit == "ok" else {
+      recalcProfile?.ytdSpS5StripRecalcReject = "plan:\(planExit)"
+      return
+    }
+    if ytdRowsAfter > ytdRowsBefore {
+      recalcProfile?.ytdSpS5StripRecalcReject = "ran"
+      return
+    }
+    if legacyShapeStripAccepted {
+      let kernel = lastColumnShapeStripKernel ?? "?"
+      recalcProfile?.ytdSpS5StripRecalcReject = "planOk-legacy:\(kernel)"
+      return
+    }
+    if batchColumnStripAccepted {
+      let kernel = lastColumnShapeStripKernel ?? "?"
+      recalcProfile?.ytdSpS5StripRecalcReject = "planOk-batch:\(kernel)"
+      return
+    }
+    let miss = diagnoseColumnShapeStripReject(
+      masterExpr: formulaAtS5,
+      master: stripMaster,
+      members: stripMembers
+    )
+    recalcProfile?.ytdSpS5StripRecalcReject = "planOk-miss:\(miss)"
   }
 
   /// `IFERROR(value, "")` with a static empty fallback (KPI month / YTD columns).
