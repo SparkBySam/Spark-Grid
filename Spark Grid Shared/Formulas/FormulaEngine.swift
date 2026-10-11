@@ -1058,7 +1058,8 @@ final class FormulaEngine {
         expr: formulaAST[ytdS5],
         storedFormulaPrefix: formulaPrefix
       )
-      if profile.ifStripYtdSumproductQuotientRows == 0,
+      if let profile,
+         profile.ifStripYtdSumproductQuotientRows == 0,
          profile.ytdSpS5StripRecalcReject == nil {
         profile.ytdSpS5StripRecalcReject = "S5:noStripTouch"
       }
