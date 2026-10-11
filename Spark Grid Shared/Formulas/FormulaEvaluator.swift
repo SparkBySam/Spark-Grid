@@ -43,6 +43,17 @@ struct FormulaEvaluator {
     set { evaluationOriginCell.address = newValue }
   }
 
+  final class ColumnShapeStripKernelCell {
+    var name: String?
+  }
+
+  var columnShapeStripKernelCell = ColumnShapeStripKernelCell()
+
+  var lastColumnShapeStripKernel: String? {
+    get { columnShapeStripKernelCell.name }
+    set { columnShapeStripKernelCell.name = newValue }
+  }
+
   /// Shared range snapshots for COUNTIFS / SUMIFS-style functions (one scan per range per batch).
   var aggregateRangeCache: FormulaAggregateRangeCache?
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
@@ -56,8 +67,6 @@ struct FormulaEvaluator {
   }
 
   var stripPlanDiagnosticContext: StripPlanDiagnosticContext?
-  /// Last kernel name accepted by `evaluateColumnShapeStrip` (KPI strip diagnostics).
-  var lastColumnShapeStripKernel: String?
 
   func prepareForCellEvaluation(origin: CellAddress?) {
     evaluationOriginCell.address = origin
