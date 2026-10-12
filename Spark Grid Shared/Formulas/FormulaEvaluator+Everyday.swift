@@ -1353,13 +1353,15 @@ extension FormulaEvaluator {
   }
 
   private func recordYtdStripPlanRejectsIfNeeded(master: CellAddress, expr: FormulaExpr) {
-    guard let diag = stripPlanDiagnosticContext,
+    #if DEBUG
+    guard let profile = recalcProfile,
+          let diag = stripPlanDiagnosticContext,
           isYtdSummaryStripDiagnosticContext(diag.sheetName)
     else { return }
     if ytdCountifsSumStripCandidate(expr) {
       let reject = diagnoseColumnCrossSheetCountifsSumPlanReject(expr, master: master)
       if reject != "ytd.cnt.ok" {
-        recalcProfile?.recordIfStripYtdPlanReject(
+        profile.recordIfStripYtdPlanReject(
           sheet: diag.sheetName,
           masterA1: master.a1,
           formula: diag.masterFormulaText,
@@ -1370,7 +1372,7 @@ extension FormulaEvaluator {
     if ytdSumproductQuotientStripCandidate(expr) {
       let reject = diagnoseColumnYtdSumproductQuotientPlanReject(expr, master: master)
       if reject != "ytd.sp.ok" {
-        recalcProfile?.recordIfStripYtdPlanReject(
+        profile.recordIfStripYtdPlanReject(
           sheet: diag.sheetName,
           masterA1: master.a1,
           formula: diag.masterFormulaText,
@@ -1378,6 +1380,7 @@ extension FormulaEvaluator {
         )
       }
     }
+    #endif
   }
 
   private func stripAddChain(_ expr: FormulaExpr) -> [FormulaExpr] {
@@ -1496,48 +1499,6 @@ extension FormulaEvaluator {
   private struct ColumnYtdSumproductQuotientPlan {
     var divisorRef: FormulaRef
     var sumproductCalls: [FormulaExpr]
-  }
-
-  private static let ytdSummaryS5Probe = CellAddress(row: 4, col: 18)
-
-  private func diagnoseColumnYtdSumproductQuotientPlanExit(
-    _ expr: FormulaExpr,
-    master: CellAddress
-  ) -> String {
-    guard let quotient = stripYtdIfErrorQuotient(expr) else {
-      return "stripYtdIfErrorQuotient"
-    }
-    guard stripFormulaCellRef(quotient.denominator) != nil else {
-      return "stripFormulaCellRef"
-    }
-    guard let terms = ytdSumproductAddChainTerms(quotient.numerator) else {
-      return "ytdSumproductAddChainTerms"
-    }
-    prepareForCellEvaluation(origin: master)
-    for term in terms {
-      guard case .call(_, let spArgs) = stripUnwrap(term),
-            parseSumProductBooleanPlan(spArgs) != nil
-      else { return "parseSumProductBooleanPlan" }
-    }
-    return "ok"
-  }
-
-  /// KPI diagnostic: `makeColumnYtdSumproductQuotientPlan` exit for **YTD Summary!S5** only.
-  func probeYtdSummaryS5SumproductQuotientPlanExit(
-    sheetName: String,
-    expr: FormulaExpr?,
-    storedFormulaPrefix: String
-  ) {
-    guard sheetName.caseInsensitiveCompare("YTD Summary") == .orderedSame else { return }
-    let master = Self.ytdSummaryS5Probe
-    guard let expr else { return }
-    let exit = diagnoseColumnYtdSumproductQuotientPlanExit(expr, master: master)
-    recalcProfile?.recordYtdSpQuotientPlanExit(
-      sheet: sheetName,
-      masterA1: master.a1,
-      exitCode: exit,
-      formulaPrefix: storedFormulaPrefix
-    )
   }
 
   private func makeColumnYtdSumproductQuotientPlan(
@@ -2669,21 +2630,25 @@ extension FormulaEvaluator {
         return true
       }
     }
-    let missReason = diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifGuard, master: master)
-    recalcProfile?.recordIfStripPlanMiss(missReason)
-    if missReason == "otherBranch", let diag = stripPlanDiagnosticContext {
-      let rejectCode = diagnoseIfStripOtherBranchReject(
-        branch: branchExpr,
-        ifGuard: ifGuard,
-        master: master
-      )
-      recalcProfile?.recordIfStripOtherBranch(
-        sheet: diag.sheetName,
-        masterA1: master.a1,
-        formula: diag.masterFormulaText,
-        rejectCode: rejectCode
-      )
+    #if DEBUG
+    if let profile = recalcProfile {
+      let missReason = diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifGuard, master: master)
+      profile.recordIfStripPlanMiss(missReason)
+      if missReason == "otherBranch", let diag = stripPlanDiagnosticContext {
+        let rejectCode = diagnoseIfStripOtherBranchReject(
+          branch: branchExpr,
+          ifGuard: ifGuard,
+          master: master
+        )
+        profile.recordIfStripOtherBranch(
+          sheet: diag.sheetName,
+          masterA1: master.a1,
+          formula: diag.masterFormulaText,
+          rejectCode: rejectCode
+        )
+      }
     }
+    #endif
     return false
   }
 

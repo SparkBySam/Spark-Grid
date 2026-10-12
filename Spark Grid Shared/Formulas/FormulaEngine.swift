@@ -918,13 +918,17 @@ final class FormulaEngine {
       }
 
       guard let masterExpr = formulaAST[plan.master] else { return }
-      let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
-      evaluator.stripPlanDiagnosticContext = FormulaEvaluator.StripPlanDiagnosticContext(
-        sheetName: sheet.name,
-        masterFormulaText: masterFormulaText
-      )
+      #if DEBUG
+      if evaluator.recalcProfile != nil {
+        let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
+        evaluator.stripPlanDiagnosticContext = FormulaEvaluator.StripPlanDiagnosticContext(
+          sheetName: sheet.name,
+          masterFormulaText: masterFormulaText
+        )
+      }
       defer { evaluator.stripPlanDiagnosticContext = nil }
+      #endif
 
       if plan.isColumnStrip,
          sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
@@ -1044,17 +1048,6 @@ final class FormulaEngine {
     }
     for address in addresses where formulaAST[address] != nil && !visited.contains(address) {
       eval(address)
-    }
-    if sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame {
-      let ytdS5 = CellAddress(row: 4, col: Self.ytdSumproductRibbonFirstCol)
-      let masterRaw = sheet.cell(at: ytdS5).raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
-      let formulaPrefix = String(masterFormulaText.prefix(120))
-      evaluator.probeYtdSummaryS5SumproductQuotientPlanExit(
-        sheetName: sheet.name,
-        expr: formulaAST[ytdS5],
-        storedFormulaPrefix: formulaPrefix
-      )
     }
     revision &+= 1
   }
