@@ -29,6 +29,11 @@ enum PerformanceBenchmark {
 
     do {
       try verifyCachedFormulaRoundTrip(emit: emit)
+      if env["SPARK_GRID_BENCHMARK_COMPARE_IMPORT"] == "1" {
+        try compareImporters(env: env, root: root, emit: emit)
+        emit("import-compare done")
+        exit(0)
+      }
       guard !reference.isEmpty, FileManager.default.fileExists(atPath: reference) else {
         emit("benchmark failed: SPARK_GRID_BENCHMARK_REFERENCE is missing")
         exit(1)
@@ -485,6 +490,39 @@ enum PerformanceBenchmark {
   }
 
   /// Export then import, with calculation left off. A wrong cached number proves we did not recalc.
+  private static func compareImporters(
+    env: [String: String],
+    root: String,
+    emit: (String) -> Void
+  ) throws {
+    var files: [String] = []
+    let reference = env["SPARK_GRID_BENCHMARK_REFERENCE"] ?? ""
+    if !reference.isEmpty, FileManager.default.fileExists(atPath: reference) {
+      files.append(reference)
+    }
+    let ledger = env["SPARK_GRID_BENCHMARK_OTHER"] ?? "/tmp/spark-grid-phase0-ledger.xlsx"
+    if FileManager.default.fileExists(atPath: ledger) {
+      files.append(ledger)
+    }
+    let fixtures = (root as NSString).appendingPathComponent("Spark Grid/BugBashFixtures")
+    for name in ["bdc_kpi_ytd_layout.xlsx", "shared_formula_many_cells.xlsx"] {
+      let path = (fixtures as NSString).appendingPathComponent(name)
+      if FileManager.default.fileExists(atPath: path) {
+        files.append(path)
+      }
+    }
+    guard !files.isEmpty else {
+      throw BenchmarkFailure("import compare has no workbooks")
+    }
+    for path in files {
+      emit("import-compare \(path)")
+      let data = try Data(contentsOf: URL(fileURLWithPath: path))
+      let legacy = try XLSXCodec.importWorkbookLegacy(from: data)
+      let streamed = try XLSXCodec.importWorkbook(from: data)
+      emit(XLSXImportParity.summary(legacy: legacy, streamed: streamed))
+    }
+  }
+
   private static func verifyCachedFormulaRoundTrip(emit: (String) -> Void) throws {
     var sheet = Sheet(name: "Cache")
     func put(col: Int, raw: String, result: String?, type: ImportedFormulaValueType?) {

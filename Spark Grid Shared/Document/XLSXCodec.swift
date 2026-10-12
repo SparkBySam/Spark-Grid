@@ -21,8 +21,13 @@ nonisolated enum XLSXCodec {
   // MARK: - Import
 
   static func importWorkbook(from data: Data) throws -> Workbook {
+    try importWorkbookStreaming(from: data)
+  }
+
+  /// CoreXLSX worksheet DOM plus the old sheet-wide scans. The streaming importer is checked against this.
+  static func importWorkbookLegacy(from data: Data) throws -> Workbook {
     let file = try XLSXFile(data: data)
-    return try importWorkbook(from: file, archiveData: data)
+    return try importWorkbookLegacy(from: file, archiveData: data)
   }
 
   static func importWorkbook(from url: URL) throws -> Workbook {
@@ -30,7 +35,7 @@ nonisolated enum XLSXCodec {
     return try importWorkbook(from: data)
   }
 
-  private static func importWorkbook(from file: XLSXFile, archiveData: Data) throws -> Workbook {
+  private static func importWorkbookLegacy(from file: XLSXFile, archiveData: Data) throws -> Workbook {
     let sharedStrings = try? file.parseSharedStrings()
     let styles = try? file.parseStyles()
     let themeScheme = importThemeScheme(archiveData: archiveData)
@@ -92,6 +97,84 @@ nonisolated enum XLSXCodec {
       namedRanges: importDefinedNames(archiveData: archiveData, sheets: sheets),
       xlsxThemeData: zipEntryData(archiveData: archiveData, entryPath: "xl/theme/theme1.xml")
     )
+  }
+
+  private static func importWorkbookStreaming(from data: Data) throws -> Workbook {
+    let package = try ZipPackage(archiveData: data)
+    return try ZipPackage.use(package) {
+      let file = try XLSXFile(data: data)
+      let sharedStrings = try? file.parseSharedStrings()
+      let styles = try? file.parseStyles()
+      let themeScheme = importThemeScheme(archiveData: data)
+      let themeStyleColors = importThemeStyleColors(archiveData: data, scheme: themeScheme)
+      let dxfs = importDifferentialFormats(archiveData: data, themeScheme: themeScheme)
+      let underlinedFonts = underlinedFontIndices(archiveData: data)
+      let textRotationsByStyleIndex = importTextRotationsByStyleIndex(archiveData: data)
+      let clipTextStyleIndexes = importClipTextStyleIndexes(archiveData: data)
+      let formats = cellFormatsByStyleIndex(
+        styles: styles,
+        underlinedFontIds: underlinedFonts,
+        themeStyleColors: themeStyleColors,
+        textRotationsByStyleIndex: textRotationsByStyleIndex,
+        clipTextStyleIndexes: clipTextStyleIndexes
+      )
+      let sharedTexts = sharedStrings?.items.map(\.text) ?? []
+
+      var paths: [(name: String?, path: String)] = []
+      for workbook in try file.parseWorkbooks() {
+        for (name, path) in try file.parseWorksheetPathsAndNames(workbook: workbook) {
+          paths.append((name, path))
+        }
+      }
+      guard !paths.isEmpty else { throw CodecError.emptyWorkbook }
+
+      let lock = NSLock()
+      var built = [Sheet?](repeating: nil, count: paths.count)
+      var failure: Error?
+      DispatchQueue.concurrentPerform(iterations: paths.count) { index in
+        let (name, path) = paths[index]
+        guard let sheetData = package.data(for: path) else {
+          lock.lock()
+          if failure == nil { failure = CodecError.unreadable }
+          lock.unlock()
+          return
+        }
+        var sheet = Sheet(name: name ?? "Sheet\(index + 1)")
+        let conditionalFormatting = StreamingWorksheet.fill(
+          &sheet,
+          data: sheetData,
+          sharedTexts: sharedTexts,
+          formats: formats
+        )
+        if !conditionalFormatting.isEmpty {
+          importConditionalFormatting(
+            into: &sheet,
+            worksheetXML: conditionalFormatting,
+            dxfs: dxfs,
+            themeScheme: themeScheme
+          )
+        }
+        importSparkCharts(into: &sheet, archiveData: data, sheetIndex: index)
+        importSheetImages(
+          into: &sheet,
+          archiveData: data,
+          sheetIndex: index,
+          worksheetPath: path
+        )
+        lock.lock()
+        built[index] = sheet
+        lock.unlock()
+      }
+      if let failure { throw failure }
+      let sheets = built.compactMap { $0 }
+      guard sheets.count == paths.count else { throw CodecError.unreadable }
+      return Workbook(
+        sheets: sheets,
+        activeSheetIndex: 0,
+        namedRanges: importDefinedNames(archiveData: data, sheets: sheets),
+        xlsxThemeData: zipEntryData(archiveData: data, entryPath: "xl/theme/theme1.xml")
+      )
+    }
   }
 
   /// CoreXLSX does not expose `definedNames`. Read them from workbook XML the same way shared formulas are read from sheet XML.
@@ -375,6 +458,8 @@ nonisolated enum XLSXCodec {
   }
 
   static func zipEntryData(archiveData: Data, entryPath: String) -> Data? {
+    let cached = ZipPackage.cachedEntry(at: entryPath)
+    if cached.0 { return cached.1 }
     let normalized = entryPath.hasPrefix("/") ? String(entryPath.dropFirst()) : entryPath
     guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else { return nil }
     let candidates = [normalized, normalized.hasPrefix("xl/") ? normalized : "xl/\(normalized)"]
@@ -429,7 +514,7 @@ nonisolated enum XLSXCodec {
           model.importedFormulaValueType = cached.type
         }
         if let styles, let format = cellFormat(
-          from: cell,
+          styleIndex: cell.styleIndex,
           styles: styles,
           underlinedFontIds: underlinedFontIds,
           themeStyleColors: themeStyleColors,
@@ -554,17 +639,19 @@ nonisolated enum XLSXCodec {
   }
 
   private static func cellFormat(
-    from cell: CoreXLSX.Cell,
+    styleIndex: Int?,
     styles: Styles,
     underlinedFontIds: Set<Int>,
     themeStyleColors: ThemeResolvedStyleColors,
     textRotationsByStyleIndex: [Int: Int],
     clipTextStyleIndexes: Set<Int>
   ) -> CellFormat? {
+    guard let styleIndex else { return nil }
+    let xf = styleFormat(at: styleIndex, styles: styles)
     var format = CellFormat()
     var changed = false
 
-    if let font = cell.font(in: styles) {
+    if let font = styleFont(xf, styles: styles) {
       if font.bold != nil {
         format.bold = true
         changed = true
@@ -591,7 +678,7 @@ nonisolated enum XLSXCodec {
       }
     }
 
-    if let fontId = cell.format(in: styles)?.fontId {
+    if let fontId = xf?.fontId {
       if underlinedFontIds.contains(fontId) {
         format.underline = true
         changed = true
@@ -602,7 +689,7 @@ nonisolated enum XLSXCodec {
       }
     }
 
-    if let fillId = cell.format(in: styles)?.fillId,
+    if let fillId = xf?.fillId,
        let fills = styles.fills?.items,
        fillId >= 0,
        fillId < fills.count
@@ -619,7 +706,7 @@ nonisolated enum XLSXCodec {
       }
     }
 
-    if let xf = cell.format(in: styles) {
+    if let xf {
       if let mapped = importedNumberFormat(for: xf.numberFormatId, styles: styles) {
         // Prefer explicit number formats even when applyNumberFormat is omitted (common in Excel exports).
         format.numberFormat = mapped.kind
@@ -655,26 +742,63 @@ nonisolated enum XLSXCodec {
       }
     }
 
-    if let styleIndex = cell.styleIndex {
-      if format.textColor == nil, let themed = themeStyleColors.fontColorsByCellXfId[styleIndex] {
-        format.textColor = themed
-        changed = true
-      }
-      if format.fillColor == nil, let themed = themeStyleColors.fillColorsByCellXfId[styleIndex] {
-        format.fillColor = themed
-        changed = true
-      }
-      if let rotation = textRotationsByStyleIndex[styleIndex] {
-        format.textRotation = rotation
-        changed = true
-      }
-      if clipTextStyleIndexes.contains(styleIndex), !format.wrapText {
-        format.textDisplay = .clip
-        changed = true
-      }
+    if format.textColor == nil, let themed = themeStyleColors.fontColorsByCellXfId[styleIndex] {
+      format.textColor = themed
+      changed = true
+    }
+    if format.fillColor == nil, let themed = themeStyleColors.fillColorsByCellXfId[styleIndex] {
+      format.fillColor = themed
+      changed = true
+    }
+    if let rotation = textRotationsByStyleIndex[styleIndex] {
+      format.textRotation = rotation
+      changed = true
+    }
+    if clipTextStyleIndexes.contains(styleIndex), !format.wrapText {
+      format.textDisplay = .clip
+      changed = true
     }
 
     return changed ? format : nil
+  }
+
+  /// One `CellFormat` per style index. Import copies these instead of rebuilding them per cell.
+  private static func cellFormatsByStyleIndex(
+    styles: Styles?,
+    underlinedFontIds: Set<Int>,
+    themeStyleColors: ThemeResolvedStyleColors,
+    textRotationsByStyleIndex: [Int: Int],
+    clipTextStyleIndexes: Set<Int>
+  ) -> [CellFormat?] {
+    guard let styles, let items = styles.cellFormats?.items, !items.isEmpty else { return [] }
+    var formats: [CellFormat?] = []
+    formats.reserveCapacity(items.count)
+    for index in items.indices {
+      formats.append(
+        cellFormat(
+          styleIndex: index,
+          styles: styles,
+          underlinedFontIds: underlinedFontIds,
+          themeStyleColors: themeStyleColors,
+          textRotationsByStyleIndex: textRotationsByStyleIndex,
+          clipTextStyleIndexes: clipTextStyleIndexes
+        )
+      )
+    }
+    return formats
+  }
+
+  private static func styleFormat(at styleIndex: Int, styles: Styles) -> CoreXLSX.Format? {
+    guard let items = styles.cellFormats?.items, items.indices.contains(styleIndex) else { return nil }
+    return items[styleIndex]
+  }
+
+  private static func styleFont(_ xf: CoreXLSX.Format?, styles: Styles) -> CoreXLSX.Font? {
+    guard let fontID = xf?.fontId,
+          let fonts = styles.fonts?.items,
+          fonts.indices.contains(fontID)
+    else { return nil }
+    return fonts[fontID]
   }
 
   private static func cellBorders(from border: Border) -> CellBorders {

@@ -90,6 +90,15 @@ extension XLSXCodec {
     themeScheme: ThemeColorScheme
   ) {
     guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
+    importConditionalFormatting(into: &sheet, worksheetXML: xml, dxfs: dxfs, themeScheme: themeScheme)
+  }
+
+  static func importConditionalFormatting(
+    into sheet: inout Sheet,
+    worksheetXML xml: String,
+    dxfs: [ConditionalFormatStyle],
+    themeScheme: ThemeColorScheme
+  ) {
     let x14Blocks = extractX14ConditionalFormattingBlocks(from: xml)
     if !x14Blocks.isEmpty {
       let before = sheet.conditionalFormats.count
