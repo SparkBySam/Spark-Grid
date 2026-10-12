@@ -106,6 +106,26 @@ enum PerformanceBenchmark {
     let exportSeconds = CFAbsoluteTimeGetCurrent() - exportStarted
     emit(String(format: "exportWorkbook %.3f s", exportSeconds))
 
+    let autosaveURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("spark-grid-phase1-autosave-\(label)-\(UUID().uuidString).xlsx")
+    defer { try? FileManager.default.removeItem(at: autosaveURL) }
+    let autosaveStore = SpreadsheetDocumentStore()
+    autosaveStore.document.workbook = imported
+    autosaveStore.fileURL = autosaveURL
+    autosaveStore.noteEdit()
+    let autosaveWasEnabled = AppSettings.shared.autosaveEnabled
+    AppSettings.shared.autosaveEnabled = true
+    let autosaveStarted = CFAbsoluteTimeGetCurrent()
+    autosaveStore.autosaveIfNeeded()
+    let autosaveMainSeconds = CFAbsoluteTimeGetCurrent() - autosaveStarted
+    emit(String(format: "autosave-main %.3f s", autosaveMainSeconds))
+    let autosaveDeadline = Date().addingTimeInterval(180)
+    while autosaveStore.isAutosaving, Date() < autosaveDeadline {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    AppSettings.shared.autosaveEnabled = autosaveWasEnabled
+    emit("autosave-finished\t\(autosaveStore.isAutosaving ? "busy" : "idle")\t\(FileManager.default.fileExists(atPath: autosaveURL.path))")
+
     let store = SpreadsheetDocumentStore()
     // Sheet ids are random, so a new store's saved fingerprint does not match its
     // empty document and the first load would ask to save. Write that empty

@@ -86,29 +86,8 @@ final class SpreadsheetDocumentStore {
   }
 
   func save(to url: URL? = nil) throws {
-    let destination = url ?? fileURL
-    guard let destination else { return }
-    // Prefer the live grid workbook so AutoFilter / in-memory edits aren't dropped.
-    if let viewModel = activeViewModel {
-      viewModel.syncAutoFilterToActiveSheet()
-      document.workbook = viewModel.workbook
-    }
-    let accessing = destination.startAccessingSecurityScopedResource()
-    defer {
-      if accessing {
-        destination.stopAccessingSecurityScopedResource()
-      }
-    }
-    if destination.pathExtension.lowercased() == "xlsx" {
-      let data = try XLSXCodec.exportWorkbook(document.workbook)
-      try data.write(to: destination, options: .atomic)
-    } else {
-      let csv = CSVCodec.exportCSV(from: document.workbook.activeSheet)
-      try csv.write(to: destination, atomically: true, encoding: .utf8)
-    }
-    fileURL = destination
-    markClean()
-    noteRecent(destination)
+    guard let snapshot = makeSaveSnapshot(to: url) else { return }
+    try waitForBackgroundWrite(of: snapshot)
   }
 
   /// Direct workbook writes that do not go through the live grid (tests).
@@ -282,10 +261,100 @@ final class SpreadsheetDocumentStore {
   }
 
   private func performAutosave() {
-    guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty else { return }
+    guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty, !isAutosaving else { return }
+    guard let snapshot = makeSaveSnapshot(to: nil) else { return }
     isAutosaving = true
-    defer { isAutosaving = false }
-    try? save()
+    let generation = snapshot.changeCount
+    let destination = snapshot.destination
+    Task.detached(priority: .utility) {
+      var failure: String?
+      do {
+        try SpreadsheetDocumentStore.write(snapshot)
+      } catch {
+        failure = error.localizedDescription
+      }
+      let message = failure
+      await MainActor.run { [weak self] in
+        guard let self else { return }
+        if snapshot.accessingSecurityScope {
+          destination.stopAccessingSecurityScopedResource()
+        }
+        self.isAutosaving = false
+        guard message == nil else { return }
+        guard self.changeCount == generation, self.fileURL == destination else { return }
+        self.markClean()
+        self.noteRecent(destination)
+      }
+    }
+  }
+
+  /// Workbook copy taken on the main thread. Export and the file write run elsewhere.
+  private struct WorkbookSaveSnapshot: Sendable {
+    var workbook: Workbook
+    var destination: URL
+    var xlsx: Bool
+    var changeCount: UInt64
+    var accessingSecurityScope: Bool
+  }
+
+  private func makeSaveSnapshot(to url: URL?) -> WorkbookSaveSnapshot? {
+    if let viewModel = activeViewModel {
+      viewModel.syncAutoFilterToActiveSheet()
+      document.workbook = viewModel.workbook
+    }
+    documentDidChange()
+    let destination = url ?? fileURL
+    guard let destination else { return nil }
+    let accessing = destination.startAccessingSecurityScopedResource()
+    return WorkbookSaveSnapshot(
+      workbook: document.workbook,
+      destination: destination,
+      xlsx: destination.pathExtension.lowercased() == "xlsx",
+      changeCount: changeCount,
+      accessingSecurityScope: accessing
+    )
+  }
+
+  /// Interactive save waits until the file is written, but the export is not on this thread.
+  /// The run loop keeps the window live while the background write finishes.
+  private func waitForBackgroundWrite(of snapshot: WorkbookSaveSnapshot) throws {
+    final class Box: @unchecked Sendable {
+      var error: Error?
+    }
+    let box = Box()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        try SpreadsheetDocumentStore.write(snapshot)
+      } catch {
+        box.error = error
+      }
+      group.leave()
+    }
+    while group.wait(timeout: .now()) == .timedOut {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if snapshot.accessingSecurityScope {
+      snapshot.destination.stopAccessingSecurityScopedResource()
+    }
+    if let error = box.error { throw error }
+    fileURL = snapshot.destination
+    if changeCount == snapshot.changeCount {
+      markClean()
+    }
+    noteRecent(snapshot.destination)
+  }
+
+  nonisolated private static func write(_ snapshot: WorkbookSaveSnapshot) throws {
+    precondition(!Thread.isMainThread)
+    if snapshot.xlsx {
+      let data = try XLSXCodec.exportWorkbook(snapshot.workbook)
+      try data.write(to: snapshot.destination, options: .atomic)
+    } else {
+      let csv = CSVCodec.exportCSV(from: snapshot.workbook.activeSheet)
+      try csv.write(to: snapshot.destination, atomically: true, encoding: .utf8)
+    }
   }
 
   private func markClean() {

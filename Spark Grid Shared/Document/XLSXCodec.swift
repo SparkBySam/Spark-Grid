@@ -3,7 +3,7 @@ import CoreXLSX
 import Foundation
 import ZIPFoundation
 
-enum XLSXCodec {
+nonisolated enum XLSXCodec {
   enum CodecError: LocalizedError {
     case unreadable
     case emptyWorkbook
