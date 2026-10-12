@@ -183,7 +183,9 @@ struct SpreadsheetWindowView: View {
     }
     .onChange(of: store.document.workbook) { _, newValue in
       guard newValue != viewModel.workbook else { return }
-      viewModel.workbook = newValue
+      viewModel.withoutRecordingEdit {
+        viewModel.workbook = newValue
+      }
       viewModel.isEditing = false
       viewModel.syncEditTextFromSelection()
       viewModel.restoreFilterFromActiveSheet()
@@ -192,7 +194,9 @@ struct SpreadsheetWindowView: View {
     .onAppear {
       viewModel.undoManager = undoManager
       if viewModel.workbook != store.document.workbook {
-        viewModel.workbook = store.document.workbook
+        viewModel.withoutRecordingEdit {
+          viewModel.workbook = store.document.workbook
+        }
         viewModel.syncEditTextFromSelection()
       }
       viewModel.restoreFilterFromActiveSheet()

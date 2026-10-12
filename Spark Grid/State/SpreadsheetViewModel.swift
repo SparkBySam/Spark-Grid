@@ -7,9 +7,16 @@ import Observation
 final class SpreadsheetViewModel {
   /// When true, `workbook` didSet skips a full formula rebuild (format-only / batched edits).
   private var suspendFormulaRebuild = false
+  /// When true, workbook writes are not document edits (tab switch, load sync).
+  private var suppressEditStamp = false
+  /// Real workbook edits. Tab switches, selection, scrolling, and zoom leave this alone.
+  private(set) var editStamp: UInt64 = 0
 
   var workbook: Workbook {
     didSet {
+      if !suppressEditStamp {
+        editStamp &+= 1
+      }
       contentRevision &+= 1
       hiddenRowsCache = nil
       conditionalFormatCache.removeAll(keepingCapacity: true)
@@ -288,18 +295,37 @@ final class SpreadsheetViewModel {
     }
   }
 
+  /// Workbook assignment that must not mark the document edited.
+  func withoutRecordingEdit(_ body: () -> Void) {
+    let previous = suppressEditStamp
+    suppressEditStamp = true
+    defer { suppressEditStamp = previous }
+    body()
+  }
+
+  /// Member writes sometimes skip `workbook` didSet. Count the edit once when they do.
+  private func finishWorkbookMutation(stampBefore: UInt64) {
+    if !suppressEditStamp, editStamp == stampBefore {
+      editStamp &+= 1
+    }
+  }
+
   /// Format-only sheet writes — avoids re-parsing every formula on the sheet.
   func setActiveSheetPreservingFormulas(_ sheet: Sheet) {
+    let stampBefore = editStamp
     suspendFormulaRebuild = true
     workbook.activeSheet = sheet
     suspendFormulaRebuild = false
+    finishWorkbookMutation(stampBefore: stampBefore)
   }
 
   /// Value edits — incremental formula update instead of a full rebuild.
   private func setActiveSheet(_ sheet: Sheet, formulaCellsChanged addresses: [CellAddress]) {
+    let stampBefore = editStamp
     suspendFormulaRebuild = true
     workbook.activeSheet = sheet
     suspendFormulaRebuild = false
+    finishWorkbookMutation(stampBefore: stampBefore)
     if !addresses.isEmpty {
       formulaEngine.cellsDidChange(addresses, sheet: sheet)
     }
@@ -938,12 +964,14 @@ final class SpreadsheetViewModel {
   func selectSheet(at index: Int) {
     commitEditIfNeeded()
     guard index >= 0, index < workbook.sheets.count else { return }
-    workbook.activeSheetIndex = index
-    // Member assignment on `workbook` does not always run didSet, which is what
-    // normally rebuilds the engine. Conditional formats on the new sheet must
-    // evaluate that sheet's cells, not the previous sheet's address cache.
-    formulaEngine.rebuild(workbook: workbook)
-    restoreFilterFromActiveSheet()
+    withoutRecordingEdit {
+      workbook.activeSheetIndex = index
+      // Member assignment on `workbook` does not always run didSet, which is what
+      // normally rebuilds the engine. Conditional formats on the new sheet must
+      // evaluate that sheet's cells, not the previous sheet's address cache.
+      formulaEngine.rebuild(workbook: workbook)
+      restoreFilterFromActiveSheet()
+    }
     invalidateFindMatches()
     selection = .origin
     syncEditTextFromSelection()
@@ -956,6 +984,7 @@ final class SpreadsheetViewModel {
     guard index >= 0, index < workbook.sheets.count else { return }
 
     let wasActive = index == workbook.activeSheetIndex
+    let stampBefore = editStamp
     workbook.sheets.remove(at: index)
     if wasActive {
       workbook.activeSheetIndex = min(index, workbook.sheets.count - 1)
@@ -963,6 +992,7 @@ final class SpreadsheetViewModel {
     } else if index < workbook.activeSheetIndex {
       workbook.activeSheetIndex -= 1
     }
+    finishWorkbookMutation(stampBefore: stampBefore)
     contentRevision &+= 1
     invalidateFindMatches()
     selection = .origin
@@ -974,7 +1004,9 @@ final class SpreadsheetViewModel {
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     guard index >= 0, index < workbook.sheets.count else { return }
+    let stampBefore = editStamp
     workbook.sheets[index].name = trimmed
+    finishWorkbookMutation(stampBefore: stampBefore)
   }
 
   // MARK: - Formatting

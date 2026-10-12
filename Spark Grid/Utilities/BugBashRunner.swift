@@ -5627,6 +5627,7 @@ enum BugBashRunner {
     var sheet = saved.document.workbook.activeSheet
     sheet.setCell(Cell(raw: "2"), at: CellAddress(row: 1, col: 0))
     saved.document.workbook.activeSheet = sheet
+    saved.noteEdit()
     saved.documentDidChange()
     if saved.attemptClose() != true || saved.unsavedPromptCount != 1 {
       return Result(name: name, passed: false, detail: "save prompts \(saved.unsavedPromptCount)")
@@ -5671,6 +5672,7 @@ enum BugBashRunner {
     var sheet = store.document.workbook.activeSheet
     sheet.setCell(Cell(raw: "1"), at: .origin)
     store.document.workbook.activeSheet = sheet
+    store.noteEdit()
     store.documentDidChange()
     return store
   }

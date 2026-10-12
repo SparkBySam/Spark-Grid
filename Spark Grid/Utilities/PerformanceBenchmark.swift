@@ -150,7 +150,12 @@ enum PerformanceBenchmark {
     emit("scroll-worst\t\(scroll.sheet)\t\(formatSeconds(scroll.worst))\tticks \(scroll.ticks)")
     grid.close()
 
-    let switchViewModel = SpreadsheetViewModel(workbook: imported)
+    // Same sheet ids as the open document. A second import compares unequal at the
+    // first sheet id and hides the workbook-sized sync the window actually runs.
+    let loaded = store.document.workbook
+    let switchViewModel = SpreadsheetViewModel(workbook: loaded)
+    store.activeViewModel = switchViewModel
+    store.documentDidChange()
     let switchStarted = CFAbsoluteTimeGetCurrent()
     switchViewModel.selectSheet(at: min(1, switchViewModel.workbook.sheets.count - 1))
     let selectSeconds = CFAbsoluteTimeGetCurrent() - switchStarted
@@ -160,8 +165,11 @@ enum PerformanceBenchmark {
     emit(String(format: "selectSheet %.3f s", selectSeconds))
     emit(String(format: "selectSheet-onchange %.3f s", selectSyncSeconds))
     emit(String(format: "tab-switch %.3f s", selectSeconds + selectSyncSeconds))
+    emit("tab-switch-dirty\t\(store.isDirty)")
 
-    let editViewModel = SpreadsheetViewModel(workbook: imported)
+    let editViewModel = SpreadsheetViewModel(workbook: loaded)
+    store.activeViewModel = editViewModel
+    store.documentDidChange()
     let editGrid = BenchmarkGrid(viewModel: editViewModel, frame: viewportFrame(for: editViewModel.activeSheet))
     editGrid.grid.needsDisplay = true
     editGrid.grid.display()
@@ -181,6 +189,7 @@ enum PerformanceBenchmark {
     emit("commitEdit\t\(editViewModel.activeSheet.name)!\(editAddress.a1)\t\(formatSeconds(commitSeconds))")
     emit(String(format: "edit-onchange %.3f s", editSyncSeconds))
     emit(String(format: "edit %.3f s", commitSeconds + editSyncSeconds))
+    emit("edit-dirty\t\(store.isDirty)")
 
     let slowest = firstScreens.max(by: { $0.1 < $1.1 })
     emit("first-screen-slowest\t\(slowest?.0 ?? "")\t\(formatSeconds(slowest?.1 ?? 0))")

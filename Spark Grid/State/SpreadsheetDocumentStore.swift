@@ -13,7 +13,12 @@ final class SpreadsheetDocumentStore {
   private(set) var isDirty = false
   private(set) var isAutosaving = false
 
-  private var savedFingerprint: Data?
+  /// Edits since the last load, save, or new document. Not a content hash.
+  private var changeCount: UInt64 = 0
+  private var savedChangeCount: UInt64 = 0
+  /// Grid whose `editStamp` has been adopted. A replacement grid is a new baseline.
+  private weak var observedViewModel: SpreadsheetViewModel?
+  private var observedEditStamp: UInt64 = 0
   private var autosaveTask: Task<Void, Never>?
   private var isForceClosing = false
   /// Quit delivers `applicationShouldTerminate` and `windowShouldClose` for the same close.
@@ -28,10 +33,6 @@ final class SpreadsheetDocumentStore {
     case save, discard, cancel
   }
   #endif
-
-  init() {
-    savedFingerprint = WorkbookFingerprint.data(for: SpreadsheetDocument().workbook)
-  }
 
   var displayTitle: String {
     let base = fileURL?.lastPathComponent ?? "Untitled"
@@ -53,10 +54,14 @@ final class SpreadsheetDocumentStore {
     guard confirmReplaceCurrentDocument() else { return }
     document = SpreadsheetDocument()
     fileURL = nil
-    savedFingerprint = fingerprint(of: document.workbook)
-    isDirty = false
+    markClean()
     isAutosaving = false
     isForceClosing = false
+    let generation = fileURL
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.fileURL == generation else { return }
+      self.markClean()
+    }
   }
 
   func load(from url: URL) throws {
@@ -69,17 +74,14 @@ final class SpreadsheetDocumentStore {
     }
     document = try SpreadsheetDocument.load(from: url)
     fileURL = url
-    savedFingerprint = fingerprint(of: document.workbook)
-    isDirty = false
+    markClean()
     isAutosaving = false
     noteRecent(url)
-    // Remount / viewModel sync can write the workbook back once on the next turn.
-    // Re-baseline so a clean open doesn't show "Edited".
+    // Remount can assign the workbook once on the next turn. That is not an edit.
     let loadedURL = url
     DispatchQueue.main.async { [weak self] in
       guard let self, self.fileURL == loadedURL else { return }
-      self.savedFingerprint = self.fingerprint(of: self.document.workbook)
-      self.isDirty = false
+      self.markClean()
     }
   }
 
@@ -105,12 +107,18 @@ final class SpreadsheetDocumentStore {
       try csv.write(to: destination, atomically: true, encoding: .utf8)
     }
     fileURL = destination
-    savedFingerprint = fingerprint(of: document.workbook)
-    isDirty = false
+    markClean()
     noteRecent(destination)
   }
 
+  /// Direct workbook writes that do not go through the live grid (tests).
+  func noteEdit() {
+    changeCount &+= 1
+    isDirty = true
+  }
+
   func documentDidChange() {
+    adoptAttachedEdits()
     let dirty = computeDirtyState()
     guard dirty != isDirty else { return }
     isDirty = dirty
@@ -280,15 +288,36 @@ final class SpreadsheetDocumentStore {
     try? save()
   }
 
-  private func computeDirtyState() -> Bool {
-    guard let saved = savedFingerprint else {
-      return !document.workbook.isEffectivelyEmpty
+  private func markClean() {
+    if let viewModel = activeViewModel {
+      observedViewModel = viewModel
+      observedEditStamp = viewModel.editStamp
     }
-    return fingerprint(of: document.workbook) != saved
+    changeCount = 0
+    savedChangeCount = 0
+    isDirty = false
   }
 
-  private func fingerprint(of workbook: Workbook) -> Data? {
-    WorkbookFingerprint.data(for: workbook)
+  /// Counts edit-stamp movement on the attached grid. A new grid is a baseline, not an edit.
+  private func adoptAttachedEdits() {
+    guard let viewModel = activeViewModel else { return }
+    if observedViewModel !== viewModel {
+      observedViewModel = viewModel
+      observedEditStamp = viewModel.editStamp
+      return
+    }
+    let stamp = viewModel.editStamp
+    guard stamp != observedEditStamp else { return }
+    if stamp > observedEditStamp {
+      changeCount &+= stamp - observedEditStamp
+    } else {
+      changeCount &+= 1
+    }
+    observedEditStamp = stamp
+  }
+
+  private func computeDirtyState() -> Bool {
+    changeCount != savedChangeCount
   }
 
   private func noteRecent(_ url: URL) {
