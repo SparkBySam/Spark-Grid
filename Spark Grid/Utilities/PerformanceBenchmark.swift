@@ -377,7 +377,6 @@ enum PerformanceBenchmark {
   }
 
   private static func syncOnChange(store: SpreadsheetDocumentStore, viewModel: SpreadsheetViewModel) {
-    guard store.document.workbook != viewModel.workbook else { return }
     store.document.workbook = viewModel.workbook
     store.documentDidChange()
   }

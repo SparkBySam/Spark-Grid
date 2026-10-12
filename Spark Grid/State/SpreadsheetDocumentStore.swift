@@ -10,6 +10,8 @@ final class SpreadsheetDocumentStore {
   /// Live grid view model for the open window; used by print and menu commands.
   var activeViewModel: SpreadsheetViewModel?
   var fileURL: URL?
+  /// Bumped when a file load or new document replaces the workbook. Not an edit.
+  private(set) var externalWorkbookToken: UInt64 = 0
   private(set) var isDirty = false
   private(set) var isAutosaving = false
 
@@ -54,6 +56,7 @@ final class SpreadsheetDocumentStore {
     guard confirmReplaceCurrentDocument() else { return }
     document = SpreadsheetDocument()
     fileURL = nil
+    externalWorkbookToken &+= 1
     markClean()
     isAutosaving = false
     isForceClosing = false
@@ -74,6 +77,7 @@ final class SpreadsheetDocumentStore {
     }
     document = try SpreadsheetDocument.load(from: url)
     fileURL = url
+    externalWorkbookToken &+= 1
     markClean()
     isAutosaving = false
     noteRecent(url)

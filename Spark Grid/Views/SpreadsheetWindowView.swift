@@ -176,15 +176,18 @@ struct SpreadsheetWindowView: View {
     .onAppear {
       WindowTitleUpdater.apply(title: store.displayTitle)
     }
-    .onChange(of: viewModel.workbook) { _, newValue in
-      guard store.document.workbook != newValue else { return }
-      store.document.workbook = newValue
+    .onChange(of: viewModel.editStamp) { _, _ in
+      store.document.workbook = viewModel.workbook
       onDocumentChanged()
     }
-    .onChange(of: store.document.workbook) { _, newValue in
-      guard newValue != viewModel.workbook else { return }
+    .onChange(of: viewModel.workbook.activeSheetIndex) { _, index in
+      guard index != store.document.workbook.activeSheetIndex else { return }
+      store.document.workbook = viewModel.workbook
+      onDocumentChanged()
+    }
+    .onChange(of: store.externalWorkbookToken) { _, _ in
       viewModel.withoutRecordingEdit {
-        viewModel.workbook = newValue
+        viewModel.workbook = store.document.workbook
       }
       viewModel.isEditing = false
       viewModel.syncEditTextFromSelection()
@@ -193,12 +196,6 @@ struct SpreadsheetWindowView: View {
     }
     .onAppear {
       viewModel.undoManager = undoManager
-      if viewModel.workbook != store.document.workbook {
-        viewModel.withoutRecordingEdit {
-          viewModel.workbook = store.document.workbook
-        }
-        viewModel.syncEditTextFromSelection()
-      }
       viewModel.restoreFilterFromActiveSheet()
       registerWithAppDelegate()
     }
