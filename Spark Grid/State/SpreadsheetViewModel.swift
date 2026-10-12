@@ -697,6 +697,7 @@ final class SpreadsheetViewModel {
     var cell = sheet.cell(at: address)
     cell.raw = value
     cell.importedFormulaResult = nil
+    cell.importedFormulaValueType = nil
     applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
     sheet.setCell(cell, at: address)
     setActiveSheet(sheet, formulaCellsChanged: [address])
@@ -2126,6 +2127,8 @@ final class SpreadsheetViewModel {
       var sheet = activeSheet
       var cell = sheet.cell(at: address)
       cell.raw = value
+      cell.importedFormulaResult = nil
+      cell.importedFormulaValueType = nil
       applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
       sheet.setCell(cell, at: address)
       setActiveSheet(sheet, formulaCellsChanged: [address])

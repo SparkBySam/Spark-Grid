@@ -28,6 +28,7 @@ enum PerformanceBenchmark {
     }
 
     do {
+      try verifyCachedFormulaRoundTrip(emit: emit)
       guard !reference.isEmpty, FileManager.default.fileExists(atPath: reference) else {
         emit("benchmark failed: SPARK_GRID_BENCHMARK_REFERENCE is missing")
         exit(1)
@@ -403,6 +404,7 @@ enum PerformanceBenchmark {
       for address in addresses {
         var cell = sheet.cell(at: address)
         cell.importedFormulaResult = nil
+        cell.importedFormulaValueType = nil
         sheet.setCell(cell, at: address)
       }
       copy.sheets[index] = sheet
@@ -480,6 +482,83 @@ enum PerformanceBenchmark {
     }
     guard result == KERN_SUCCESS else { return 0 }
     return info.resident_size
+  }
+
+  /// Export then import, with calculation left off. A wrong cached number proves we did not recalc.
+  private static func verifyCachedFormulaRoundTrip(emit: (String) -> Void) throws {
+    var sheet = Sheet(name: "Cache")
+    func put(col: Int, raw: String, result: String?, type: ImportedFormulaValueType?) {
+      var cell = Cell(raw: raw)
+      cell.importedFormulaResult = result
+      cell.importedFormulaValueType = type
+      sheet.setCell(cell, at: CellAddress(row: 0, col: col))
+    }
+    put(col: 0, raw: "=1+2", result: "99", type: .number)
+    put(col: 1, raw: "=1+2", result: "a&b<c", type: .string)
+    put(col: 2, raw: "=1+2", result: "1", type: .boolean)
+    put(col: 3, raw: "=1+2", result: "0", type: .boolean)
+    put(col: 4, raw: "=1+2", result: "#DIV/0!", type: .error)
+    put(col: 5, raw: "=1+2", result: "#N/A", type: .error)
+    put(col: 6, raw: "=1+2", result: "40", type: nil)
+    put(col: 7, raw: "=1+2", result: "TRUE", type: nil)
+    put(col: 8, raw: "=1+2", result: nil, type: nil)
+    sheet.setCell(Cell(raw: "10"), at: CellAddress(row: 1, col: 0))
+    sheet.setCell(Cell(raw: "hello"), at: CellAddress(row: 1, col: 1))
+
+    let data = try XLSXCodec.exportWorkbook(Workbook(sheets: [sheet]))
+    let url = URL(fileURLWithPath: "/tmp/spark-grid-cached-formula-roundtrip.xlsx")
+    try data.write(to: url, options: .atomic)
+    let imported = try XLSXCodec.importWorkbook(from: data)
+    let engine = FormulaEngine()
+    engine.rebuild(workbook: imported, recalculate: false)
+    let importedSheet = imported.sheets[0]
+
+    func expect(
+      col: Int,
+      raw: String,
+      result: String?,
+      type: ImportedFormulaValueType?,
+      value: CellValue
+    ) throws {
+      let address = CellAddress(row: 0, col: col)
+      let cell = importedSheet.cell(at: address)
+      guard cell.raw == raw else {
+        throw BenchmarkFailure("raw \(address.a1) is \(cell.raw)")
+      }
+      guard cell.importedFormulaResult == result else {
+        throw BenchmarkFailure("cache \(address.a1) is \(cell.importedFormulaResult ?? "nil")")
+      }
+      guard cell.importedFormulaValueType == type else {
+        throw BenchmarkFailure("type \(address.a1) is \(String(describing: cell.importedFormulaValueType))")
+      }
+      let shown = engine.displayValue(at: address, sheet: importedSheet)
+      guard shown == value else {
+        throw BenchmarkFailure("value \(address.a1) is \(shown)")
+      }
+    }
+
+    try expect(col: 0, raw: "=1+2", result: "99", type: .number, value: .number(99))
+    try expect(col: 1, raw: "=1+2", result: "a&b<c", type: .string, value: .string("a&b<c"))
+    try expect(col: 2, raw: "=1+2", result: "1", type: .boolean, value: .bool(true))
+    try expect(col: 3, raw: "=1+2", result: "0", type: .boolean, value: .bool(false))
+    try expect(col: 4, raw: "=1+2", result: "#DIV/0!", type: .error, value: .error(.divZero))
+    try expect(col: 5, raw: "=1+2", result: "#N/A", type: .error, value: .error(.na))
+    try expect(col: 6, raw: "=1+2", result: "40", type: .number, value: .number(40))
+    try expect(col: 7, raw: "=1+2", result: "1", type: .boolean, value: .bool(true))
+
+    let uncached = importedSheet.cell(at: CellAddress(row: 0, col: 8))
+    guard uncached.raw == "=1+2", uncached.importedFormulaResult == nil else {
+      throw BenchmarkFailure("formula without a cache gained a result")
+    }
+    let literalNumber = importedSheet.cell(at: CellAddress(row: 1, col: 0))
+    guard literalNumber.raw == "10", literalNumber.importedFormulaResult == nil else {
+      throw BenchmarkFailure("literal number changed")
+    }
+    let literalText = importedSheet.cell(at: CellAddress(row: 1, col: 1))
+    guard literalText.raw == "hello", literalText.importedFormulaResult == nil else {
+      throw BenchmarkFailure("literal text changed")
+    }
+    emit("cached-formula-roundtrip ok \(url.path)")
   }
 
   private struct BenchmarkFailure: Error, CustomStringConvertible {

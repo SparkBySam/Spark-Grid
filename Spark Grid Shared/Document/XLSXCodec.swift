@@ -281,16 +281,22 @@ nonisolated enum XLSXCodec {
       ) else { return }
       var cell = sheet.cell(at: address)
       guard FormulaSyntax.isFormula(cell.raw) else { return }
-      cell.importedFormulaResult = cached
+      cell.importedFormulaResult = cached.text
+      cell.importedFormulaValueType = cached.type
       sheet.setCell(cell, at: address)
     }
+  }
+
+  private struct FormulaCache {
+    var text: String
+    var type: ImportedFormulaValueType
   }
 
   private static func formulaCachedValueFromCellXML(
     attrs: String,
     body: String,
     sharedStrings: SharedStrings?
-  ) -> String? {
+  ) -> FormulaCache? {
     guard let vOpen = body.range(of: "<v>"),
           let vClose = body.range(of: "</v>", range: vOpen.upperBound..<body.endIndex)
     else { return nil }
@@ -300,10 +306,20 @@ nonisolated enum XLSXCodec {
     let cellType = xmlAttribute(attrs, named: "t")?.trimmingCharacters(in: .whitespacesAndNewlines)
     if cellType == "s" || cellType == "sharedString" {
       if let index = Int(raw), let text = sharedString(at: index, in: sharedStrings) {
-        return text
+        return FormulaCache(text: text, type: .string)
       }
+      return nil
     }
-    return raw
+    return FormulaCache(text: raw, type: formulaValueType(forOOXML: cellType))
+  }
+
+  private static func formulaValueType(forOOXML cellType: String?) -> ImportedFormulaValueType {
+    switch cellType {
+    case "b": return .boolean
+    case "e": return .error
+    case "str", "inlineStr", "s", "d": return .string
+    default: return .number
+    }
   }
 
   private static func sharedString(at index: Int, in table: SharedStrings?) -> String? {
@@ -408,8 +424,9 @@ nonisolated enum XLSXCodec {
         let raw = cellRawValue(cell, sharedStrings: sharedStrings)
         guard !raw.isEmpty || cell.styleIndex != nil else { continue }
         var model = Cell(raw: raw)
-        if let cached = importedFormulaResult(from: cell, sharedStrings: sharedStrings) {
-          model.importedFormulaResult = cached
+        if let cached = importedFormulaCache(from: cell, sharedStrings: sharedStrings) {
+          model.importedFormulaResult = cached.text
+          model.importedFormulaValueType = cached.type
         }
         if let styles, let format = cellFormat(
           from: cell,
@@ -497,21 +514,30 @@ nonisolated enum XLSXCodec {
     return indexes
   }
 
-  private static func importedFormulaResult(
+  private static func importedFormulaCache(
     from cell: CoreXLSX.Cell,
     sharedStrings: SharedStrings?
-  ) -> String? {
+  ) -> FormulaCache? {
     guard let formula = cell.formula?.value, !formula.isEmpty else { return nil }
     if cell.type == .sharedString, let sharedStrings, let text = cell.stringValue(sharedStrings) {
-      return text
+      return FormulaCache(text: text, type: .string)
     }
     if let inline = cell.inlineString?.text, !inline.isEmpty {
-      return inline
+      return FormulaCache(text: inline, type: .string)
     }
     if let value = cell.value, !value.isEmpty {
-      return value
+      return FormulaCache(text: value, type: formulaValueType(cell.type))
     }
     return nil
+  }
+
+  private static func formulaValueType(_ type: CellType?) -> ImportedFormulaValueType {
+    switch type {
+    case .bool: return .boolean
+    case .error: return .error
+    case .string, .inlineStr, .sharedString, .date: return .string
+    case .number, nil: return .number
+    }
   }
 
   private static func cellRawValue(_ cell: CoreXLSX.Cell, sharedStrings: SharedStrings?) -> String {
@@ -817,7 +843,7 @@ nonisolated enum XLSXCodec {
 
   // MARK: - Export
 
-  static func exportWorkbook(_ workbook: Workbook) throws -> Data {
+  static func exportWorkbook(_ workbook: Workbook, includeFormulaCaches: Bool = true) throws -> Data {
     var sharedStrings: [String] = []
     var sharedIndex: [String: Int] = [:]
 
@@ -885,7 +911,8 @@ nonisolated enum XLSXCodec {
         intern: intern,
         styleIndex: styleIndex,
         dxfIndex: dxfIndex,
-        includeDrawing: hasDrawing
+        includeDrawing: hasDrawing,
+        includeFormulaCaches: includeFormulaCaches
       )
       files["xl/worksheets/sheet\(index + 1).xml"] = sheetXML
       if let rels = worksheetRelsXML(sheetIndex: index, hasDrawing: hasDrawing) {
@@ -1010,7 +1037,8 @@ nonisolated enum XLSXCodec {
     intern: (String) -> Int,
     styleIndex: (CellFormat?) -> Int,
     dxfIndex: (ConditionalFormatStyle) -> Int,
-    includeDrawing: Bool = false
+    includeDrawing: Bool = false,
+    includeFormulaCaches: Bool = true
   ) -> Data {
     var colsXML = ""
     if !sheet.columnWidths.isEmpty {
@@ -1039,7 +1067,10 @@ nonisolated enum XLSXCodec {
         let styleAttr = sIndex > 0 ? #" s="\#(sIndex)""# : ""
         if FormulaSyntax.isFormula(cell.raw) {
           let formula = String(cell.raw.drop(while: { $0 == "=" || $0.isWhitespace }))
-          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)><f>\#(escapeXML(formula))</f></c>"#
+          let cache = includeFormulaCaches
+            ? formulaCacheMarkup(cell)
+            : (typeAttribute: "", valueElement: "")
+          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)\#(cache.typeAttribute)><f>\#(escapeXML(formula))</f>\#(cache.valueElement)</c>"#
         } else if Double(cell.raw) != nil, !cell.raw.contains(where: { $0.isLetter }) {
           cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)><v>\#(escapeXML(cell.raw))</v></c>"#
         } else if !cell.raw.isEmpty {
@@ -1074,6 +1105,52 @@ nonisolated enum XLSXCodec {
     </worksheet>
     """
     return Data(xml.utf8)
+  }
+
+  /// ECMA-376 error codes. Anything else is written as text so the package stays valid.
+  private static let ooxmlErrorCodes: Set<String> = [
+    "#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA",
+  ]
+
+  private static func formulaCacheMarkup(_ cell: Cell) -> (typeAttribute: String, valueElement: String) {
+    guard let text = cell.importedFormulaResult?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !text.isEmpty
+    else { return ("", "") }
+    let type = cell.importedFormulaValueType ?? inferredFormulaValueType(text)
+    switch type {
+    case .number:
+      return ("", "<v>\(escapeXML(text))</v>")
+    case .string:
+      return (#" t="str""#, "<v>\(escapeXML(text))</v>")
+    case .boolean:
+      return (#" t="b""#, "<v>\(booleanCacheBit(text))</v>")
+    case .error:
+      if ooxmlErrorCodes.contains(text) {
+        return (#" t="e""#, "<v>\(escapeXML(text))</v>")
+      }
+      return (#" t="str""#, "<v>\(escapeXML(text))</v>")
+    }
+  }
+
+  private static func inferredFormulaValueType(_ text: String) -> ImportedFormulaValueType {
+    if ooxmlErrorCodes.contains(text) || FormulaError(displayCode: text) != nil {
+      return .error
+    }
+    switch text.uppercased() {
+    case "TRUE", "FALSE": return .boolean
+    default: break
+    }
+    if Double(text) != nil, !text.contains(where: \.isLetter) {
+      return .number
+    }
+    return .string
+  }
+
+  private static func booleanCacheBit(_ text: String) -> String {
+    switch text.uppercased() {
+    case "1", "TRUE": return "1"
+    default: return "0"
+    }
   }
 
   private static func sharedStringsXML(_ strings: [String]) -> Data {

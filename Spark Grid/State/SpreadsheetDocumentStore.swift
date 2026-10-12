@@ -17,6 +17,9 @@ final class SpreadsheetDocumentStore {
 
   /// Edits since the last load, save, or new document. Not a content hash.
   private var changeCount: UInt64 = 0
+  /// Imported formula `<v>` values still match the file. An edit can make them stale,
+  /// and a save then omits them instead of writing the old results.
+  private var importedFormulaCachesCurrent = false
   private var savedChangeCount: UInt64 = 0
   /// Grid whose `editStamp` has been adopted. A replacement grid is a new baseline.
   private weak var observedViewModel: SpreadsheetViewModel?
@@ -57,6 +60,7 @@ final class SpreadsheetDocumentStore {
     document = SpreadsheetDocument()
     fileURL = nil
     externalWorkbookToken &+= 1
+    importedFormulaCachesCurrent = false
     markClean()
     isAutosaving = false
     isForceClosing = false
@@ -78,6 +82,7 @@ final class SpreadsheetDocumentStore {
     document = try SpreadsheetDocument.load(from: url)
     fileURL = url
     externalWorkbookToken &+= 1
+    importedFormulaCachesCurrent = true
     markClean()
     isAutosaving = false
     noteRecent(url)
@@ -97,6 +102,7 @@ final class SpreadsheetDocumentStore {
   /// Direct workbook writes that do not go through the live grid (tests).
   func noteEdit() {
     changeCount &+= 1
+    importedFormulaCachesCurrent = false
     isDirty = true
   }
 
@@ -299,6 +305,7 @@ final class SpreadsheetDocumentStore {
     var xlsx: Bool
     var changeCount: UInt64
     var accessingSecurityScope: Bool
+    var includeFormulaCaches: Bool
   }
 
   private func makeSaveSnapshot(to url: URL?) -> WorkbookSaveSnapshot? {
@@ -315,7 +322,8 @@ final class SpreadsheetDocumentStore {
       destination: destination,
       xlsx: destination.pathExtension.lowercased() == "xlsx",
       changeCount: changeCount,
-      accessingSecurityScope: accessing
+      accessingSecurityScope: accessing,
+      includeFormulaCaches: importedFormulaCachesCurrent
     )
   }
 
@@ -353,7 +361,10 @@ final class SpreadsheetDocumentStore {
   nonisolated private static func write(_ snapshot: WorkbookSaveSnapshot) throws {
     precondition(!Thread.isMainThread)
     if snapshot.xlsx {
-      let data = try XLSXCodec.exportWorkbook(snapshot.workbook)
+      let data = try XLSXCodec.exportWorkbook(
+        snapshot.workbook,
+        includeFormulaCaches: snapshot.includeFormulaCaches
+      )
       try data.write(to: snapshot.destination, options: .atomic)
     } else {
       let csv = CSVCodec.exportCSV(from: snapshot.workbook.activeSheet)
@@ -386,6 +397,7 @@ final class SpreadsheetDocumentStore {
     } else {
       changeCount &+= 1
     }
+    importedFormulaCachesCurrent = false
     observedEditStamp = stamp
   }
 

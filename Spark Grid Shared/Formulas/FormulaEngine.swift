@@ -50,8 +50,7 @@ final class FormulaEngine {
     if FormulaSyntax.isFormula(raw), let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
       return stored
     }
-    if FormulaSyntax.isFormula(raw), let snapshot = sheet.cell(at: address).importedFormulaResult {
-      let value = CellValue.fromImportedExcel(snapshot)
+    if FormulaSyntax.isFormula(raw), let value = sheet.cell(at: address).cachedFormulaValue {
       valueCache[address] = value
       return value
     }
@@ -178,8 +177,8 @@ final class FormulaEngine {
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
     for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      if let snapshot = cell.importedFormulaResult {
-        valueCache[address] = CellValue.fromImportedExcel(snapshot)
+      if let value = cell.cachedFormulaValue {
+        valueCache[address] = value
       }
     }
     if recalculate {
@@ -350,8 +349,8 @@ final class FormulaEngine {
         for dep in template.deps {
           dependents[dep, default: []].insert(address)
         }
-        if let snapshot = sheet.cell(at: address).importedFormulaResult {
-          valueCache[address] = CellValue.fromImportedExcel(snapshot)
+        if let value = sheet.cell(at: address).cachedFormulaValue {
+          valueCache[address] = value
         }
       } catch {
         valueCache[address] = .error(.error)
@@ -400,8 +399,8 @@ final class FormulaEngine {
           values.append(literal)
           continue
         }
-        if let imported = cell.importedFormulaResult {
-          values.append(CellValue.fromImportedExcel(imported))
+        if let imported = cell.cachedFormulaValue {
+          values.append(imported)
           continue
         }
         values.append(literalOrEmpty(cell.raw))
@@ -744,8 +743,8 @@ final class FormulaEngine {
         if let shapeKey = output.shapeKeysByAddress[address] {
           sheetShapeAnchorKeys[address] = shapeKey
         }
-        if let snapshot = sheet.cell(at: address).importedFormulaResult {
-          valueCache[address] = CellValue.fromImportedExcel(snapshot)
+        if let value = sheet.cell(at: address).cachedFormulaValue {
+          valueCache[address] = value
         }
       }
     }
@@ -1116,8 +1115,7 @@ final class FormulaEngine {
     }
     let rawForStored = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if FormulaSyntax.isFormula(rawForStored),
-       let imported = sheet.cell(at: address).importedFormulaResult {
-      let value = CellValue.fromImportedExcel(imported)
+       let value = sheet.cell(at: address).cachedFormulaValue {
       foreignCache[key] = value
       return value
     }
