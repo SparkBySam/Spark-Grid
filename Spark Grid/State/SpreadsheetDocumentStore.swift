@@ -79,7 +79,36 @@ final class SpreadsheetDocumentStore {
         url.stopAccessingSecurityScopedResource()
       }
     }
-    document = try SpreadsheetDocument.load(from: url)
+
+    let loading = WorkbookLoadingWindow(filename: url.lastPathComponent)
+    defer { loading.close() }
+    // Let the loading window paint before the import occupies the background queue.
+    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+
+    final class Box: @unchecked Sendable {
+      var document: SpreadsheetDocument?
+      var error: Error?
+    }
+    let box = Box()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        box.document = try SpreadsheetDocument.load(from: url)
+      } catch {
+        box.error = error
+      }
+      group.leave()
+    }
+    while group.wait(timeout: .now()) == .timedOut {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if let error = box.error { throw error }
+    guard let loaded = box.document else {
+      throw CocoaError(.fileReadUnknown)
+    }
+
+    document = loaded
     fileURL = url
     externalWorkbookToken &+= 1
     importedFormulaCachesCurrent = true
@@ -435,5 +464,43 @@ final class SpreadsheetDocumentStore {
     alert.informativeText = error.localizedDescription
     alert.alertStyle = .warning
     alert.runModal()
+  }
+}
+
+/// Shown on the main thread while `SpreadsheetDocument.load` runs off it.
+private final class WorkbookLoadingWindow {
+  private var window: NSWindow?
+
+  init(filename: String) {
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 64))
+    let spinner = NSProgressIndicator(frame: NSRect(x: 18, y: 22, width: 20, height: 20))
+    spinner.style = .spinning
+    spinner.controlSize = .small
+    spinner.startAnimation(nil)
+    let label = NSTextField(labelWithString: "Opening \(filename)…")
+    label.frame = NSRect(x: 48, y: 22, width: 312, height: 20)
+    label.lineBreakMode = .byTruncatingMiddle
+    content.addSubview(spinner)
+    content.addSubview(label)
+
+    let panel = NSWindow(
+      contentRect: content.frame,
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    panel.title = "Opening"
+    panel.contentView = content
+    panel.isReleasedWhenClosed = false
+    panel.center()
+    panel.orderFrontRegardless()
+    panel.displayIfNeeded()
+    window = panel
+  }
+
+  func close() {
+    window?.orderOut(nil)
+    window?.close()
+    window = nil
   }
 }
