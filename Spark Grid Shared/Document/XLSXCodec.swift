@@ -45,49 +45,47 @@ nonisolated enum XLSXCodec {
     let textRotationsByStyleIndex = importTextRotationsByStyleIndex(archiveData: archiveData)
     let clipTextStyleIndexes = importClipTextStyleIndexes(archiveData: archiveData)
     var sheets: [Sheet] = []
+    let paths = try worksheetPathsForImport(file: file, archiveData: archiveData)
 
-    for wbk in try file.parseWorkbooks() {
-      for (name, path) in try file.parseWorksheetPathsAndNames(workbook: wbk) {
-        let worksheet = try file.parseWorksheet(at: path)
-        var sheet = Sheet(name: name ?? "Sheet\(sheets.count + 1)")
-        importCells(
-          from: worksheet,
-          into: &sheet,
-          sharedStrings: sharedStrings,
-          styles: styles,
-          underlinedFontIds: underlinedFonts,
-          themeStyleColors: themeStyleColors,
-          textRotationsByStyleIndex: textRotationsByStyleIndex,
-          clipTextStyleIndexes: clipTextStyleIndexes
-        )
-        expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
-        importFormulaCachedValues(
-          into: &sheet,
-          archiveData: archiveData,
-          worksheetPath: path,
-          sharedStrings: sharedStrings
-        )
-        importColumnWidths(from: worksheet, into: &sheet)
-        importRowHeights(from: worksheet, into: &sheet)
-        importFreezePanes(from: worksheet, into: &sheet)
-        importMergeCells(from: worksheet, into: &sheet)
-        importAutoFilter(into: &sheet, archiveData: archiveData, worksheetPath: path)
-        importConditionalFormatting(
-          into: &sheet,
-          archiveData: archiveData,
-          worksheetPath: path,
-          dxfs: dxfs,
-          themeScheme: themeScheme
-        )
-        importSparkCharts(into: &sheet, archiveData: archiveData, sheetIndex: sheets.count)
-        importSheetImages(
-          into: &sheet,
-          archiveData: archiveData,
-          sheetIndex: sheets.count,
-          worksheetPath: path
-        )
-        sheets.append(sheet)
-      }
+    for (name, path) in paths {
+      let worksheet = try file.parseWorksheet(at: path)
+      var sheet = Sheet(name: name ?? "Sheet\(sheets.count + 1)")
+      importCells(
+        from: worksheet,
+        into: &sheet,
+        sharedStrings: sharedStrings,
+        styles: styles,
+        underlinedFontIds: underlinedFonts,
+        themeStyleColors: themeStyleColors,
+        textRotationsByStyleIndex: textRotationsByStyleIndex,
+        clipTextStyleIndexes: clipTextStyleIndexes
+      )
+      expandSharedFormulas(into: &sheet, archiveData: archiveData, worksheetPath: path)
+      importFormulaCachedValues(
+        into: &sheet,
+        archiveData: archiveData,
+        worksheetPath: path,
+        sharedStrings: sharedStrings
+      )
+      importColumnWidths(from: worksheet, into: &sheet)
+      importRowHeights(from: worksheet, into: &sheet)
+      importFreezePanes(from: worksheet, into: &sheet)
+      importMergeCells(from: worksheet, into: &sheet)
+      importAutoFilter(into: &sheet, archiveData: archiveData, worksheetPath: path)
+      importConditionalFormatting(
+        into: &sheet,
+        archiveData: archiveData,
+        worksheetPath: path,
+        dxfs: dxfs,
+        themeScheme: themeScheme
+      )
+      importSparkCharts(into: &sheet, archiveData: archiveData, sheetIndex: sheets.count)
+      importSheetImages(
+        into: &sheet,
+        archiveData: archiveData,
+        worksheetPath: path
+      )
+      sheets.append(sheet)
     }
 
     guard !sheets.isEmpty else { throw CodecError.emptyWorkbook }
@@ -120,12 +118,7 @@ nonisolated enum XLSXCodec {
       )
       let sharedTexts = sharedStrings?.items.map(\.text) ?? []
 
-      var paths: [(name: String?, path: String)] = []
-      for workbook in try file.parseWorkbooks() {
-        for (name, path) in try file.parseWorksheetPathsAndNames(workbook: workbook) {
-          paths.append((name, path))
-        }
-      }
+      let paths = try worksheetPathsForImport(file: file, archiveData: data)
       guard !paths.isEmpty else { throw CodecError.emptyWorkbook }
 
       let lock = NSLock()
@@ -158,7 +151,6 @@ nonisolated enum XLSXCodec {
         importSheetImages(
           into: &sheet,
           archiveData: data,
-          sheetIndex: index,
           worksheetPath: path
         )
         lock.lock()
@@ -175,6 +167,148 @@ nonisolated enum XLSXCodec {
         xlsxThemeData: zipEntryData(archiveData: data, entryPath: "xl/theme/theme1.xml")
       )
     }
+  }
+
+  /// Tab order is the `<sheet>` sequence in workbook.xml. Relationship order is not tab order.
+  private static func worksheetPathsForImport(
+    file: XLSXFile,
+    archiveData: Data
+  ) throws -> [(name: String?, path: String)] {
+    let ordered = worksheetPathsInWorkbookOrder(archiveData: archiveData)
+    if !ordered.isEmpty { return ordered }
+    var fallback: [(name: String?, path: String)] = []
+    for workbook in try file.parseWorkbooks() {
+      for (name, path) in try file.parseWorksheetPathsAndNames(workbook: workbook) {
+        fallback.append((name, path))
+      }
+    }
+    return fallback
+  }
+
+  /// Walk `<sheet>` elements in document order and resolve each `r:id` to its worksheet part.
+  private static func worksheetPathsInWorkbookOrder(archiveData: Data) -> [(name: String?, path: String)] {
+    guard let workbookXML = zipEntryString(archiveData: archiveData, entryPath: "xl/workbook.xml"),
+          let relsXML = zipEntryString(archiveData: archiveData, entryPath: "xl/_rels/workbook.xml.rels")
+    else { return [] }
+    let targets = worksheetRelationshipTargets(in: relsXML)
+    guard !targets.isEmpty else { return [] }
+    guard let sheetsXML = xmlElementBody(in: workbookXML, localName: "sheets") else { return [] }
+
+    var ordered: [(name: String?, path: String)] = []
+    for attributes in xmlElementAttributes(in: sheetsXML, localName: "sheet") {
+      guard let relationship = xmlRelationshipId(in: attributes),
+            let target = targets[relationship]
+      else { return [] }
+      let rawName = xmlAttribute(attributes, named: "name")?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = (rawName?.isEmpty == false) ? rawName : nil
+      ordered.append((name, worksheetArchivePath(target)))
+    }
+    return ordered
+  }
+
+  private static func worksheetRelationshipTargets(in relsXML: String) -> [String: String] {
+    var targets: [String: String] = [:]
+    for attributes in xmlElementAttributes(in: relsXML, localName: "Relationship") {
+      guard let id = xmlAttribute(attributes, named: "Id") ?? xmlAttribute(attributes, named: "id"),
+            let type = xmlAttribute(attributes, named: "Type") ?? xmlAttribute(attributes, named: "type"),
+            let target = xmlAttribute(attributes, named: "Target") ?? xmlAttribute(attributes, named: "target"),
+            relationshipTypeIsWorksheet(type)
+      else { continue }
+      targets[id] = target
+    }
+    return targets
+  }
+
+  private static func relationshipTypeIsWorksheet(_ type: String) -> Bool {
+    let trimmed = type.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let slash = trimmed.range(of: "/", options: .backwards) else { return false }
+    return trimmed[slash.upperBound...].caseInsensitiveCompare("worksheet") == .orderedSame
+  }
+
+  private static func xmlRelationshipId(in attributes: String) -> String? {
+    if let id = xmlAttribute(attributes, named: "r:id"), !id.isEmpty { return id }
+    let pattern = #":id\s*=\s*(?:"([^"]*)"|'([^']*)')"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(
+            in: attributes,
+            range: NSRange(location: 0, length: (attributes as NSString).length)
+          )
+    else { return nil }
+    let ns = attributes as NSString
+    if match.range(at: 1).location != NSNotFound, match.range(at: 1).length > 0 {
+      return decodeXMLEntities(ns.substring(with: match.range(at: 1)))
+    }
+    if match.numberOfRanges > 2, match.range(at: 2).location != NSNotFound {
+      return decodeXMLEntities(ns.substring(with: match.range(at: 2)))
+    }
+    return nil
+  }
+
+  private static func worksheetArchivePath(_ target: String) -> String {
+    let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.hasPrefix("/") {
+      return String(trimmed.dropFirst())
+    }
+    return resolveZipPath(basePath: "xl/workbook.xml", relativeTarget: trimmed)
+  }
+
+  /// Inner XML of the first element with this local name. Self-closing elements yield an empty body.
+  private static func xmlElementBody(in xml: String, localName: String) -> String? {
+    var index = xml.startIndex
+    while index < xml.endIndex {
+      guard let open = xml.range(of: "<", range: index..<xml.endIndex) else { return nil }
+      let after = open.upperBound
+      if after < xml.endIndex, xml[after] == "/" || xml[after] == "!" || xml[after] == "?" {
+        index = after
+        continue
+      }
+      guard let nameEnd = xml[after...].firstIndex(where: {
+        $0 == " " || $0 == ">" || $0 == "/" || $0 == "\t" || $0 == "\n" || $0 == "\r"
+      }) else { return nil }
+      let rawName = xml[after..<nameEnd]
+      let local = rawName.split(separator: ":").last.map(String.init) ?? String(rawName)
+      guard let tagEnd = xml.range(of: ">", range: nameEnd..<xml.endIndex) else { return nil }
+      let tag = xml[open.lowerBound..<tagEnd.upperBound]
+      if local != localName {
+        index = tagEnd.upperBound
+        continue
+      }
+      if tag.hasSuffix("/>") { return "" }
+      let closeMarks = ["</\(rawName)>", "</\(local)>"]
+      let bodyStart = tagEnd.upperBound
+      for mark in closeMarks {
+        if let close = xml.range(of: mark, range: bodyStart..<xml.endIndex) {
+          return String(xml[bodyStart..<close.lowerBound])
+        }
+      }
+      return nil
+    }
+    return nil
+  }
+
+  private static func xmlElementAttributes(in xml: String, localName: String) -> [String] {
+    var found: [String] = []
+    var index = xml.startIndex
+    while index < xml.endIndex {
+      guard let open = xml.range(of: "<", range: index..<xml.endIndex) else { break }
+      let after = open.upperBound
+      if after < xml.endIndex, xml[after] == "/" || xml[after] == "!" || xml[after] == "?" {
+        index = after
+        continue
+      }
+      guard let nameEnd = xml[after...].firstIndex(where: {
+        $0 == " " || $0 == ">" || $0 == "/" || $0 == "\t" || $0 == "\n" || $0 == "\r"
+      }) else { break }
+      let rawName = xml[after..<nameEnd]
+      let local = rawName.split(separator: ":").last.map(String.init) ?? String(rawName)
+      guard let tagEnd = xml.range(of: ">", range: nameEnd..<xml.endIndex) else { break }
+      if local == localName {
+        found.append(String(xml[nameEnd..<tagEnd.lowerBound]))
+      }
+      index = tagEnd.upperBound
+    }
+    return found
   }
 
   /// CoreXLSX does not expose `definedNames`. Read them from workbook XML the same way shared formulas are read from sheet XML.
@@ -1105,6 +1239,7 @@ nonisolated enum XLSXCodec {
 
   private static func workbookXML(_ workbook: Workbook) -> Data {
     var sheetsXML = ""
+    // Tab order is this element order, the order Excel reads. Do not sort it.
     for (index, sheet) in workbook.sheets.enumerated() {
       let name = escapeXML(sheet.name)
       sheetsXML += #"<sheet name="\#(name)" sheetId="\#(index + 1)" r:id="rId\#(index + 1)"/>"#

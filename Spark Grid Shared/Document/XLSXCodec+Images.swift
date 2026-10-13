@@ -6,11 +6,11 @@ extension XLSXCodec {
   static func importSheetImages(
     into sheet: inout Sheet,
     archiveData: Data,
-    sheetIndex: Int,
     worksheetPath: String
   ) {
-    let sheetNum = sheetIndex + 1
-    let relsPath = "xl/worksheets/_rels/sheet\(sheetNum).xml.rels"
+    let worksheetFile = (worksheetPath as NSString).lastPathComponent
+    let worksheetDir = (worksheetPath as NSString).deletingLastPathComponent
+    let relsPath = "\(worksheetDir)/_rels/\(worksheetFile).rels"
     guard let relsXML = zipEntryString(archiveData: archiveData, entryPath: relsPath),
           let drawingTarget = relationshipTarget(
             in: relsXML,
