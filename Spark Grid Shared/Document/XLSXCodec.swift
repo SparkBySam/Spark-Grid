@@ -514,13 +514,19 @@ nonisolated enum XLSXCodec {
     body: String,
     sharedStrings: SharedStrings?
   ) -> FormulaCache? {
+    let cellTypeEarly = xmlAttribute(attrs, named: "t")?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.contains("<v/>") || body.contains("<v />") {
+      return emptyStringFormulaCache(cellType: cellTypeEarly)
+    }
     guard let vOpen = body.range(of: "<v>"),
           let vClose = body.range(of: "</v>", range: vOpen.upperBound..<body.endIndex)
     else { return nil }
     let raw = decodeXMLEntities(String(body[vOpen.upperBound..<vClose.lowerBound]))
       .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !raw.isEmpty else { return nil }
     let cellType = xmlAttribute(attrs, named: "t")?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if raw.isEmpty {
+      return emptyStringFormulaCache(cellType: cellType)
+    }
     if cellType == "s" || cellType == "sharedString" {
       if let index = Int(raw), let text = sharedString(at: index, in: sharedStrings) {
         return FormulaCache(text: text, type: .string)
@@ -528,6 +534,12 @@ nonisolated enum XLSXCodec {
       return nil
     }
     return FormulaCache(text: raw, type: formulaValueType(forOOXML: cellType))
+  }
+
+  /// Excel stores a blank formula result as `t="str"` and an empty `<v/>`. A missing `<v>` is not a cache.
+  private static func emptyStringFormulaCache(cellType: String?) -> FormulaCache? {
+    guard cellType == "str" || cellType == "inlineStr" else { return nil }
+    return FormulaCache(text: "", type: .string)
   }
 
   private static func formulaValueType(forOOXML cellType: String?) -> ImportedFormulaValueType {
@@ -1372,9 +1384,12 @@ nonisolated enum XLSXCodec {
   ]
 
   private static func formulaCacheMarkup(_ cell: Cell) -> (typeAttribute: String, valueElement: String) {
-    guard let text = cell.importedFormulaResult?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !text.isEmpty
-    else { return ("", "") }
+    guard let raw = cell.importedFormulaResult else { return ("", "") }
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty {
+      guard cell.importedFormulaValueType == .string else { return ("", "") }
+      return (#" t="str""#, "<v/>")
+    }
     let type = cell.importedFormulaValueType ?? inferredFormulaValueType(text)
     switch type {
     case .number:

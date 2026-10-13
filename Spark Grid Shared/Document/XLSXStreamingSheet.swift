@@ -320,6 +320,7 @@ nonisolated enum StreamingWorksheet {
               return (text, importedType(cellType))
             }
           }
+          if let blank = emptyStringCache(cellType) { return blank }
         } else {
           let text = decodeXMLContent(valueText)
           if !text.isEmpty {
@@ -331,6 +332,7 @@ nonisolated enum StreamingWorksheet {
               return (text, importedType(cellType))
             }
           }
+          if let blank = emptyStringCache(cellType) { return blank }
         }
       }
       if cellType == "s" || cellType == "sharedString", let valueText, let resolved = sharedText(at: decodeXMLContent(valueText)) {
@@ -343,8 +345,14 @@ nonisolated enum StreamingWorksheet {
       if let valueText {
         let text = decodeXMLContent(valueText)
         if !text.isEmpty { return (text, importedType(cellType)) }
+        if let blank = emptyStringCache(cellType) { return blank }
       }
       return nil
+    }
+
+    func emptyStringCache(_ cellType: String?) -> (text: String, type: ImportedFormulaValueType)? {
+      guard cellType == "str" || cellType == "inlineStr" else { return nil }
+      return ("", .string)
     }
 
     func sharedText(at raw: String) -> String? {
