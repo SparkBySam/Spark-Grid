@@ -33,16 +33,30 @@ final class SpreadsheetGridNSView: NSView {
   private var cachedRowOffsets: [CGFloat]?
   private var cachedColumnCount = 0
   private var cachedRowCount = 0
-  private var cachedRowLayoutKey = ""
+  private var cachedRowLayoutRevision = Int.min
+  private var cachedRowLayoutZoom: CGFloat = -.greatestFiniteMagnitude
   private var cachedWrappedRowHeights: [Int: CGFloat] = [:]
-  private var cachedWrappedRowKey = ""
+  private var cachedWrappedRevision = Int.min
+  private var cachedWrappedZoom: CGFloat = -.greatestFiniteMagnitude
   private struct CellPaintCacheEntry {
     var paint: ConditionalPaint
     var value: CellValue
     var displayText: String
   }
   private var cellPaintCache: [CellAddress: CellPaintCacheEntry] = [:]
-  private var cellPaintCacheKey = ""
+  private var cellPaintCacheRevision = Int.min
+  private var cellPaintCacheZoom: CGFloat = -.greatestFiniteMagnitude
+  /// One copy of the sheet for the draw in progress. Cell loops read this instead of `activeSheet`.
+  private var layoutSheet: Sheet?
+  private var drawColumnOffsets: [CGFloat]?
+  private var drawRowOffsets: [CGFloat]?
+  private var drawFrozenRows: Int?
+  private var drawFrozenCols: Int?
+  private var drawMergeLookup: MergeLookup?
+  private var drawLayoutDepth = 0
+  private var cachedMergeLookup: MergeLookup?
+  private var cachedMergeRevision = Int.min
+  private var cachedMergeSheetID: UUID?
   /// How far past the viewport a scroll plane is rasterized, in points.
   /// A tick inside this margin blits the plane; it does not redraw cell text.
   static let liveScrollOverscan: CGFloat = 280
@@ -554,15 +568,137 @@ final class SpreadsheetGridNSView: NSView {
 
   // MARK: - Layout helpers
 
+  /// Merges indexed by row so a cell does not walk `mergedRanges`.
+  private final class MergeLookup {
+    struct Interval {
+      var startCol: Int
+      var endCol: Int
+      var order: Int
+      var range: CellRange
+    }
+
+    var rows: [Int: [Interval]]
+
+    init(ranges: [CellRange]) {
+      var built: [Int: [Interval]] = [:]
+      for (order, range) in ranges.enumerated() {
+        let n = range.normalized
+        guard n.minRow <= n.maxRow, n.minCol <= n.maxCol else { continue }
+        let interval = Interval(startCol: n.minCol, endCol: n.maxCol, order: order, range: range)
+        for row in n.minRow...n.maxRow {
+          built[row, default: []].append(interval)
+        }
+      }
+      for row in built.keys {
+        built[row]?.sort { $0.startCol < $1.startCol }
+      }
+      rows = built
+    }
+
+    func containing(_ address: CellAddress) -> Interval? {
+      guard let intervals = rows[address.row], !intervals.isEmpty else { return nil }
+      var lo = 0
+      var hi = intervals.count - 1
+      var found = -1
+      while lo <= hi {
+        let mid = (lo + hi) / 2
+        if intervals[mid].startCol <= address.col {
+          found = mid
+          lo = mid + 1
+        } else {
+          hi = mid - 1
+        }
+      }
+      guard found >= 0 else { return nil }
+      var best: Interval?
+      var index = found
+      while index >= 0, intervals[index].startCol <= address.col {
+        let interval = intervals[index]
+        if address.col <= interval.endCol {
+          if best == nil || interval.order < best!.order {
+            best = interval
+          }
+        }
+        index -= 1
+      }
+      return best
+    }
+  }
+
+  private enum MergeRole {
+    case none
+    case anchor(CellRange)
+    case covered
+  }
+
+  private func sheetForLayout() -> Sheet? {
+    if let layoutSheet { return layoutSheet }
+    return viewModel?.activeSheet
+  }
+
+  private func beginDrawLayout() {
+    if drawLayoutDepth == 0 {
+      layoutSheet = viewModel?.activeSheet
+      drawFrozenRows = layoutSheet?.frozenRows ?? 0
+      drawFrozenCols = layoutSheet?.frozenColumns ?? 0
+      if let sheet = layoutSheet {
+        drawMergeLookup = mergeLookup(for: sheet)
+      }
+      let columns = columnOffsets()
+      let rows = rowOffsets()
+      drawColumnOffsets = columns
+      drawRowOffsets = rows
+    }
+    drawLayoutDepth += 1
+  }
+
+  private func endDrawLayout() {
+    drawLayoutDepth = max(0, drawLayoutDepth - 1)
+    guard drawLayoutDepth == 0 else { return }
+    layoutSheet = nil
+    drawColumnOffsets = nil
+    drawRowOffsets = nil
+    drawFrozenRows = nil
+    drawFrozenCols = nil
+    drawMergeLookup = nil
+  }
+
+  private func mergeLookup(for sheet: Sheet) -> MergeLookup {
+    let revision = viewModel?.contentRevision ?? -1
+    if let cachedMergeLookup, cachedMergeRevision == revision, cachedMergeSheetID == sheet.id {
+      return cachedMergeLookup
+    }
+    let built = MergeLookup(ranges: sheet.mergedRanges)
+    cachedMergeLookup = built
+    cachedMergeRevision = revision
+    cachedMergeSheetID = sheet.id
+    return built
+  }
+
+  private func mergeRole(at address: CellAddress, sheet: Sheet) -> MergeRole {
+    let lookup = drawMergeLookup ?? mergeLookup(for: sheet)
+    guard let interval = lookup.containing(address) else { return .none }
+    let n = interval.range.normalized
+    if address.row == n.minRow, address.col == n.minCol {
+      return .anchor(interval.range)
+    }
+    return .covered
+  }
+
   private func columnWidth(at col: Int) -> CGFloat {
-    guard let sheet = viewModel?.activeSheet else { return Self.defaultColumnWidth * zoomScale }
+    if let offsets = drawColumnOffsets, col >= 0, col + 1 < offsets.count {
+      return offsets[col + 1] - offsets[col]
+    }
+    guard let sheet = sheetForLayout() else { return Self.defaultColumnWidth * zoomScale }
     return sheet.columnWidth(for: col, default: Self.defaultColumnWidth) * zoomScale
   }
 
   func rowHeight(at row: Int) -> CGFloat {
+    if let offsets = drawRowOffsets, row >= 0, row + 1 < offsets.count {
+      return offsets[row + 1] - offsets[row]
+    }
     if viewModel?.isRowHiddenByFilter(row) == true { return 0 }
-    guard let viewModel else { return Self.defaultRowHeight * zoomScale }
-    let sheet = viewModel.activeSheet
+    guard let viewModel, let sheet = sheetForLayout() else { return Self.defaultRowHeight * zoomScale }
     return CellTextLayout.displayRowHeight(
       row: row,
       sheet: sheet,
@@ -573,8 +709,9 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func wrappedRowHeights(viewModel: SpreadsheetViewModel, sheet: Sheet) -> [Int: CGFloat] {
-    let key = "\(viewModel.contentRevision)|\(zoomScale)"
-    if key == cachedWrappedRowKey { return cachedWrappedRowHeights }
+    if viewModel.contentRevision == cachedWrappedRevision, zoomScale == cachedWrappedZoom {
+      return cachedWrappedRowHeights
+    }
     let zoom = zoomScale
     let heights = CellTextLayout.wrappedRowHeights(
       sheet: sheet,
@@ -595,7 +732,8 @@ final class SpreadsheetGridNSView: NSView {
       }
     )
     cachedWrappedRowHeights = heights
-    cachedWrappedRowKey = key
+    cachedWrappedRevision = viewModel.contentRevision
+    cachedWrappedZoom = zoomScale
     return heights
   }
 
@@ -605,10 +743,10 @@ final class SpreadsheetGridNSView: NSView {
     sheet: Sheet,
     cell: Cell
   ) -> CellPaintCacheEntry {
-    let key = "\(viewModel.contentRevision)|\(zoomScale)"
-    if key != cellPaintCacheKey {
+    if viewModel.contentRevision != cellPaintCacheRevision || zoomScale != cellPaintCacheZoom {
       cellPaintCache.removeAll(keepingCapacity: true)
-      cellPaintCacheKey = key
+      cellPaintCacheRevision = viewModel.contentRevision
+      cellPaintCacheZoom = zoomScale
     }
     if let cached = cellPaintCache[address] {
       return cached
@@ -626,11 +764,13 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func frozenColumnCount() -> Int {
-    viewModel?.activeSheet.frozenColumns ?? 0
+    if let drawFrozenCols { return drawFrozenCols }
+    return sheetForLayout()?.frozenColumns ?? 0
   }
 
   private func frozenRowCount() -> Int {
-    viewModel?.activeSheet.frozenRows ?? 0
+    if let drawFrozenRows { return drawFrozenRows }
+    return sheetForLayout()?.frozenRows ?? 0
   }
 
   private func frozenColumnBoundaryX() -> CGFloat {
@@ -678,10 +818,16 @@ final class SpreadsheetGridNSView: NSView {
     cachedRowOffsets = nil
     cachedColumnCount = 0
     cachedRowCount = 0
-    cachedRowLayoutKey = ""
-    cachedWrappedRowKey = ""
+    cachedRowLayoutRevision = Int.min
+    cachedRowLayoutZoom = -.greatestFiniteMagnitude
+    cachedWrappedRevision = Int.min
+    cachedWrappedZoom = -.greatestFiniteMagnitude
     cellPaintCache.removeAll(keepingCapacity: true)
-    cellPaintCacheKey = ""
+    cellPaintCacheRevision = Int.min
+    cellPaintCacheZoom = -.greatestFiniteMagnitude
+    cachedMergeLookup = nil
+    cachedMergeRevision = Int.min
+    cachedMergeSheetID = nil
     invalidateScrollPlanes()
   }
 
@@ -696,6 +842,7 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func columnOffsets() -> [CGFloat] {
+    if let drawColumnOffsets { return drawColumnOffsets }
     let count = columnCount()
     if let cached = cachedColumnOffsets, cachedColumnCount == count {
       return cached
@@ -710,9 +857,14 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func rowOffsets() -> [CGFloat] {
+    if let drawRowOffsets { return drawRowOffsets }
     let count = rowCount()
-    let key = "\(count)|\(viewModel?.contentRevision ?? -1)|\(zoomScale)"
-    if let cached = cachedRowOffsets, cachedRowCount == count, cachedRowLayoutKey == key {
+    let revision = viewModel?.contentRevision ?? -1
+    if let cached = cachedRowOffsets,
+       cachedRowCount == count,
+       cachedRowLayoutRevision == revision,
+       cachedRowLayoutZoom == zoomScale
+    {
       return cached
     }
     var offsets = [CGFloat](repeating: 0, count: count + 1)
@@ -721,7 +873,8 @@ final class SpreadsheetGridNSView: NSView {
     }
     cachedRowOffsets = offsets
     cachedRowCount = count
-    cachedRowLayoutKey = key
+    cachedRowLayoutRevision = revision
+    cachedRowLayoutZoom = zoomScale
     return offsets
   }
 
@@ -771,11 +924,17 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func rowCount() -> Int {
-    viewModel?.activeSheet.effectiveRowCount ?? Workbook.defaultRowCount
+    if let offsets = drawRowOffsets, !offsets.isEmpty {
+      return offsets.count - 1
+    }
+    return sheetForLayout()?.effectiveRowCount ?? Workbook.defaultRowCount
   }
 
   private func columnCount() -> Int {
-    viewModel?.activeSheet.effectiveColumnCount ?? Workbook.defaultColumnCount
+    if let offsets = drawColumnOffsets, !offsets.isEmpty {
+      return offsets.count - 1
+    }
+    return sheetForLayout()?.effectiveColumnCount ?? Workbook.defaultColumnCount
   }
 
   private func columnAtContent(x: CGFloat) -> Int {
@@ -871,8 +1030,18 @@ final class SpreadsheetGridNSView: NSView {
 
   /// Paint rect for a cell, spanning merges at the anchor. Returns nil for covered (non-anchor) cells.
   private func paintRect(for address: CellAddress, sheet: Sheet) -> NSRect? {
-    if sheet.isCoveredByMerge(address) { return nil }
-    if let merge = sheet.mergeContaining(address) {
+    switch mergeRole(at: address, sheet: sheet) {
+    case .covered:
+      return nil
+    case .anchor(let range):
+      return paintRect(for: address, merge: range)
+    case .none:
+      return paintRect(for: address, merge: nil)
+    }
+  }
+
+  private func paintRect(for address: CellAddress, merge: CellRange?) -> NSRect? {
+    if let merge {
       let n = merge.normalized
       let topLeft = rectForCell(row: n.minRow, col: n.minCol)
       let bottomRight = rectForCell(row: n.maxRow, col: n.maxCol)
@@ -1374,6 +1543,8 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func drawRasterStack(_ target: RasterTarget, in dirtyRect: NSRect) {
+    beginDrawLayout()
+    defer { endDrawLayout() }
     switch target {
     case .bodyCells:
       NSColor.windowBackgroundColor.setFill()
@@ -1907,8 +2078,12 @@ final class SpreadsheetGridNSView: NSView {
   private func prepareViewportValues() {
     guard !isPreparingPaintValues, rasterTarget == nil, let viewModel else { return }
     isPreparingPaintValues = true
-    defer { isPreparingPaintValues = false }
-    let sheet = viewModel.activeSheet
+    beginDrawLayout()
+    defer {
+      endDrawLayout()
+      isPreparingPaintValues = false
+    }
+    guard let sheet = layoutSheet else { return }
     let rows = visibleRowRange()
     let cols = visibleColumnRange()
     guard rows.lowerBound <= rows.upperBound, cols.lowerBound <= cols.upperBound else { return }
@@ -1916,15 +2091,21 @@ final class SpreadsheetGridNSView: NSView {
     for row in rows {
       for col in cols {
         let address = CellAddress(row: row, col: col)
-        if sheet.isCoveredByMerge(address) { continue }
+        let role = mergeRole(at: address, sheet: sheet)
+        if case .covered = role { continue }
         let hasCell = sheet.cells[address] != nil
-        let isMergeAnchor = sheet.mergeContaining(address) != nil
-        guard hasCell || isMergeAnchor else { continue }
-        guard let rect = paintRect(for: address, sheet: sheet), clip.intersects(rect) else { continue }
+        if !hasCell, case .none = role { continue }
+        let merge = mergeRange(from: role)
+        guard let rect = paintRect(for: address, merge: merge), clip.intersects(rect) else { continue }
         let cell = sheet.cell(at: address)
         _ = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
       }
     }
+  }
+
+  private func mergeRange(from role: MergeRole) -> CellRange? {
+    if case .anchor(let range) = role { return range }
+    return nil
   }
 
   private func prepareValuesCovering(viewRect: NSRect, scroll: CGPoint, contentOverride: NSRect?) {
@@ -1942,6 +2123,8 @@ final class SpreadsheetGridNSView: NSView {
   private var isPreparingPaintValues = false
 
   override func draw(_ dirtyRect: NSRect) {
+    beginDrawLayout()
+    defer { endDrawLayout() }
     if let target = rasterTarget {
       drawRasterStack(target, in: dirtyRect)
       return
@@ -2434,7 +2617,7 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func mergeGridLineCuts(region: GridLineRegion) -> [MergeGridLineCut] {
-    guard let merges = viewModel?.activeSheet.mergedRanges, !merges.isEmpty else { return [] }
+    guard let merges = sheetForLayout()?.mergedRanges, !merges.isEmpty else { return [] }
     let frozenRows = frozenRowCount()
     let frozenCols = frozenColumnCount()
     let rowLimit = rowCount()
@@ -2610,7 +2793,7 @@ final class SpreadsheetGridNSView: NSView {
 
   /// When most on-screen cells already have custom borders, default gridlines are pure overdraw.
   private func visibleRegionIsMostlyBordered() -> Bool {
-    guard let sheet = viewModel?.activeSheet else { return false }
+    guard let sheet = sheetForLayout() else { return false }
     let rows = visibleRowRange()
     let cols = visibleColumnRange()
     var bordered = 0
@@ -3353,7 +3536,7 @@ final class SpreadsheetGridNSView: NSView {
 
   private func drawCells(in dirtyRect: NSRect) {
     guard let viewModel else { return }
-    let sheet = viewModel.activeSheet
+    let sheet = layoutSheet ?? viewModel.activeSheet
     let frozenRows = frozenRowCount()
     let frozenCols = frozenColumnCount()
 
@@ -3373,12 +3556,12 @@ final class SpreadsheetGridNSView: NSView {
     for row in rowRange where row >= frozenRows {
       for col in colRange where col >= frozenCols {
         let address = CellAddress(row: row, col: col)
-        if sheet.isCoveredByMerge(address) { continue }
+        let role = mergeRole(at: address, sheet: sheet)
+        if case .covered = role { continue }
         let hasCell = sheet.cells[address] != nil
-        let isMergeAnchor = sheet.mergeContaining(address) != nil
-        guard hasCell || isMergeAnchor else { continue }
+        if !hasCell, case .none = role { continue }
         let cell = sheet.cell(at: address)
-        guard let rect = paintRect(for: address, sheet: sheet) else { continue }
+        guard let rect = paintRect(for: address, merge: mergeRange(from: role)) else { continue }
         guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
         let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
         drawCellContent(
@@ -3425,12 +3608,12 @@ final class SpreadsheetGridNSView: NSView {
     for row in rowRange {
       for col in colRange {
         let address = CellAddress(row: row, col: col)
-        if sheet.isCoveredByMerge(address) { continue }
+        let role = mergeRole(at: address, sheet: sheet)
+        if case .covered = role { continue }
         let hasCell = sheet.cells[address] != nil
-        let isMergeAnchor = sheet.mergeContaining(address) != nil
-        guard hasCell || isMergeAnchor else { continue }
+        if !hasCell, case .none = role { continue }
         let cell = sheet.cell(at: address)
-        guard let rect = paintRect(for: address, sheet: sheet) else { continue }
+        guard let rect = paintRect(for: address, merge: mergeRange(from: role)) else { continue }
         guard dirtyRect.intersects(rect) else { continue }
         let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
         drawCellContent(
@@ -3479,7 +3662,8 @@ final class SpreadsheetGridNSView: NSView {
         for col in colLower...colUpper {
           let address = CellAddress(row: row, col: col)
           if viewModel.isEditing, isEditorActive, address == viewModel.selectionAnchor { continue }
-          if sheet.isCoveredByMerge(address) { continue }
+          let role = mergeRole(at: address, sheet: sheet)
+          if case .covered = role { continue }
           let rect = rectForCell(row: row, col: col)
           guard isCellRectInContentArea(rect), dirtyRect.intersects(rect) else { continue }
           rect.fill()
@@ -3594,7 +3778,7 @@ final class SpreadsheetGridNSView: NSView {
 
   private func drawScrollableOverflowText(in dirtyRect: NSRect) {
     guard let viewModel else { return }
-    let sheet = viewModel.activeSheet
+    let sheet = layoutSheet ?? viewModel.activeSheet
     let frozenRows = frozenRowCount()
     let frozenCols = frozenColumnCount()
     let rows = visibleRowRange()
@@ -3616,7 +3800,7 @@ final class SpreadsheetGridNSView: NSView {
 
   private func drawFrozenOverflowText(in dirtyRect: NSRect) {
     guard let viewModel else { return }
-    let sheet = viewModel.activeSheet
+    let sheet = layoutSheet ?? viewModel.activeSheet
     let frozenRows = frozenRowCount()
     let frozenCols = frozenColumnCount()
     let visibleRows = visibleRowRange()
@@ -3684,7 +3868,8 @@ final class SpreadsheetGridNSView: NSView {
     for row in rowRange {
       for col in columns {
         let address = CellAddress(row: row, col: col)
-        if sheet.isCoveredByMerge(address) { continue }
+        let role = mergeRole(at: address, sheet: sheet)
+        if case .covered = role { continue }
         let cell = sheet.cell(at: address)
         guard !cell.raw.isEmpty else { continue }
         if rasterTarget == nil, viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
@@ -3695,7 +3880,7 @@ final class SpreadsheetGridNSView: NSView {
         if paint.dataBarFraction != nil && paint.dataBarShowValue == false { continue }
         let text = cached.displayText
         guard !text.isEmpty else { continue }
-        guard let cellRect = paintRect(for: address, sheet: sheet) else { continue }
+        guard let cellRect = paintRect(for: address, merge: mergeRange(from: role)) else { continue }
         let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
         let textRect = textDrawingRect(in: cellRect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
         guard textRect.width > 1, textRect.height > 1 else { continue }
@@ -3706,7 +3891,7 @@ final class SpreadsheetGridNSView: NSView {
         liveScrollTextPaints += 1
         let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
         let sourceColumns: ClosedRange<Int>
-        if let merge = sheet.mergeContaining(address) {
+        if let merge = mergeRange(from: role) {
           let span = merge.normalized
           sourceColumns = span.minCol...span.maxCol
         } else {
@@ -3723,18 +3908,20 @@ final class SpreadsheetGridNSView: NSView {
           columnOrigin: { self.xForColumn($0) },
           columnWidth: { self.columnWidth(at: $0) },
           blocks: { column in
-            CellTextLayout.blocksOverflow(sheet: sheet, row: row, column: column) { address in
-              let neighbor = sheet.cell(at: address)
-              if !neighbor.raw.isEmpty {
-                return self.cachedCellPaint(
-                  at: address,
-                  viewModel: viewModel,
-                  sheet: sheet,
-                  cell: neighbor
-                ).displayText
-              }
-              return ""
+            guard column >= 0, row >= 0 else { return true }
+            let neighborAddress = CellAddress(row: row, col: column)
+            let neighborRole = self.mergeRole(at: neighborAddress, sheet: sheet)
+            if case .none = neighborRole {
+              let neighbor = sheet.cell(at: neighborAddress)
+              guard !neighbor.raw.isEmpty else { return false }
+              return !self.cachedCellPaint(
+                at: neighborAddress,
+                viewModel: viewModel,
+                sheet: sheet,
+                cell: neighbor
+              ).displayText.isEmpty
             }
+            return true
           }
         )
         let spill = NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
@@ -3877,7 +4064,7 @@ final class SpreadsheetGridNSView: NSView {
 
   private func drawFrozenCells(in dirtyRect: NSRect) {
     guard let viewModel else { return }
-    let sheet = viewModel.activeSheet
+    let sheet = layoutSheet ?? viewModel.activeSheet
     let frozenRows = frozenRowCount()
     let frozenCols = frozenColumnCount()
     let visibleRows = visibleRowRange()
@@ -3930,8 +4117,10 @@ final class SpreadsheetGridNSView: NSView {
 
   /// Selection, formula highlights, and the fill handle. Drawn above scroll planes.
   fileprivate func drawSelectionChrome(in dirtyRect: NSRect) {
-    guard let viewModel else { return }
-    let sheet = viewModel.activeSheet
+    guard viewModel != nil else { return }
+    beginDrawLayout()
+    defer { endDrawLayout() }
+    guard let viewModel, let sheet = layoutSheet else { return }
     for (rows, cols) in onScreenSelectionRegions() {
       drawSelectionWash(
         in: dirtyRect,
