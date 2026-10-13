@@ -82,23 +82,174 @@ final class FormulaEngine {
 
   /// Value drawn on the sheet. A calculated result or imported cache is shown.
   /// The formula source is not: that text belongs in the formula bar.
+  /// A reference can also surface another cell's formula source when that
+  /// precedent has not been calculated yet. The sheet calculates it.
+  /// `displayValue` is left as the answer-check path.
   func sheetDisplayValue(at address: CellAddress, sheet: Sheet, cell: Cell? = nil) -> CellValue {
     let value = displayValue(at: address, sheet: sheet)
-    let resolved = cell ?? sheet.cell(at: address)
     guard case .string(let text) = value else { return value }
+    let resolved = cell ?? sheet.cell(at: address)
     let formula = resolved.raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard FormulaSyntax.isFormula(formula),
-          text.trimmingCharacters(in: .whitespacesAndNewlines) == formula
-    else { return value }
-    if let imported = resolved.cachedFormulaValue {
-      return imported
+    let shown = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard FormulaSyntax.isFormula(formula) else { return value }
+    if shown == formula {
+      if let imported = resolved.cachedFormulaValue {
+        return imported
+      }
+      // A parsed formula may evaluate to its own source text. The unparsed
+      // fallback stores that source and would otherwise paint it.
+      if formulaAST[address] != nil {
+        return value
+      }
+      return .blank
     }
-    // A parsed formula may evaluate to its own source text. The unparsed
-    // fallback stores that source and would otherwise paint it.
-    if formulaAST[address] != nil {
+    // Labels and blanks stay put. Another cell's formula source (`=SUM(...)`)
+    // is calculated here; `displayValue` itself stays the answer-check path.
+    guard shown.hasPrefix("=") else { return value }
+    guard precedentFormulasNeedIngest(at: address, sheet: sheet) else { return value }
+    return valueAfterIngestingPrecedents(at: address, sheet: sheet, cell: resolved)
+  }
+
+  /// True when a same-sheet precedent is a formula that was never parsed, so a
+  /// lookup would return its source text instead of a calculated value.
+  private func precedentFormulasNeedIngest(at address: CellAddress, sheet: Sheet) -> Bool {
+    guard let deps = dependencies[address] else { return false }
+    for dep in deps {
+      if formulaAST[dep] != nil { continue }
+      let raw = sheet.cell(at: dep).raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      if FormulaSyntax.isFormula(raw) { return true }
+    }
+    return false
+  }
+
+  /// Parse uncalculated formula precedents, then evaluate this cell again.
+  /// This stays off `recalculate`'s eval loop so cached sheets paint as before.
+  private func valueAfterIngestingPrecedents(at address: CellAddress, sheet: Sheet, cell: Cell) -> CellValue {
+    // The first pass stored the precedent's formula text. Drop it and calculate.
+    valueCache.removeValue(forKey: address)
+    let value = calculateWithPrecedents(at: address, sheet: sheet)
+    if Self.isFormulaText(value), formulaTextMatchesStoredFormula(value, sheet: sheet, address: address) {
+      if let imported = cell.cachedFormulaValue {
+        valueCache[address] = imported
+        return imported
+      }
+      valueCache[address] = .blank
+      return .blank
+    }
+    return value
+  }
+
+  /// Evaluates `address`, calculating same-sheet formula precedents first.
+  /// Range arguments are not cell dependencies, so formula cells inside those
+  /// ranges are calculated before the formula itself runs.
+  private func calculateWithPrecedents(at address: CellAddress, sheet: Sheet) -> CellValue {
+    if let literal = literalOnSheet(at: address, sheet: sheet) {
+      return literal
+    }
+    if let cached = valueCache[address], !Self.isFormulaText(cached) {
+      return cached
+    }
+    let cell = sheet.cell(at: address)
+    let raw = cell.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard FormulaSyntax.isFormula(raw) else {
+      let value = literalOrEmpty(raw)
+      valueCache[address] = value
       return value
     }
-    return .blank
+    if !precedentVisiting.insert(address).inserted {
+      let value = CellValue.error(.cycle)
+      valueCache[address] = value
+      return value
+    }
+    defer { precedentVisiting.remove(address) }
+
+    valueCache.removeValue(forKey: address)
+    ensureIngested(address: address, raw: raw, sheet: sheet)
+    guard let expr = formulaAST[address] else {
+      let value = unresolvedValue(cell)
+      valueCache[address] = value
+      return value
+    }
+    if let deps = dependencies[address] {
+      for dep in deps {
+        _ = calculateWithPrecedents(at: dep, sheet: sheet)
+      }
+    }
+    if let ranges = dependencyRanges[address] {
+      calculateFormulaCells(in: ranges, sheet: sheet)
+    }
+    var evaluator = FormulaEvaluator { [weak self] ref in
+      guard let self else { return .blank }
+      return self.resolve(ref, activeSheet: sheet, localEval: { _ in })
+    }
+    evaluator.evaluationOrigin = address
+    evaluator.prepareForCellEvaluation(origin: address)
+    evaluator.namedRangeLookup = { [weak self] name in
+      self?.namedRangeExpr(named: name)
+    }
+    evaluator.sheetExtent = { [weak self] sheetName in
+      guard let self else { return (999, 25) }
+      return self.extent(for: sheetName ?? self.activeSheetName)
+    }
+    evaluator.aggregateRangeCache = aggregateRangeCache
+    evaluator.lookupTableCache = lookupTableCache
+    let value = evaluator.evaluate(expr)
+    valueCache[address] = value
+    return value
+  }
+
+  private var precedentVisiting: Set<CellAddress> = []
+
+  private func calculateFormulaCells(in ranges: [CellRange], sheet: Sheet) {
+    for range in ranges {
+      let bounds = range.normalized
+      let rows = bounds.maxRow - bounds.minRow + 1
+      let cols = bounds.maxCol - bounds.minCol + 1
+      guard rows > 0, cols > 0 else { continue }
+      if rows * cols > 512 {
+        for (dep, cell) in sheet.cells {
+          guard dep.row >= bounds.minRow, dep.row <= bounds.maxRow,
+                dep.col >= bounds.minCol, dep.col <= bounds.maxCol,
+                FormulaSyntax.isFormula(cell.raw)
+          else { continue }
+          _ = calculateWithPrecedents(at: dep, sheet: sheet)
+        }
+        continue
+      }
+      for row in bounds.minRow...bounds.maxRow {
+        for col in bounds.minCol...bounds.maxCol {
+          let dep = CellAddress(row: row, col: col)
+          guard FormulaSyntax.isFormula(sheet.cell(at: dep).raw) else { continue }
+          _ = calculateWithPrecedents(at: dep, sheet: sheet)
+        }
+      }
+    }
+  }
+
+  private func formulaTextMatchesStoredFormula(
+    _ value: CellValue,
+    sheet: Sheet,
+    address: CellAddress
+  ) -> Bool {
+    guard case .string(let text) = value else { return false }
+    let shown = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines) == shown {
+      return true
+    }
+    guard let deps = dependencies[address] else { return false }
+    for dep in deps {
+      if sheet.cell(at: dep).raw.trimmingCharacters(in: .whitespacesAndNewlines) == shown {
+        return true
+      }
+    }
+    return false
+  }
+
+  private static func isFormulaText(_ value: CellValue) -> Bool {
+    if case .string(let text) = value {
+      return FormulaSyntax.isFormula(text)
+    }
+    return false
   }
 
   /// Evaluates a conditional-formatting formula relative to `origin` as if entered at `address`.
