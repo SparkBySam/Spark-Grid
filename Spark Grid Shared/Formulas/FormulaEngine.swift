@@ -26,6 +26,9 @@ final class FormulaEngine {
   private var ingestShapeStripPlans: [ShapeStripPlan] = []
   /// Results from `recalculateEntireWorkbook` (and incremental edits), keyed by sheet name.
   private var recalculatedSheetValues: [String: [CellAddress: CellValue]] = [:]
+  /// Whole-workbook precedents. Built off the main thread; sheet switches do not rebuild it.
+  private var dependencyGraph: WorkbookDependencyGraph?
+  private var dependencyGraphToken: UInt64 = 0
 
   private var workbook = Workbook.empty
   private var activeSheetName = "Sheet1"
@@ -191,6 +194,7 @@ final class FormulaEngine {
       }
       recalculateAll(sheet: sheet)
     }
+    scheduleWorkbookDependencyGraph()
   }
 
   /// Convenience when only a single sheet is available (e.g. isolated print of one sheet).
@@ -254,6 +258,8 @@ final class FormulaEngine {
   }
 
   func clear() {
+    dependencyGraphToken &+= 1
+    dependencyGraph = nil
     clearFormulaGraph()
     valuesBySheet.removeAll(keepingCapacity: true)
     aggregateRangeCache.invalidateAll()
@@ -265,6 +271,75 @@ final class FormulaEngine {
 
   private func sheetKey(_ name: String) -> String {
     name.lowercased()
+  }
+
+  /// Parse every sheet's formulas into one graph. The open and edit paths do not wait on it.
+  private func scheduleWorkbookDependencyGraph() {
+    dependencyGraphToken &+= 1
+    dependencyGraph = nil
+    let token = dependencyGraphToken
+    let input = workbookGraphInput(workbook)
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      let graph = WorkbookDependencyGraph.build(input)
+      Task { @MainActor [weak self] in
+        guard let self, self.dependencyGraphToken == token else { return }
+        self.dependencyGraph = graph
+      }
+    }
+  }
+
+  private func workbookGraphInput(_ workbook: Workbook) -> WorkbookGraphInput {
+    var sheets: [WorkbookGraphInput.Sheet] = []
+    var sheetIDsByName: [String: Int] = [:]
+    sheets.reserveCapacity(workbook.sheets.count)
+    for sheet in workbook.sheets {
+      let sheetID = sheets.count
+      let key = sheet.name.lowercased()
+      if sheetIDsByName[key] == nil {
+        sheetIDsByName[key] = sheetID
+      }
+      var columns: [[WorkbookGraphInput.Cell]] = []
+      columns.reserveCapacity(sheet.formulaIngestByColumn.count)
+      for column in sheet.formulaIngestByColumn.keys.sorted() {
+        let entries = sheet.formulaIngestByColumn[column] ?? []
+        var cells: [WorkbookGraphInput.Cell] = []
+        cells.reserveCapacity(entries.count)
+        for (address, raw) in entries {
+          cells.append(WorkbookGraphInput.Cell(row: address.row, col: address.col, raw: raw))
+        }
+        columns.append(cells)
+      }
+      sheets.append(
+        WorkbookGraphInput.Sheet(
+          name: key,
+          sheetID: sheetID,
+          maxRow: max(0, sheet.effectiveRowCount - 1),
+          maxCol: max(0, sheet.effectiveColumnCount - 1),
+          columns: columns
+        )
+      )
+    }
+    var names: [WorkbookGraphInput.Name] = []
+    for named in workbook.namedRanges.values where named.resolvesToRange {
+      guard let sheetID = sheetIDsByName[named.sheetName.lowercased()] else { continue }
+      names.append(
+        WorkbookGraphInput.Name(
+          key: named.name.uppercased(),
+          sheetID: sheetID,
+          minRow: min(named.startRow, named.endRow),
+          maxRow: max(named.startRow, named.endRow),
+          minCol: min(named.startCol, named.endCol),
+          maxCol: max(named.startCol, named.endCol)
+        )
+      )
+    }
+    return WorkbookGraphInput(
+      sheets: sheets,
+      names: names,
+      sheetIDsByName: sheetIDsByName,
+      fallbackMaxRow: max(0, Workbook.defaultRowCount - 1),
+      fallbackMaxCol: max(0, Workbook.defaultColumnCount - 1)
+    )
   }
 
   private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String) -> String {

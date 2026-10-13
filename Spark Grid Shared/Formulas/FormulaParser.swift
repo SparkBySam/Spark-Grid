@@ -1,6 +1,6 @@
 import Foundation
 
-struct FormulaParser {
+nonisolated struct FormulaParser {
   private var lexer: FormulaLexer
   private var current: FormulaToken = .eof
 
@@ -170,7 +170,7 @@ struct FormulaParser {
   }
 }
 
-enum FormulaSyntax {
+nonisolated enum FormulaSyntax {
   static func isFormula(_ raw: String) -> Bool {
     raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("=")
   }

@@ -24,7 +24,7 @@ enum FormulaFunctions {
 
 /// Adjusts relative references when filling or copying formulas,
 /// and shifts references after insert/delete row/column.
-enum FormulaRewriter {
+nonisolated enum FormulaRewriter {
   enum Axis {
     case row
     case column
