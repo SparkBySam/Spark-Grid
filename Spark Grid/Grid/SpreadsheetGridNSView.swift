@@ -1123,9 +1123,26 @@ final class SpreadsheetGridNSView: NSView {
   private func ensureSelectionVisible() -> Bool {
     guard let viewModel else { return false }
     let before = scrollOrigin
-    ensureCellVisible(row: viewModel.selectionAnchor.row, col: viewModel.selectionAnchor.col)
-    ensureCellVisible(row: viewModel.selectionEnd.row, col: viewModel.selectionEnd.col)
+    let anchor = viewModel.selectionAnchor
+    let end = viewModel.selectionEnd
+    ensureCellVisible(row: anchor.row, col: anchor.col)
+    // A merged click expands the selection to the far corner. Scrolling that
+    // corner jumps the viewport. The anchor is the visible origin of the merge.
+    if !selectionEndIsMergeExpansion(anchor: anchor, end: end, sheet: viewModel.activeSheet) {
+      ensureCellVisible(row: end.row, col: end.col)
+    }
     return before != scrollOrigin
+  }
+
+  /// True when `end` is only the far corner of the merge that contains `anchor`.
+  private func selectionEndIsMergeExpansion(anchor: CellAddress, end: CellAddress, sheet: Sheet) -> Bool {
+    guard anchor != end else { return false }
+    let expanded = sheet.selectionExpandedForMerges(CellRange(start: anchor, end: anchor))
+    let n = expanded.normalized
+    return anchor.row == n.minRow
+      && anchor.col == n.minCol
+      && end.row == n.maxRow
+      && end.col == n.maxCol
   }
 
   private func ensureCellVisible(row: Int, col: Int) {
@@ -4671,6 +4688,16 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
+  /// Scroll one cell into view without following a merge's far corner.
+  private func scrollAddressIntoView(_ address: CellAddress) {
+    let before = scrollOrigin
+    ensureCellVisible(row: address.row, col: address.col)
+    updateEditorFrame()
+    if before != scrollOrigin {
+      needsDisplay = true
+    }
+  }
+
   // MARK: - Mouse
 
   override func mouseMoved(with event: NSEvent) {
@@ -4833,7 +4860,8 @@ final class SpreadsheetGridNSView: NSView {
       viewModel?.beginEditing()
       showEditor(selectAll: false)
     } else {
-      scrollSelectionIntoView()
+      // Keep the expanded merge selected, but stay on the cell that was clicked.
+      scrollAddressIntoView(rawAddress)
     }
   }
 
