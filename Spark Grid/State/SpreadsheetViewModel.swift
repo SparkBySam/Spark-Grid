@@ -966,11 +966,12 @@ final class SpreadsheetViewModel {
     commitEditIfNeeded()
     guard index >= 0, index < workbook.sheets.count else { return }
     withoutRecordingEdit {
+      // One activation. `workbook` didSet would rebuild again and drop the
+      // values `activateSheet` just kept for the other sheets.
+      suspendFormulaRebuild = true
       workbook.activeSheetIndex = index
-      // Member assignment on `workbook` does not always run didSet, which is what
-      // normally rebuilds the engine. Conditional formats on the new sheet must
-      // evaluate that sheet's cells, not the previous sheet's address cache.
-      formulaEngine.rebuild(workbook: workbook)
+      suspendFormulaRebuild = false
+      formulaEngine.activateSheet(workbook)
       restoreFilterFromActiveSheet()
     }
     invalidateFindMatches()

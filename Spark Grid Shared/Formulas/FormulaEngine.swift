@@ -3,6 +3,10 @@ import Foundation
 /// Evaluates formulas on the active sheet, with cross-sheet lookups into the workbook.
 final class FormulaEngine {
   private var valueCache: [CellAddress: CellValue] = [:]
+  /// Computed values for sheets other than the one currently in `valueCache`.
+  /// `activateSheet` swaps this with the working cache so a tab switch does not
+  /// throw away results that were already calculated.
+  private var valuesBySheet: [String: [CellAddress: CellValue]] = [:]
   private var formulaAST: [CellAddress: FormulaExpr] = [:]
   private var dependencies: [CellAddress: Set<CellAddress>] = [:] // formula -> local refs
   private var dependencyRanges: [CellAddress: [CellRange]] = [:] // formula -> ranges read at eval
@@ -37,9 +41,8 @@ final class FormulaEngine {
   private(set) var lastWorkbookRecalcProfile: FormulaRecalcProfile?
 
   func displayValue(at address: CellAddress, sheet: Sheet) -> CellValue {
-    // Literals always come from the sheet being painted. The address cache is not
-    // sheet-scoped, so a hit can still be another sheet's value, or a blank cached
-    // before a cross-sheet paste wrote this cell.
+    // Literals always come from the sheet being painted. The working cache holds
+    // only the active sheet; other sheets live in `valuesBySheet` until activated.
     if let literal = literalOnSheet(at: address, sheet: sheet) {
       return literal
     }
@@ -170,6 +173,7 @@ final class FormulaEngine {
   /// Full rebuild for the workbook's active sheet (also enables cross-sheet lookups).
   /// When `recalculate` is false, formulas evaluate on demand via `displayValue` (faster open / sheet switch).
   func rebuild(workbook: Workbook, recalculate: Bool = false) {
+    valuesBySheet.removeValue(forKey: sheetKey(activeSheetName))
     clearFormulaGraph()
     aggregateRangeCache.invalidateAll()
     lookupTableCache.invalidateAll()
@@ -194,9 +198,30 @@ final class FormulaEngine {
     rebuild(workbook: Workbook(sheets: [sheet], activeSheetIndex: 0), recalculate: recalculate)
   }
 
+  /// Switch the active sheet once. Keeps calculated values for every sheet.
+  func activateSheet(_ workbook: Workbook) {
+    let previous = sheetKey(activeSheetName)
+    valuesBySheet[previous] = valueCache
+    clearFormulaGraph()
+    aggregateRangeCache.invalidateAll()
+    lookupTableCache.invalidateAll()
+    self.workbook = workbook
+    let sheet = workbook.activeSheet
+    activeSheetName = sheet.name
+    valueCache = valuesBySheet[sheetKey(sheet.name)] ?? [:]
+    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
+      if valueCache[address] == nil, let value = cell.cachedFormulaValue {
+        valueCache[address] = value
+      }
+    }
+  }
+
   /// Update after one or more cells change on the active sheet.
   func cellsDidChange(_ addresses: [CellAddress], sheet: Sheet) {
     guard !addresses.isEmpty else { return }
+    // Other sheets may read these cells. Drop their saved results so the next
+    // visit calculates again. The active sheet is updated below.
+    valuesBySheet.removeAll(keepingCapacity: true)
     foreignCache.removeAll(keepingCapacity: true)
     for address in addresses {
       aggregateRangeCache.invalidate(sheetName: activeSheetName, address: address)
@@ -230,6 +255,7 @@ final class FormulaEngine {
 
   func clear() {
     clearFormulaGraph()
+    valuesBySheet.removeAll(keepingCapacity: true)
     aggregateRangeCache.invalidateAll()
     lookupTableCache.invalidateAll()
     ingestTemplateCache.removeAll(keepingCapacity: true)
