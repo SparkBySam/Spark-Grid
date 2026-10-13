@@ -1494,6 +1494,7 @@ final class SpreadsheetGridNSView: NSView {
     }
     let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: true, scrollsY: true)
     let override = contentRect(coveringScrollable: coverage.viewRect)
+    prepareValuesCovering(viewRect: coverage.viewRect, scroll: coverage.origin, contentOverride: override)
     guard let image = captureManual(
       viewRect: coverage.viewRect,
       scroll: coverage.origin,
@@ -1541,6 +1542,7 @@ final class SpreadsheetGridNSView: NSView {
       width: max(bounds.width - headerSize, coverage.viewRect.maxX - headerSize),
       height: max(bounds.height - headerSize, coverage.viewRect.maxY - headerSize)
     )
+    prepareValuesCovering(viewRect: coverage.viewRect, scroll: manualScroll, contentOverride: override)
     guard let image = captureManual(
       viewRect: coverage.viewRect,
       scroll: manualScroll,
@@ -1884,6 +1886,60 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
+  override func display() {
+    prepareViewportValues()
+    super.display()
+  }
+
+  override func display(_ rect: NSRect) {
+    prepareViewportValues()
+    super.display(rect)
+  }
+
+  override func displayIfNeeded() {
+    if needsDisplay {
+      prepareViewportValues()
+    }
+    super.displayIfNeeded()
+  }
+
+  /// Calculate the cells this paint will show. Drawing then reads that cache.
+  private func prepareViewportValues() {
+    guard !isPreparingPaintValues, rasterTarget == nil, let viewModel else { return }
+    isPreparingPaintValues = true
+    defer { isPreparingPaintValues = false }
+    let sheet = viewModel.activeSheet
+    let rows = visibleRowRange()
+    let cols = visibleColumnRange()
+    guard rows.lowerBound <= rows.upperBound, cols.lowerBound <= cols.upperBound else { return }
+    let clip = contentRect.union(bounds)
+    for row in rows {
+      for col in cols {
+        let address = CellAddress(row: row, col: col)
+        if sheet.isCoveredByMerge(address) { continue }
+        let hasCell = sheet.cells[address] != nil
+        let isMergeAnchor = sheet.mergeContaining(address) != nil
+        guard hasCell || isMergeAnchor else { continue }
+        guard let rect = paintRect(for: address, sheet: sheet), clip.intersects(rect) else { continue }
+        let cell = sheet.cell(at: address)
+        _ = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
+      }
+    }
+  }
+
+  private func prepareValuesCovering(viewRect: NSRect, scroll: CGPoint, contentOverride: NSRect?) {
+    let savedScroll = scrollOrigin
+    let savedOverride = contentRectOverride
+    scrollOrigin = scroll
+    contentRectOverride = contentOverride
+    defer {
+      scrollOrigin = savedScroll
+      contentRectOverride = savedOverride
+    }
+    prepareViewportValues()
+  }
+
+  private var isPreparingPaintValues = false
 
   override func draw(_ dirtyRect: NSRect) {
     if let target = rasterTarget {
@@ -3632,11 +3688,12 @@ final class SpreadsheetGridNSView: NSView {
         let cell = sheet.cell(at: address)
         guard !cell.raw.isEmpty else { continue }
         if rasterTarget == nil, viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
-        let paint = viewModel.resolvedPaint(at: address)
+        let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
+        let paint = cached.paint
         let format = paint.format ?? cell.format ?? CellFormat()
         guard format.overflowsUnclipped else { continue }
         if paint.dataBarFraction != nil && paint.dataBarShowValue == false { continue }
-        let text = viewModel.displayString(at: address)
+        let text = cached.displayText
         guard !text.isEmpty else { continue }
         guard let cellRect = paintRect(for: address, sheet: sheet) else { continue }
         let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
@@ -3666,14 +3723,23 @@ final class SpreadsheetGridNSView: NSView {
           columnOrigin: { self.xForColumn($0) },
           columnWidth: { self.columnWidth(at: $0) },
           blocks: { column in
-            CellTextLayout.blocksOverflow(sheet: sheet, row: row, column: column) {
-              viewModel.displayString(at: $0)
+            CellTextLayout.blocksOverflow(sheet: sheet, row: row, column: column) { address in
+              let neighbor = sheet.cell(at: address)
+              if !neighbor.raw.isEmpty {
+                return self.cachedCellPaint(
+                  at: address,
+                  viewModel: viewModel,
+                  sheet: sheet,
+                  cell: neighbor
+                ).displayText
+              }
+              return ""
             }
           }
         )
         let spill = NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
         guard spill.width > 0.5, dirtyRect.intersects(spill) else { continue }
-        let value = viewModel.displayValue(at: address)
+        let value = cached.value
         let isSelected = false
         let fillColor = CellFormatRenderer.fillColor(for: paint.format)
         drawPreparedText(
