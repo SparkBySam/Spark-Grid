@@ -5633,6 +5633,22 @@ final class SpreadsheetGridNSView: NSView {
     scrollSelectionIntoView()
   }
 
+  /// The formula bar, or the in-cell editor, when it is the first responder.
+  private func formulaFieldForSelectAll() -> NSTextView? {
+    guard let responder = window?.firstResponder else { return nil }
+    if let formulaBar = responder as? FormulaBarNSTextView {
+      return formulaBar
+    }
+    guard isEditorActive else { return nil }
+    if let fieldEditor = responder as? NSTextView, fieldEditor === editor.currentEditor() {
+      return fieldEditor
+    }
+    if responder === editor, let fieldEditor = editor.currentEditor() as? NSTextView {
+      return fieldEditor
+    }
+    return nil
+  }
+
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     if AppSettings.shared.matches(.save, event: event) {
       return SparkGridSaveShortcut.perform()
@@ -5640,6 +5656,10 @@ final class SpreadsheetGridNSView: NSView {
     let settings = AppSettings.shared
     let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
     if event.charactersIgnoringModifiers?.lowercased() == "a", mods == .command {
+      if let formulaField = formulaFieldForSelectAll() {
+        formulaField.selectAll(nil)
+        return true
+      }
       viewModel?.selectAll()
       needsDisplay = true
       return true
