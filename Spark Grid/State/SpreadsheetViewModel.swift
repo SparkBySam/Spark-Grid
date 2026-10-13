@@ -186,6 +186,11 @@ final class SpreadsheetViewModel {
     formulaEngine.displayValue(at: address, sheet: activeSheet)
   }
 
+  /// Grid text. Hides formula source that `displayValue` still returns for the answer check.
+  func sheetDisplayValue(at address: CellAddress, cell: Cell) -> CellValue {
+    formulaEngine.sheetDisplayValue(at: address, sheet: activeSheet, cell: cell)
+  }
+
   /// Full workbook recalc using grouped aggregate range scans (does not run on open).
   @discardableResult
   func recalculateEntireWorkbook() -> TimeInterval {

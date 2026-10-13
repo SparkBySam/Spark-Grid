@@ -752,7 +752,7 @@ final class SpreadsheetGridNSView: NSView {
       return cached
     }
     let paint = viewModel.resolvedPaint(at: address)
-    let value = viewModel.displayValue(at: address)
+    let value = viewModel.sheetDisplayValue(at: address, cell: cell)
     let displayText = CellFormatRenderer.displayText(
       for: value,
       format: paint.format ?? cell.format,

@@ -75,8 +75,30 @@ final class FormulaEngine {
   }
 
   func displayString(at address: CellAddress, sheet: Sheet, format: CellFormat?) -> String {
+    let cell = sheet.cell(at: address)
+    let value = sheetDisplayValue(at: address, sheet: sheet, cell: cell)
+    return CellFormatRenderer.displayText(for: value, format: format, fallbackRaw: cell.raw)
+  }
+
+  /// Value drawn on the sheet. A calculated result or imported cache is shown.
+  /// The formula source is not: that text belongs in the formula bar.
+  func sheetDisplayValue(at address: CellAddress, sheet: Sheet, cell: Cell? = nil) -> CellValue {
     let value = displayValue(at: address, sheet: sheet)
-    return CellFormatRenderer.displayText(for: value, format: format, fallbackRaw: sheet.cell(at: address).raw)
+    let resolved = cell ?? sheet.cell(at: address)
+    guard case .string(let text) = value else { return value }
+    let formula = resolved.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard FormulaSyntax.isFormula(formula),
+          text.trimmingCharacters(in: .whitespacesAndNewlines) == formula
+    else { return value }
+    if let imported = resolved.cachedFormulaValue {
+      return imported
+    }
+    // A parsed formula may evaluate to its own source text. The unparsed
+    // fallback stores that source and would otherwise paint it.
+    if formulaAST[address] != nil {
+      return value
+    }
+    return .blank
   }
 
   /// Evaluates a conditional-formatting formula relative to `origin` as if entered at `address`.
@@ -467,6 +489,16 @@ final class FormulaEngine {
 
   private func literalOrEmpty(_ raw: String) -> CellValue {
     CellValue.fromLiteralRaw(raw)
+  }
+
+  /// Imported cache when a formula has one. Otherwise the same literal the
+  /// formula source used to become, so cells with no cache still calculate
+  /// the way they did.
+  private func unresolvedValue(_ cell: Cell) -> CellValue {
+    if FormulaSyntax.isFormula(cell.raw), let imported = cell.cachedFormulaValue {
+      return imported
+    }
+    return literalOrEmpty(cell.raw)
   }
 
   private func workbookLiteral(sheet: Sheet, address: CellAddress) -> CellValue? {
@@ -989,7 +1021,7 @@ final class FormulaEngine {
         if formulaAST[dep] != nil {
           eval(dep)
         } else if valueCache[dep] == nil {
-          valueCache[dep] = literalOrEmpty(sheet.cell(at: dep).raw)
+          valueCache[dep] = unresolvedValue(sheet.cell(at: dep))
         }
       }
     }
@@ -1117,7 +1149,7 @@ final class FormulaEngine {
 
       guard let expr = formulaAST[address] else {
         if valueCache[address] == nil {
-          valueCache[address] = literalOrEmpty(sheet.cell(at: address).raw)
+          valueCache[address] = unresolvedValue(sheet.cell(at: address))
         }
         return
       }
@@ -1186,7 +1218,7 @@ final class FormulaEngine {
       if let cached = valueCache[address] {
         return cached
       }
-      let value = literalOrEmpty(activeSheet.cell(at: address).raw)
+      let value = unresolvedValue(activeSheet.cell(at: address))
       valueCache[address] = value
       return value
     }

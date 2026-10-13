@@ -44,6 +44,10 @@ final class PreviewSession {
 
   func displayValue(row: Int, column: Int) -> String {
     let cell = activeSheet.cell(at: CellAddress(row: row, col: column))
+    if FormulaSyntax.isFormula(cell.raw) {
+      let value = cell.cachedFormulaValue ?? .blank
+      return CellFormatRenderer.displayText(for: value, format: cell.format, fallbackRaw: "")
+    }
     return CellFormatRenderer.displayText(raw: cell.raw, format: cell.format)
   }
 
