@@ -1,6 +1,6 @@
 import Foundation
 
-struct LookupTableKey: Hashable {
+nonisolated struct LookupTableKey: Hashable {
   var sheet: String
   var minRow: Int
   var minCol: Int
@@ -15,7 +15,7 @@ struct LookupTableKey: Hashable {
 }
 
 /// Exact-match VLOOKUP / HLOOKUP: one scan per table, then O(1) needle lookup (KPI Config rows).
-final class FormulaLookupTableCache {
+nonisolated final class FormulaLookupTableCache {
   weak var profile: FormulaRecalcProfile?
   private var exactMaps: [LookupTableKey: [AggregateValueKey: CellValue]] = [:]
 

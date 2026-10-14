@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// Chart embedded on a sheet (Spark-native; also stored in xlsx as a custom part).
-struct SheetChart: Identifiable, Codable, Equatable, Sendable {
+nonisolated struct SheetChart: Identifiable, Codable, Equatable, Sendable {
   enum Kind: String, Codable, Sendable, CaseIterable, Identifiable {
     case bar
     case line

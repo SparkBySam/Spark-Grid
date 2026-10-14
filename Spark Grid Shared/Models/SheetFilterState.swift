@@ -1,7 +1,7 @@
 import Foundation
 
 /// AutoFilter on a sheet. Persisted with the workbook; xlsx round-trip keeps range and selected values.
-struct SheetFilterState: Codable, Equatable, Sendable {
+nonisolated struct SheetFilterState: Codable, Equatable, Sendable {
   /// Inclusive data range including the header row.
   var range: CellRange
   /// Per-column selected display values. Missing key = all values visible for that column.
@@ -63,12 +63,12 @@ struct SheetFilterState: Codable, Equatable, Sendable {
   }
 }
 
-enum FindScope: String, CaseIterable, Sendable {
+nonisolated enum FindScope: String, CaseIterable, Sendable {
   case sheet
   case selection
 }
 
-enum SortDirection: String, CaseIterable, Sendable {
+nonisolated enum SortDirection: String, CaseIterable, Sendable {
   case ascending
   case descending
 }

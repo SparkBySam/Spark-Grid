@@ -1,25 +1,25 @@
 import Foundation
 
-private enum XLookupMatchMode {
+private nonisolated enum XLookupMatchMode {
   case exact
   case nextSmaller
   case nextLarger
   case wildcard
 }
 
-private enum XLookupHit {
+private nonisolated enum XLookupHit {
   case found(Int)
   case notFound
   case failed(CellValue)
 }
 
-private enum LookupKind {
+private nonisolated enum LookupKind {
   case number(Double)
   case text(String)
   case bool(Bool)
 }
 
-struct FormulaEvaluator {
+nonisolated struct FormulaEvaluator {
   /// Resolves a cell reference (local or cross-sheet).
   typealias ValueLookup = (FormulaRef) -> CellValue
   /// Resolves a named range to a sheet-qualified range expression, if defined.
@@ -32,7 +32,7 @@ struct FormulaEvaluator {
   /// Defaults to a modest grid so open ranges don't explode when extent isn't wired.
   var sheetExtent: SheetExtentLookup = { _ in (maxRow: 999, maxCol: 25) }
   /// Cell being evaluated (`COLUMN()` / `ROW()` with no argument). Held in a class cell so batch strip eval can set origin without mutating the evaluator struct.
-  final class EvaluationOriginCell {
+  nonisolated final class EvaluationOriginCell {
     var address: CellAddress?
   }
 
@@ -50,7 +50,7 @@ struct FormulaEvaluator {
   weak var recalcProfile: FormulaRecalcProfile?
 
   /// Sheet + stored master formula for IF-blank strip plan-miss diagnostics (KPI line).
-  struct StripPlanDiagnosticContext {
+  nonisolated struct StripPlanDiagnosticContext {
     var sheetName: String
     var masterFormulaText: String
   }
@@ -61,7 +61,7 @@ struct FormulaEvaluator {
     evaluationOriginCell.address = origin
   }
 
-  final class ArrayEvalCacheBox {
+  nonisolated final class ArrayEvalCacheBox {
     var values: [FormulaExpr: [CellValue]] = [:]
   }
 

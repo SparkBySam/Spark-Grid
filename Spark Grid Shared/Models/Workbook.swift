@@ -3,7 +3,7 @@ import Foundation
 
 /// A workbook-scoped defined name. Static ranges resolve to cells. Formulas such as
 /// `OFFSET(...)` stay as `refersTo` and are not treated as a cell range.
-struct NamedRange: Codable, Equatable, Sendable {
+nonisolated struct NamedRange: Codable, Equatable, Sendable {
   var name: String
   var sheetName: String
   var startRow: Int
@@ -94,7 +94,7 @@ struct NamedRange: Codable, Equatable, Sendable {
 }
 
 /// Parses a defined-name formula into a static range, or keeps the text when it is not one.
-enum DefinedNameFormula {
+nonisolated enum DefinedNameFormula {
   static func make(name: String, formula: String, sheets: [Sheet], localSheet: String?) -> NamedRange {
     var text = formula.trimmingCharacters(in: .whitespacesAndNewlines)
     if text.hasPrefix("=") {
@@ -173,7 +173,7 @@ enum DefinedNameFormula {
   }
 }
 
-struct Workbook: Codable, Equatable, Sendable {
+nonisolated struct Workbook: Codable, Equatable, Sendable {
   static let defaultRowCount = 1_000
   static let defaultColumnCount = 26
   static let defaultColumnWidth: CGFloat = 80

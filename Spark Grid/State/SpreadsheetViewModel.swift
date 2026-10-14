@@ -174,6 +174,9 @@ final class SpreadsheetViewModel {
 
   init(workbook: Workbook) {
     self.workbook = workbook
+    formulaEngine.onExternalValues = { [weak self] in
+      self?.notifyGridRefresh()
+    }
     formulaEngine.rebuild(workbook: workbook)
     syncEditTextFromSelection()
     // Pull AutoFilter from the sheet so Excel header-row filters appear immediately.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Phase timings for `recalculateEntireWorkbook` (Bug Bash / diagnostics).
-final class FormulaRecalcProfile {
+nonisolated final class FormulaRecalcProfile {
   var ingestSeconds: Double = 0
   var ingestParseSeconds: Double = 0
   var ingestDependencySeconds: Double = 0

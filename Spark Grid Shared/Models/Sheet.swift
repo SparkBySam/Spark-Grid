@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-struct Sheet: Identifiable, Codable, Equatable, Sendable {
+nonisolated struct Sheet: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var name: String
     var cells: [CellAddress: Cell]

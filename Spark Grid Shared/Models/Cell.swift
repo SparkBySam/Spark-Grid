@@ -1,14 +1,14 @@
 import Foundation
 
 /// OOXML type of a formula cell's cached `<v>`. Numbers have no `t` attribute.
-enum ImportedFormulaValueType: String, Codable, Equatable, Sendable {
+nonisolated enum ImportedFormulaValueType: String, Codable, Equatable, Sendable {
     case number
     case string
     case boolean
     case error
 }
 
-struct Cell: Codable, Equatable, Sendable {
+nonisolated struct Cell: Codable, Equatable, Sendable {
     var raw: String = ""
     var format: CellFormat?
     /// Excel's last calculated `<v>` for a formula cell; seeds the engine until recalc.

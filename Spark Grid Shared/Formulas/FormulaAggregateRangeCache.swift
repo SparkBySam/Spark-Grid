@@ -1,7 +1,7 @@
 import Foundation
 
 /// Stable identity for a rectangular range used by conditional aggregates (COUNTIFS, SUMIFS, …).
-struct AggregateRangeKey: Hashable {
+nonisolated struct AggregateRangeKey: Hashable {
   var sheet: String
   var minRow: Int
   var minCol: Int
@@ -22,7 +22,7 @@ struct AggregateRangeKey: Hashable {
 }
 
 /// Normalized cell value for equality-based aggregate histograms (COUNTIFS / SUMIFS lookups).
-struct AggregateValueKey: Hashable {
+nonisolated struct AggregateValueKey: Hashable {
   enum Kind: UInt8 {
     case blank = 0
     case number = 1
@@ -50,7 +50,7 @@ struct AggregateValueKey: Hashable {
   }
 }
 
-struct AggregateCriteriaTupleKey: Hashable {
+nonisolated struct AggregateCriteriaTupleKey: Hashable {
   var parts: [AggregateValueKey]
 }
 
@@ -68,13 +68,13 @@ private struct MaskedCountIndexKey: Hashable {
   var staticMaskKey: UInt64
 }
 
-struct AggregateSumBucket {
+nonisolated struct AggregateSumBucket {
   var count: Int = 0
   var sum: Double = 0
 }
 
 /// One scan per criteria range, then O(1) COUNTIFS / SUMIFS lookups via composite histograms.
-final class FormulaAggregateRangeCache {
+nonisolated final class FormulaAggregateRangeCache {
   weak var profile: FormulaRecalcProfile?
   /// Reads cell values directly from the workbook model (no per-cell formula eval).
   var workbookBulkLoader: ((AggregateRangeKey) -> [CellValue])?

@@ -29,6 +29,13 @@ final class FormulaEngine {
   /// Whole-workbook precedents. Built off the main thread; sheet switches do not rebuild it.
   private var dependencyGraph: WorkbookDependencyGraph?
   private var dependencyGraphToken: UInt64 = 0
+  /// Cross-sheet results scheduled after the viewed sheet's own dependents.
+  var onExternalValues: (() -> Void)?
+  private var crossSheetToken: UInt64 = 0
+  private var crossSheetPublishedToken: UInt64 = 0
+  private var crossSheetHasResults = false
+  private var crossSheetReadySheets: Set<String> = []
+  private var pendingCrossSheet: CrossSheetBackground.Request?
 
   private var workbook = Workbook.empty
   private var activeSheetName = "Sheet1"
@@ -349,6 +356,7 @@ final class FormulaEngine {
   /// Full rebuild for the workbook's active sheet (also enables cross-sheet lookups).
   /// When `recalculate` is false, formulas evaluate on demand via `displayValue` (faster open / sheet switch).
   func rebuild(workbook: Workbook, recalculate: Bool = false) {
+    cancelCrossSheetWork()
     valuesBySheet.removeValue(forKey: sheetKey(activeSheetName))
     clearFormulaGraph()
     aggregateRangeCache.invalidateAll()
@@ -391,6 +399,7 @@ final class FormulaEngine {
         valueCache[address] = value
       }
     }
+    finishCrossSheetIfNeeded(for: sheet)
   }
 
   /// Update after one or more cells change on the active sheet.
@@ -428,9 +437,11 @@ final class FormulaEngine {
     }
     recalculate(addresses: seen, sheet: sheet)
     mergeRecalculatedValues(for: sheet)
+    scheduleCrossSheetUpdate(editedAddresses: addresses, recalculated: seen, sheet: sheet)
   }
 
   func clear() {
+    cancelCrossSheetWork()
     dependencyGraphToken &+= 1
     dependencyGraph = nil
     clearFormulaGraph()
@@ -462,57 +473,110 @@ final class FormulaEngine {
   }
 
   private func workbookGraphInput(_ workbook: Workbook) -> WorkbookGraphInput {
-    var sheets: [WorkbookGraphInput.Sheet] = []
-    var sheetIDsByName: [String: Int] = [:]
-    sheets.reserveCapacity(workbook.sheets.count)
-    for sheet in workbook.sheets {
-      let sheetID = sheets.count
-      let key = sheet.name.lowercased()
-      if sheetIDsByName[key] == nil {
-        sheetIDsByName[key] = sheetID
-      }
-      var columns: [[WorkbookGraphInput.Cell]] = []
-      columns.reserveCapacity(sheet.formulaIngestByColumn.count)
-      for column in sheet.formulaIngestByColumn.keys.sorted() {
-        let entries = sheet.formulaIngestByColumn[column] ?? []
-        var cells: [WorkbookGraphInput.Cell] = []
-        cells.reserveCapacity(entries.count)
-        for (address, raw) in entries {
-          cells.append(WorkbookGraphInput.Cell(row: address.row, col: address.col, raw: raw))
-        }
-        columns.append(cells)
-      }
-      sheets.append(
-        WorkbookGraphInput.Sheet(
-          name: key,
-          sheetID: sheetID,
-          maxRow: max(0, sheet.effectiveRowCount - 1),
-          maxCol: max(0, sheet.effectiveColumnCount - 1),
-          columns: columns
-        )
-      )
+    CrossSheetBackground.graphInput(for: workbook)
+  }
+
+  /// The viewed sheet is already up to date. Other sheets catch up off the main thread.
+  private func scheduleCrossSheetUpdate(
+    editedAddresses: [CellAddress],
+    recalculated: Set<CellAddress>,
+    sheet: Sheet
+  ) {
+    crossSheetToken &+= 1
+    let token = crossSheetToken
+    crossSheetHasResults = false
+    crossSheetReadySheets.removeAll(keepingCapacity: true)
+    let activeKey = sheetKey(sheet.name)
+    if recalculatedSheetValues.keys.contains(where: { $0 != activeKey }) {
+      recalculatedSheetValues = recalculatedSheetValues.filter { $0.key == activeKey }
     }
-    var names: [WorkbookGraphInput.Name] = []
-    for named in workbook.namedRanges.values where named.resolvesToRange {
-      guard let sheetID = sheetIDsByName[named.sheetName.lowercased()] else { continue }
-      names.append(
-        WorkbookGraphInput.Name(
-          key: named.name.uppercased(),
-          sheetID: sheetID,
-          minRow: min(named.startRow, named.endRow),
-          maxRow: max(named.startRow, named.endRow),
-          minCol: min(named.startCol, named.endCol),
-          maxCol: max(named.startCol, named.endCol)
-        )
-      )
+    var calculated: [CellAddress: CellValue] = [:]
+    calculated.reserveCapacity(recalculated.count)
+    for address in recalculated where formulaAST[address] != nil {
+      if let value = valueCache[address] {
+        calculated[address] = value
+      }
     }
-    return WorkbookGraphInput(
-      sheets: sheets,
-      names: names,
-      sheetIDsByName: sheetIDsByName,
-      fallbackMaxRow: max(0, Workbook.defaultRowCount - 1),
-      fallbackMaxCol: max(0, Workbook.defaultColumnCount - 1)
+    let request = CrossSheetBackground.Request(
+      token: token,
+      workbook: workbook,
+      editedSheetName: sheet.name,
+      editedSheet: sheet,
+      editedAddresses: editedAddresses,
+      calculatedEdits: calculated,
+      graph: dependencyGraph,
+      onlySheetName: nil
     )
+    pendingCrossSheet = request
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      let outcome = CrossSheetBackground.compute(request)
+      Task { @MainActor [weak self] in
+        guard let self, self.crossSheetToken == token else { return }
+        self.applyCrossSheetOutcome(outcome)
+        self.crossSheetPublishedToken = token
+        self.crossSheetHasResults = true
+        self.pendingCrossSheet = nil
+        self.crossSheetReadySheets.removeAll(keepingCapacity: true)
+      }
+    }
+  }
+
+  /// Sheet switch before the background pass finishes: calculate this sheet now.
+  private func finishCrossSheetIfNeeded(for sheet: Sheet) {
+    let key = sheetKey(sheet.name)
+    if crossSheetHasResults, crossSheetPublishedToken == crossSheetToken {
+      overlayStoredCrossSheetValues(forKey: key)
+      return
+    }
+    if crossSheetReadySheets.contains(key) {
+      overlayStoredCrossSheetValues(forKey: key)
+      return
+    }
+    guard var request = pendingCrossSheet, request.token == crossSheetToken else { return }
+    request.onlySheetName = sheet.name
+    let outcome = CrossSheetBackground.compute(request)
+    guard crossSheetToken == request.token else { return }
+    applyCrossSheetOutcome(outcome)
+    crossSheetReadySheets.insert(key)
+  }
+
+  private func applyCrossSheetOutcome(_ outcome: CrossSheetBackground.Outcome) {
+    let activeKey = sheetKey(activeSheetName)
+    var activeChanged = false
+    for (key, values) in outcome.valuesBySheet {
+      var merged = recalculatedSheetValues[key] ?? [:]
+      for (address, value) in values {
+        merged[address] = value
+      }
+      if !merged.isEmpty {
+        recalculatedSheetValues[key] = merged
+      }
+      if key == activeKey {
+        for (address, value) in values {
+          valueCache[address] = value
+        }
+        if !values.isEmpty { activeChanged = true }
+      }
+    }
+    if activeChanged {
+      revision &+= 1
+      onExternalValues?()
+    }
+  }
+
+  private func overlayStoredCrossSheetValues(forKey key: String) {
+    guard let values = recalculatedSheetValues[key] else { return }
+    for (address, value) in values {
+      valueCache[address] = value
+    }
+  }
+
+  private func cancelCrossSheetWork() {
+    crossSheetToken &+= 1
+    crossSheetPublishedToken = crossSheetToken
+    crossSheetHasResults = false
+    pendingCrossSheet = nil
+    crossSheetReadySheets.removeAll(keepingCapacity: true)
   }
 
   private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String) -> String {

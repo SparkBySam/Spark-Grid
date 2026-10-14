@@ -3,7 +3,7 @@ import Foundation
 /// Excel-compatible date serials (days since 1899-12-30), ignoring the 1900 leap-year bug.
 /// Serials are calendar values. Formatters read them in UTC, so `NOW` and `TODAY`
 /// store the Mac wall clock rather than the UTC instant.
-enum ExcelDate {
+nonisolated enum ExcelDate {
   /// Clock for `NOW` and `TODAY`. The app uses the Mac's current time and time zone.
   static var wallClock: () -> (date: Date, timeZone: TimeZone) = {
     (Date(), .current)

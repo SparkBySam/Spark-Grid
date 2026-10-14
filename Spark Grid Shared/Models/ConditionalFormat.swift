@@ -2,7 +2,7 @@ import Foundation
 
 /// Overlay style applied when a conditional formatting rule matches.
 /// Only non-nil fields are applied (Excel dxf semantics).
-struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
+nonisolated struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
   var bold: Bool?
   var italic: Bool?
   var textColor: CodableColor?
@@ -76,7 +76,7 @@ struct ConditionalFormatStyle: Codable, Equatable, Hashable, Sendable {
   }
 }
 
-struct ColorScaleStop: Codable, Equatable, Sendable {
+nonisolated struct ColorScaleStop: Codable, Equatable, Sendable {
   enum StopType: String, Codable, Sendable {
     case min
     case max
@@ -90,7 +90,7 @@ struct ColorScaleStop: Codable, Equatable, Sendable {
   var color: CodableColor
 }
 
-struct DataBarStyle: Codable, Equatable, Sendable {
+nonisolated struct DataBarStyle: Codable, Equatable, Sendable {
   var color: CodableColor
   var showValue: Bool
 
@@ -105,7 +105,7 @@ struct DataBarStyle: Codable, Equatable, Sendable {
   )
 }
 
-enum IconSetStyle: String, Codable, Sendable, CaseIterable {
+nonisolated enum IconSetStyle: String, Codable, Sendable, CaseIterable {
   case threeTrafficLights
   case threeArrows
   case threeSymbols
@@ -137,14 +137,14 @@ enum IconSetStyle: String, Codable, Sendable, CaseIterable {
   }
 }
 
-enum IconSetGlyph: String, Codable, Sendable {
+nonisolated enum IconSetGlyph: String, Codable, Sendable {
   case greenCircle, yellowCircle, redCircle
   case greenArrow, yellowArrow, redArrow
   case greenCheck, yellowDash, redX
 }
 
 /// Resolved conditional paint for a cell (format overlays + decorations).
-struct ConditionalPaint: Equatable, Sendable {
+nonisolated struct ConditionalPaint: Equatable, Sendable {
   var format: CellFormat?
   var dataBarFraction: Double?
   var dataBarColor: CodableColor?
@@ -156,7 +156,7 @@ struct ConditionalPaint: Equatable, Sendable {
   }
 }
 
-enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
+nonisolated enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
   case greaterThan(Double)
   case lessThan(Double)
   case greaterOrEqual(Double)
@@ -301,7 +301,7 @@ enum ConditionalFormatPredicate: Codable, Equatable, Sendable {
   }
 }
 
-struct ConditionalFormatRule: Identifiable, Codable, Equatable, Sendable {
+nonisolated struct ConditionalFormatRule: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   var range: CellRange
   var stopIfTrue: Bool
@@ -332,7 +332,7 @@ struct ConditionalFormatRule: Identifiable, Codable, Equatable, Sendable {
   }
 }
 
-enum ConditionalFormatEvaluator {
+nonisolated enum ConditionalFormatEvaluator {
   /// Resolves base format plus matching conditional overlays for a cell.
   static func resolvedPaint(
     at address: CellAddress,
