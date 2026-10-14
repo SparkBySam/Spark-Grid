@@ -207,6 +207,26 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
+  /// Text for a merge that crosses a freeze. Drawn above the bitmap that would
+  /// otherwise translate it, and clipped so it does not paint in the frozen pane.
+  private final class PinnedMergeTextOverlay: NSView {
+    enum Band { case frozenPanes, body }
+    weak var grid: SpreadsheetGridNSView?
+    var band: Band = .frozenPanes
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+      guard let grid, bounds.width > 0.5, bounds.height > 0.5 else { return }
+      guard let ctx = NSGraphicsContext.current else { return }
+      let local = bounds.intersection(dirtyRect)
+      guard !local.isNull, local.width > 0.5, local.height > 0.5 else { return }
+      ctx.cgContext.clear(local)
+      grid.drawPinnedCrossFreezeMergeText(in: local, band: band)
+    }
+  }
+
   /// Selection outline, wash, formula-reference highlights, and the fill handle.
   /// These sit above the scroll-plane bitmaps so a selection change does not
   /// rasterize cell text again.
@@ -300,6 +320,28 @@ final class SpreadsheetGridNSView: NSView {
     view.layer?.backgroundColor = NSColor.clear.cgColor
     view.layer?.zPosition = 22
     view.layer?.isOpaque = false
+    return view
+  }()
+  /// Merged text that starts in a frozen row or column. It is not part of a
+  /// scrolling bitmap, so a scroll cannot slide it under the frozen pane.
+  private let pinnedHeaderMergeOverlay: PinnedMergeTextOverlay = {
+    let view = PinnedMergeTextOverlay()
+    view.band = .frozenPanes
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.zPosition = 7
+    view.layer?.isOpaque = false
+    view.clipsToBounds = true
+    return view
+  }()
+  private let pinnedBodyMergeOverlay: PinnedMergeTextOverlay = {
+    let view = PinnedMergeTextOverlay()
+    view.band = .body
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.zPosition = 2
+    view.layer?.isOpaque = false
+    view.clipsToBounds = true
     return view
   }()
   private let bodyScrollClip = ScrollClipView(frame: .zero)
@@ -472,12 +514,24 @@ final class SpreadsheetGridNSView: NSView {
     addSubview(rowHeaderScrollClip)
     selectionChromeOverlay.grid = self
     addSubview(selectionChromeOverlay, positioned: .below, relativeTo: editor)
+    pinnedHeaderMergeOverlay.grid = self
+    pinnedBodyMergeOverlay.grid = self
+    pinnedHeaderMergeOverlay.isHidden = true
+    pinnedBodyMergeOverlay.isHidden = true
+    addSubview(pinnedHeaderMergeOverlay, positioned: .above, relativeTo: chartLayerView)
+    addSubview(pinnedBodyMergeOverlay, positioned: .below, relativeTo: chartLayerView)
   }
 
   override func layout() {
     super.layout()
     if selectionChromeOverlay.frame != bounds {
       selectionChromeOverlay.frame = bounds
+    }
+    if pinnedHeaderMergeOverlay.frame != bounds {
+      pinnedHeaderMergeOverlay.frame = bounds
+    }
+    if pinnedBodyMergeOverlay.frame != bounds {
+      pinnedBodyMergeOverlay.frame = bounds
     }
     layoutOnSheetCharts()
   }
@@ -1948,6 +2002,7 @@ final class SpreadsheetGridNSView: NSView {
     frozenCornerScrollClip.isHidden = true
     frozenTopScrollClip.isHidden = true
     frozenLeftScrollClip.isHidden = true
+    hidePinnedMergeText()
   }
 
   /// Move already-rasterized panes. Returns false when a pane has to be painted
@@ -1991,6 +2046,7 @@ final class SpreadsheetGridNSView: NSView {
     installFrozenScrollClips(frozen)
     scrollSurfacesPresented = true
     needsDisplay = false
+    displayPinnedMergeText()
     displaySelectionChrome()
     return true
   }
@@ -3910,6 +3966,7 @@ final class SpreadsheetGridNSView: NSView {
     NSBezierPath(rect: clipRect).addClip()
     defer { NSGraphicsContext.restoreGraphicsState() }
 
+    let paneScrollsY = frozenRowCount() > 0 && rowRange.lowerBound >= frozenRowCount()
     var painted = Set<CellAddress>()
     for row in rowRange {
       for col in columns {
@@ -3924,6 +3981,7 @@ final class SpreadsheetGridNSView: NSView {
             painted: &painted,
             dirtyRect: dirtyRect,
             paneColumns: paneColumns,
+            paneScrollsY: paneScrollsY,
             viewModel: viewModel,
             sheet: sheet,
             isDarkMode: isDarkMode
@@ -3935,6 +3993,7 @@ final class SpreadsheetGridNSView: NSView {
             painted: &painted,
             dirtyRect: dirtyRect,
             paneColumns: paneColumns,
+            paneScrollsY: paneScrollsY,
             viewModel: viewModel,
             sheet: sheet,
             isDarkMode: isDarkMode
@@ -3946,6 +4005,7 @@ final class SpreadsheetGridNSView: NSView {
             painted: &painted,
             dirtyRect: dirtyRect,
             paneColumns: paneColumns,
+            paneScrollsY: paneScrollsY,
             viewModel: viewModel,
             sheet: sheet,
             isDarkMode: isDarkMode
@@ -3957,16 +4017,23 @@ final class SpreadsheetGridNSView: NSView {
 
   /// One cell's overflow text. A merge is drawn from its anchor in every pane the
   /// merge crosses, clipped to that pane, so a frozen column does not end the sentence.
+  /// A merge that starts inside the frozen pane is left out of a scrolling bitmap;
+  /// `drawPinnedCrossFreezeMergeText` keeps that text fixed and clipped at the boundary.
   private func paintOverflowCell(
     address: CellAddress,
     merge: CellRange?,
     painted: inout Set<CellAddress>,
     dirtyRect: NSRect,
     paneColumns: ClosedRange<Int>,
+    paneScrollsY: Bool,
     viewModel: SpreadsheetViewModel,
     sheet: Sheet,
     isDarkMode: Bool
   ) {
+    if rasterTarget != nil, let merge,
+       crossFreezeMergeMovesWithPane(merge, paneColumns: paneColumns, paneScrollsY: paneScrollsY) {
+      return
+    }
     if !painted.insert(address).inserted { return }
     let cell = sheet.cell(at: address)
     guard !cell.raw.isEmpty else { return }
@@ -4307,6 +4374,122 @@ final class SpreadsheetGridNSView: NSView {
       regions.append((scrolledRows, leftCols))
     }
     return regions
+  }
+
+  /// True when this pane's bitmap will translate a merge whose anchor stays in the frozen pane.
+  private func crossFreezeMergeMovesWithPane(
+    _ merge: CellRange,
+    paneColumns: ClosedRange<Int>,
+    paneScrollsY: Bool
+  ) -> Bool {
+    let span = merge.normalized
+    let frozenCols = frozenColumnCount()
+    let frozenRows = frozenRowCount()
+    let pinnedX = frozenCols > 0 && span.minCol < frozenCols && span.maxCol >= frozenCols
+    let pinnedY = frozenRows > 0 && span.minRow < frozenRows && span.maxRow >= frozenRows
+    let paneScrollsX = frozenCols > 0 && paneColumns.lowerBound >= frozenCols
+    if pinnedX && paneScrollsX { return true }
+    if pinnedY && paneScrollsY { return true }
+    return false
+  }
+
+  private func hidePinnedMergeText() {
+    pinnedHeaderMergeOverlay.isHidden = true
+    pinnedBodyMergeOverlay.isHidden = true
+  }
+
+  /// Redraw merge text that must stay with the frozen pane while the cell bitmaps scroll.
+  private func displayPinnedMergeText() {
+    let show = scrollSurfacesPresented && hasPinnedCrossFreezeMerge()
+    pinnedHeaderMergeOverlay.isHidden = !show
+    pinnedBodyMergeOverlay.isHidden = !show
+    guard show else { return }
+    if pinnedHeaderMergeOverlay.frame != bounds {
+      pinnedHeaderMergeOverlay.frame = bounds
+    }
+    if pinnedBodyMergeOverlay.frame != bounds {
+      pinnedBodyMergeOverlay.frame = bounds
+    }
+    pinnedHeaderMergeOverlay.needsDisplay = true
+    pinnedBodyMergeOverlay.needsDisplay = true
+    guard window != nil else { return }
+    pinnedHeaderMergeOverlay.display()
+    pinnedBodyMergeOverlay.display()
+  }
+
+  private func hasPinnedCrossFreezeMerge() -> Bool {
+    guard let sheet = viewModel?.activeSheet else { return false }
+    let frozenCols = sheet.frozenColumns
+    let frozenRows = sheet.frozenRows
+    guard frozenCols > 0 || frozenRows > 0 else { return false }
+    for merge in sheet.mergedRanges {
+      let span = merge.normalized
+      if frozenCols > 0, span.minCol < frozenCols, span.maxCol >= frozenCols { return true }
+      if frozenRows > 0, span.minRow < frozenRows, span.maxRow >= frozenRows { return true }
+    }
+    return false
+  }
+
+  private func drawPinnedCrossFreezeMergeText(in dirtyRect: NSRect, band: PinnedMergeTextOverlay.Band) {
+    guard scrollSurfacesPresented, let viewModel else { return }
+    let sheet = layoutSheet ?? viewModel.activeSheet
+    guard !sheet.mergedRanges.isEmpty else { return }
+    beginDrawLayout()
+    defer { endDrawLayout() }
+    let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    let lastColumn = max(0, columnCount() - 1)
+    for merge in sheet.mergedRanges {
+      for slice in pinnedMergeSlices(merge, band: band) {
+        let visible = slice.intersection(dirtyRect)
+        guard visible.width > 0.5, visible.height > 0.5 else { continue }
+        let span = merge.normalized
+        var painted = Set<CellAddress>()
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: visible).addClip()
+        paintOverflowCell(
+          address: CellAddress(row: span.minRow, col: span.minCol),
+          merge: merge,
+          painted: &painted,
+          dirtyRect: visible,
+          paneColumns: 0...lastColumn,
+          paneScrollsY: false,
+          viewModel: viewModel,
+          sheet: sheet,
+          isDarkMode: isDarkMode
+        )
+        NSGraphicsContext.restoreGraphicsState()
+      }
+    }
+  }
+
+  /// The part of a cross-freeze merge whose bitmap would move. The frozen corner is not included.
+  private func pinnedMergeSlices(_ merge: CellRange, band: PinnedMergeTextOverlay.Band) -> [NSRect] {
+    let span = merge.normalized
+    let frozenCols = frozenColumnCount()
+    let frozenRows = frozenRowCount()
+    let pinnedX = frozenCols > 0 && span.minCol < frozenCols && span.maxCol >= frozenCols
+    let pinnedY = frozenRows > 0 && span.minRow < frozenRows && span.maxRow >= frozenRows
+    guard pinnedX || pinnedY else { return [] }
+    guard let rect = paintRect(for: CellAddress(row: span.minRow, col: span.minCol), merge: merge) else {
+      return []
+    }
+    switch band {
+    case .frozenPanes:
+      var slices: [NSRect] = []
+      if pinnedX {
+        let top = rect.intersection(frozenTopStripClipRect())
+        if top.width > 0.5, top.height > 0.5 { slices.append(top) }
+      }
+      if pinnedY {
+        let left = rect.intersection(frozenLeftStripClipRect())
+        if left.width > 0.5, left.height > 0.5 { slices.append(left) }
+      }
+      return slices
+    case .body:
+      let body = rect.intersection(scrollableCellsClipRect())
+      guard body.width > 0.5, body.height > 0.5 else { return [] }
+      return [body]
+    }
   }
 
   private func displaySelectionChrome() {
