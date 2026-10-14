@@ -1321,9 +1321,13 @@ nonisolated enum XLSXCodec {
     }
 
     let grouped = Dictionary(grouping: sheet.cells.keys, by: \.row)
-    let rowNumbers = grouped.keys.sorted()
+    // A resized row may have no cells. Its height still has to be in the file.
+    var rowNumbers = Set(grouped.keys)
+    for row in sheet.rowHeights.keys {
+      rowNumbers.insert(row)
+    }
     var sheetData = ""
-    for row in rowNumbers {
+    for row in rowNumbers.sorted() {
       let heightAttr: String
       if let height = sheet.rowHeights[row] {
         heightAttr = #" ht="\#(height)" customHeight="1""#
@@ -1351,7 +1355,11 @@ nonisolated enum XLSXCodec {
           cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)/>"#
         }
       }
-      sheetData += #"<row r="\#(row + 1)"\#(heightAttr)>\#(cellsXML)</row>"#
+      if addresses.isEmpty {
+        sheetData += #"<row r="\#(row + 1)"\#(heightAttr)/>"#
+      } else {
+        sheetData += #"<row r="\#(row + 1)"\#(heightAttr)>\#(cellsXML)</row>"#
+      }
     }
 
     let viewsXML = sheetViewsXML(frozenRows: sheet.frozenRows, frozenColumns: sheet.frozenColumns)
