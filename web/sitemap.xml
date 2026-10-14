@@ -2,22 +2,26 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://sparkgridapp.com/</loc>
-    <lastmod>2026-10-07</lastmod>
+    <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://sparkgridapp.com/launch</loc>
-    <lastmod>2026-10-07</lastmod>
+    <lastmod>2026-10-14</lastmod>
+  </url>
+  <url>
+    <loc>https://sparkgridapp.com/changelog</loc>
+    <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://sparkgridapp.com/support</loc>
-    <lastmod>2026-10-07</lastmod>
+    <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://sparkgridapp.com/privacy</loc>
-    <lastmod>2026-10-07</lastmod>
+    <lastmod>2026-10-14</lastmod>
   </url>
   <url>
     <loc>https://sparkgridapp.com/legal</loc>
-    <lastmod>2026-10-07</lastmod>
+    <lastmod>2026-10-14</lastmod>
   </url>
 </urlset>
