@@ -4050,9 +4050,24 @@ final class SpreadsheetGridNSView: NSView {
     let textRect = textDrawingRect(in: cellRect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
     guard textRect.width > 1, textRect.height > 1 else { return }
 
+    var drawFormat = format
     let horizontal: CellTextLayout.OverflowClip
     if merge != nil {
       // Merged text stays inside the merge. It does not spill into the next cell.
+      // Bold type can run a few points past that width. Draw it a little smaller
+      // so the sentence stays whole, and leave a real overflow clipped.
+      let zoom = zoomScale
+      var measureFormat = format
+      let baseSize = (measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize) * zoom
+      measureFormat.fontSize = baseSize
+      let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
+      let available = textRect.width - 8
+      if textWidth > available + 0.5, available > 1 {
+        let scale = available / textWidth
+        if scale >= 0.8 {
+          drawFormat.fontSize = (baseSize * scale) / zoom
+        }
+      }
       horizontal = CellTextLayout.OverflowClip(minX: textRect.minX, maxX: textRect.maxX)
     } else {
       var measureFormat = format
@@ -4105,7 +4120,7 @@ final class SpreadsheetGridNSView: NSView {
     drawPreparedText(
       text,
       value: cached.value,
-      format: format,
+      format: drawFormat,
       textRect: textRect,
       clipRect: spill,
       fillColor: fillColor,
@@ -4476,7 +4491,10 @@ final class SpreadsheetGridNSView: NSView {
     switch band {
     case .frozenPanes:
       var slices: [NSRect] = []
-      if pinnedX {
+      // The header strip is only for a merge that lives in the frozen rows.
+      // A merge lower in the sheet scrolls. Once its rect passes over that
+      // strip, painting it there covers the frozen headers.
+      if pinnedX, span.minRow < frozenRows {
         let top = rect.intersection(frozenTopStripClipRect())
         if top.width > 0.5, top.height > 0.5 { slices.append(top) }
       }
