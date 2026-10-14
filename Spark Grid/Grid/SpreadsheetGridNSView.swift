@@ -3570,11 +3570,27 @@ final class SpreadsheetGridNSView: NSView {
     )
     var borderItems: [(CellBorders, NSRect)] = []
     borderItems.reserveCapacity(256)
+    var mergeBordersDrawn = Set<CellAddress>()
+    let paneRowLower = max(rowRange.lowerBound, frozenRows)
+    let paneColLower = max(colRange.lowerBound, frozenCols)
+    let paneRows = paneRowLower <= rowRange.upperBound ? paneRowLower...rowRange.upperBound : nil
+    let paneCols = paneColLower <= colRange.upperBound ? paneColLower...colRange.upperBound : nil
     for row in rowRange where row >= frozenRows {
       for col in colRange where col >= frozenCols {
         let address = CellAddress(row: row, col: col)
         let role = mergeRole(at: address, sheet: sheet)
-        if case .covered = role { continue }
+        if case .covered = role {
+          appendOffPaneMergeBorders(
+            at: address,
+            sheet: sheet,
+            viewModel: viewModel,
+            paneRows: paneRows,
+            paneCols: paneCols,
+            seen: &mergeBordersDrawn,
+            borderItems: &borderItems
+          )
+          continue
+        }
         let hasCell = sheet.cells[address] != nil
         if !hasCell, case .none = role { continue }
         let cell = sheet.cell(at: address)
@@ -3622,11 +3638,23 @@ final class SpreadsheetGridNSView: NSView {
     }
     var borderItems: [(CellBorders, NSRect)] = []
     borderItems.reserveCapacity(64)
+    var mergeBordersDrawn = Set<CellAddress>()
     for row in rowRange {
       for col in colRange {
         let address = CellAddress(row: row, col: col)
         let role = mergeRole(at: address, sheet: sheet)
-        if case .covered = role { continue }
+        if case .covered = role {
+          appendOffPaneMergeBorders(
+            at: address,
+            sheet: sheet,
+            viewModel: viewModel,
+            paneRows: rowRange,
+            paneCols: colRange,
+            seen: &mergeBordersDrawn,
+            borderItems: &borderItems
+          )
+          continue
+        }
         let hasCell = sheet.cells[address] != nil
         if !hasCell, case .none = role { continue }
         let cell = sheet.cell(at: address)
@@ -3882,84 +3910,167 @@ final class SpreadsheetGridNSView: NSView {
     NSBezierPath(rect: clipRect).addClip()
     defer { NSGraphicsContext.restoreGraphicsState() }
 
+    var painted = Set<CellAddress>()
     for row in rowRange {
       for col in columns {
         let address = CellAddress(row: row, col: col)
-        let role = mergeRole(at: address, sheet: sheet)
-        if case .covered = role { continue }
-        let cell = sheet.cell(at: address)
-        guard !cell.raw.isEmpty else { continue }
-        if rasterTarget == nil, viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { continue }
-        let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
-        let paint = cached.paint
-        let format = paint.format ?? cell.format ?? CellFormat()
-        guard format.overflowsUnclipped else { continue }
-        if paint.dataBarFraction != nil && paint.dataBarShowValue == false { continue }
-        let text = cached.displayText
-        guard !text.isEmpty else { continue }
-        guard let cellRect = paintRect(for: address, merge: mergeRange(from: role)) else { continue }
-        let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
-        let textRect = textDrawingRect(in: cellRect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
-        guard textRect.width > 1, textRect.height > 1 else { continue }
-
-        var measureFormat = format
-        let baseSize = measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize
-        measureFormat.fontSize = baseSize * zoomScale
-        liveScrollTextPaints += 1
-        let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
-        let sourceColumns: ClosedRange<Int>
-        if let merge = mergeRange(from: role) {
+        switch mergeRole(at: address, sheet: sheet) {
+        case .covered:
+          guard let merge = sheet.mergeContaining(address) else { continue }
           let span = merge.normalized
-          sourceColumns = span.minCol...span.maxCol
-        } else {
-          sourceColumns = col...col
-        }
-        let horizontal = CellTextLayout.overflowClip(
-          cellMinX: textRect.minX,
-          cellMaxX: textRect.maxX,
-          textWidth: textWidth,
-          alignment: format.horizontalAlign,
-          insetX: 4,
-          sourceColumns: sourceColumns,
-          paneColumns: paneColumns,
-          columnOrigin: { self.xForColumn($0) },
-          columnWidth: { self.columnWidth(at: $0) },
-          blocks: { column in
-            guard column >= 0, row >= 0 else { return true }
-            let neighborAddress = CellAddress(row: row, col: column)
-            let neighborRole = self.mergeRole(at: neighborAddress, sheet: sheet)
-            if case .none = neighborRole {
-              let neighbor = sheet.cell(at: neighborAddress)
-              guard !neighbor.raw.isEmpty else { return false }
-              return !self.cachedCellPaint(
-                at: neighborAddress,
-                viewModel: viewModel,
-                sheet: sheet,
-                cell: neighbor
-              ).displayText.isEmpty
-            }
-            return true
-          }
-        )
-        let spill = NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
-        guard spill.width > 0.5, dirtyRect.intersects(spill) else { continue }
-        let value = cached.value
-        let isSelected = false
-        let fillColor = CellFormatRenderer.fillColor(for: paint.format)
-        drawPreparedText(
-          text,
-          value: value,
-          format: format,
-          textRect: textRect,
-          clipRect: spill,
-          fillColor: fillColor,
-          isSelected: isSelected,
-          isDarkMode: isDarkMode
-        )
-        if isFilterHeader {
-          drawFilterAffordance(in: cellRect, over: fillColor)
+          paintOverflowCell(
+            address: CellAddress(row: span.minRow, col: span.minCol),
+            merge: merge,
+            painted: &painted,
+            dirtyRect: dirtyRect,
+            paneColumns: paneColumns,
+            viewModel: viewModel,
+            sheet: sheet,
+            isDarkMode: isDarkMode
+          )
+        case .anchor(let merge):
+          paintOverflowCell(
+            address: address,
+            merge: merge,
+            painted: &painted,
+            dirtyRect: dirtyRect,
+            paneColumns: paneColumns,
+            viewModel: viewModel,
+            sheet: sheet,
+            isDarkMode: isDarkMode
+          )
+        case .none:
+          paintOverflowCell(
+            address: address,
+            merge: nil,
+            painted: &painted,
+            dirtyRect: dirtyRect,
+            paneColumns: paneColumns,
+            viewModel: viewModel,
+            sheet: sheet,
+            isDarkMode: isDarkMode
+          )
         }
       }
+    }
+  }
+
+  /// One cell's overflow text. A merge is drawn from its anchor in every pane the
+  /// merge crosses, clipped to that pane, so a frozen column does not end the sentence.
+  private func paintOverflowCell(
+    address: CellAddress,
+    merge: CellRange?,
+    painted: inout Set<CellAddress>,
+    dirtyRect: NSRect,
+    paneColumns: ClosedRange<Int>,
+    viewModel: SpreadsheetViewModel,
+    sheet: Sheet,
+    isDarkMode: Bool
+  ) {
+    if !painted.insert(address).inserted { return }
+    let cell = sheet.cell(at: address)
+    guard !cell.raw.isEmpty else { return }
+    if rasterTarget == nil, viewModel.isEditing && address == viewModel.selectionAnchor && isEditorActive { return }
+    let cached = cachedCellPaint(at: address, viewModel: viewModel, sheet: sheet, cell: cell)
+    let paint = cached.paint
+    let format = paint.format ?? cell.format ?? CellFormat()
+    guard format.overflowsUnclipped else { return }
+    if paint.dataBarFraction != nil && paint.dataBarShowValue == false { return }
+    let text = cached.displayText
+    guard !text.isEmpty else { return }
+    guard let cellRect = paintRect(for: address, merge: merge) else { return }
+    let isFilterHeader = viewModel.isFilterHeaderCell(row: address.row, col: address.col)
+    let textRect = textDrawingRect(in: cellRect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
+    guard textRect.width > 1, textRect.height > 1 else { return }
+
+    let horizontal: CellTextLayout.OverflowClip
+    if merge != nil {
+      // Merged text stays inside the merge. It does not spill into the next cell.
+      horizontal = CellTextLayout.OverflowClip(minX: textRect.minX, maxX: textRect.maxX)
+    } else {
+      var measureFormat = format
+      let baseSize = measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize
+      measureFormat.fontSize = baseSize * zoomScale
+      liveScrollTextPaints += 1
+      let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
+      let row = address.row
+      horizontal = CellTextLayout.overflowClip(
+        cellMinX: textRect.minX,
+        cellMaxX: textRect.maxX,
+        textWidth: textWidth,
+        alignment: format.horizontalAlign,
+        insetX: 4,
+        sourceColumns: address.col...address.col,
+        paneColumns: paneColumns,
+        columnOrigin: { self.xForColumn($0) },
+        columnWidth: { self.columnWidth(at: $0) },
+        blocks: { column in
+          guard column >= 0, row >= 0 else { return true }
+          let neighborAddress = CellAddress(row: row, col: column)
+          let neighborRole = self.mergeRole(at: neighborAddress, sheet: sheet)
+          if case .none = neighborRole {
+            let neighbor = sheet.cell(at: neighborAddress)
+            guard !neighbor.raw.isEmpty else { return false }
+            return !self.cachedCellPaint(
+              at: neighborAddress,
+              viewModel: viewModel,
+              sheet: sheet,
+              cell: neighbor
+            ).displayText.isEmpty
+          }
+          return true
+        }
+      )
+    }
+    let spill = NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
+    guard spill.width > 0.5, dirtyRect.intersects(spill) else { return }
+    let fillColor = CellFormatRenderer.fillColor(for: paint.format)
+    let spillsPastCell = horizontal.minX < cellRect.minX - 0.5 || horizontal.maxX > cellRect.maxX + 0.5
+    if merge != nil || spillsPastCell {
+      // Cover borders and fills that would otherwise stroke through the glyphs.
+      let background = fillColor ?? NSColor.windowBackgroundColor
+      background.setFill()
+      let cover = merge != nil ? cellRect.insetBy(dx: 1, dy: 1) : spill
+      if cover.width > 0.5, cover.height > 0.5 {
+        cover.fill()
+      }
+    }
+    drawPreparedText(
+      text,
+      value: cached.value,
+      format: format,
+      textRect: textRect,
+      clipRect: spill,
+      fillColor: fillColor,
+      isSelected: false,
+      isDarkMode: isDarkMode
+    )
+    if isFilterHeader {
+      drawFilterAffordance(in: cellRect, over: fillColor)
+    }
+  }
+
+  /// The anchor lives in another pane. This pane still draws the merge's outer borders.
+  private func appendOffPaneMergeBorders(
+    at address: CellAddress,
+    sheet: Sheet,
+    viewModel: SpreadsheetViewModel,
+    paneRows: ClosedRange<Int>?,
+    paneCols: ClosedRange<Int>?,
+    seen: inout Set<CellAddress>,
+    borderItems: inout [(CellBorders, NSRect)]
+  ) {
+    guard let merge = sheet.mergeContaining(address) else { return }
+    let span = merge.normalized
+    let anchor = CellAddress(row: span.minRow, col: span.minCol)
+    guard let paneRows, let paneCols else { return }
+    guard !paneRows.contains(anchor.row) || !paneCols.contains(anchor.col) else { return }
+    guard seen.insert(anchor).inserted else { return }
+    guard let rect = paintRect(for: anchor, merge: merge) else { return }
+    let anchorCell = sheet.cell(at: anchor)
+    let cached = cachedCellPaint(at: anchor, viewModel: viewModel, sheet: sheet, cell: anchorCell)
+    if let borders = cached.paint.format?.borders ?? anchorCell.format?.borders, borders.hasAny {
+      borderItems.append((borders, rect))
     }
   }
 
@@ -4404,20 +4515,88 @@ final class SpreadsheetGridNSView: NSView {
     NSColor.separatorColor.withAlphaComponent(0.92).setStroke()
     if frozenCols > 0 {
       let x = frozenColumnBoundaryX()
-      let line = NSBezierPath()
-      line.move(to: NSPoint(x: x, y: content.minY))
-      line.line(to: NSPoint(x: x, y: content.maxY))
-      line.lineWidth = 1.5
-      line.stroke()
+      strokeDivider(
+        horizontal: false,
+        axis: x,
+        from: content.minY,
+        to: content.maxY,
+        gaps: mergeSpansCrossingFreeze(sheet: sheet, vertical: true, frozenRows: frozenRows, frozenCols: frozenCols)
+      )
     }
     if frozenRows > 0 {
       let y = frozenRowBoundaryY()
-      let line = NSBezierPath()
-      line.move(to: NSPoint(x: content.minX, y: y))
-      line.line(to: NSPoint(x: content.maxX, y: y))
-      line.lineWidth = 1.5
-      line.stroke()
+      strokeDivider(
+        horizontal: true,
+        axis: y,
+        from: content.minX,
+        to: content.maxX,
+        gaps: mergeSpansCrossingFreeze(sheet: sheet, vertical: false, frozenRows: frozenRows, frozenCols: frozenCols)
+      )
     }
+  }
+
+  /// Merges that cross a freeze line leave a gap so the divider does not cut their text.
+  private func mergeSpansCrossingFreeze(
+    sheet: Sheet,
+    vertical: Bool,
+    frozenRows: Int,
+    frozenCols: Int
+  ) -> [(CGFloat, CGFloat)] {
+    var gaps: [(CGFloat, CGFloat)] = []
+    for merge in sheet.mergedRanges {
+      let span = merge.normalized
+      if vertical {
+        guard frozenCols > 0, span.minCol < frozenCols, span.maxCol >= frozenCols else { continue }
+        let minY = yForRow(span.minRow)
+        let maxY = yForRow(span.maxRow) + rowHeight(at: span.maxRow)
+        gaps.append((minY, maxY))
+      } else {
+        guard frozenRows > 0, span.minRow < frozenRows, span.maxRow >= frozenRows else { continue }
+        let minX = xForColumn(span.minCol)
+        let maxX = xForColumn(span.maxCol) + columnWidth(at: span.maxCol)
+        gaps.append((minX, maxX))
+      }
+    }
+    return gaps
+  }
+
+  private func strokeDivider(
+    horizontal: Bool,
+    axis: CGFloat,
+    from: CGFloat,
+    to: CGFloat,
+    gaps: [(CGFloat, CGFloat)]
+  ) {
+    let start = min(from, to)
+    let end = max(from, to)
+    var segments: [(CGFloat, CGFloat)] = [(start, end)]
+    for gap in gaps {
+      let low = min(gap.0, gap.1)
+      let high = max(gap.0, gap.1)
+      var next: [(CGFloat, CGFloat)] = []
+      next.reserveCapacity(segments.count + 1)
+      for segment in segments {
+        if high <= segment.0 || low >= segment.1 {
+          next.append(segment)
+          continue
+        }
+        if low - segment.0 > 0.5 { next.append((segment.0, low)) }
+        if segment.1 - high > 0.5 { next.append((high, segment.1)) }
+      }
+      segments = next
+    }
+    let line = NSBezierPath()
+    line.lineWidth = 1.5
+    for segment in segments where segment.1 - segment.0 > 0.5 {
+      if horizontal {
+        line.move(to: NSPoint(x: segment.0, y: axis))
+        line.line(to: NSPoint(x: segment.1, y: axis))
+      } else {
+        line.move(to: NSPoint(x: axis, y: segment.0))
+        line.line(to: NSPoint(x: axis, y: segment.1))
+      }
+    }
+    line.stroke()
   }
 
   // MARK: - Editor
