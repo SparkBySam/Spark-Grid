@@ -3897,6 +3897,20 @@ final class SpreadsheetGridNSView: NSView {
       viewModel: viewModel,
       sheet: sheet
     )
+    // A title in the frozen columns keeps going through empty cells on this side of the freeze.
+    if frozenCols > 0 {
+      drawOverflowText(
+        in: dirtyRect,
+        rowRange: rowLower...rows.upperBound,
+        visibleColumns: 0...(frozenCols - 1),
+        paneColumns: 0...lastColumn,
+        clipRect: scrollableCellsClipRect(),
+        viewModel: viewModel,
+        sheet: sheet,
+        skipMerges: true,
+        columnPad: 0
+      )
+    }
   }
 
   private func drawFrozenOverflowText(in dirtyRect: NSRect) {
@@ -3956,10 +3970,12 @@ final class SpreadsheetGridNSView: NSView {
     paneColumns: ClosedRange<Int>,
     clipRect: NSRect,
     viewModel: SpreadsheetViewModel,
-    sheet: Sheet
+    sheet: Sheet,
+    skipMerges: Bool = false,
+    columnPad: CGFloat = 4000
   ) {
     guard !clipRect.isEmpty, !rowRange.isEmpty, !visibleColumns.isEmpty, !paneColumns.isEmpty else { return }
-    let columns = extendedColumnRange(around: visibleColumns, within: paneColumns)
+    let columns = extendedColumnRange(around: visibleColumns, within: paneColumns, pad: columnPad)
     let isDarkMode = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
 
     NSGraphicsContext.saveGraphicsState()
@@ -3973,6 +3989,7 @@ final class SpreadsheetGridNSView: NSView {
         let address = CellAddress(row: row, col: col)
         switch mergeRole(at: address, sheet: sheet) {
         case .covered:
+          if skipMerges { continue }
           guard let merge = sheet.mergeContaining(address) else { continue }
           let span = merge.normalized
           paintOverflowCell(
@@ -3987,6 +4004,7 @@ final class SpreadsheetGridNSView: NSView {
             isDarkMode: isDarkMode
           )
         case .anchor(let merge):
+          if skipMerges { continue }
           paintOverflowCell(
             address: address,
             merge: merge,
@@ -4050,69 +4068,58 @@ final class SpreadsheetGridNSView: NSView {
     let textRect = textDrawingRect(in: cellRect, hasIcon: paint.icon != nil, isFilterHeader: isFilterHeader)
     guard textRect.width > 1, textRect.height > 1 else { return }
 
-    var drawFormat = format
-    let horizontal: CellTextLayout.OverflowClip
-    if merge != nil {
-      // Merged text stays inside the merge. It does not spill into the next cell.
-      // Bold type can run a few points past that width. Draw it a little smaller
-      // so the sentence stays whole, and leave a real overflow clipped.
-      let zoom = zoomScale
-      var measureFormat = format
-      let baseSize = (measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize) * zoom
-      measureFormat.fontSize = baseSize
-      let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
-      let available = textRect.width - 8
-      if textWidth > available + 0.5, available > 1 {
-        let scale = available / textWidth
-        if scale >= 0.8 {
-          drawFormat.fontSize = (baseSize * scale) / zoom
-        }
-      }
-      horizontal = CellTextLayout.OverflowClip(minX: textRect.minX, maxX: textRect.maxX)
+    let sourceColumns: ClosedRange<Int>
+    if let merge {
+      let span = merge.normalized
+      sourceColumns = span.minCol...span.maxCol
     } else {
-      var measureFormat = format
-      let baseSize = measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize
-      measureFormat.fontSize = baseSize * zoomScale
-      liveScrollTextPaints += 1
-      let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
-      let row = address.row
-      horizontal = CellTextLayout.overflowClip(
-        cellMinX: textRect.minX,
-        cellMaxX: textRect.maxX,
-        textWidth: textWidth,
-        alignment: format.horizontalAlign,
-        insetX: 4,
-        sourceColumns: address.col...address.col,
-        paneColumns: paneColumns,
-        columnOrigin: { self.xForColumn($0) },
-        columnWidth: { self.columnWidth(at: $0) },
-        blocks: { column in
-          guard column >= 0, row >= 0 else { return true }
-          let neighborAddress = CellAddress(row: row, col: column)
-          let neighborRole = self.mergeRole(at: neighborAddress, sheet: sheet)
-          if case .none = neighborRole {
-            let neighbor = sheet.cell(at: neighborAddress)
-            guard !neighbor.raw.isEmpty else { return false }
-            return !self.cachedCellPaint(
-              at: neighborAddress,
-              viewModel: viewModel,
-              sheet: sheet,
-              cell: neighbor
-            ).displayText.isEmpty
-          }
-          return true
-        }
-      )
+      sourceColumns = address.col...address.col
     }
+    var measureFormat = format
+    let baseSize = measureFormat.fontSize ?? CellFormatRenderer.defaultFontSize
+    measureFormat.fontSize = baseSize * zoomScale
+    liveScrollTextPaints += 1
+    let textWidth = CellFormatRenderer.measuredWidth(for: text, format: measureFormat)
+    let row = address.row
+    // Full size. A merge that is narrower than the sentence continues through empty cells
+    // to its right. Those cells are only covered while drawing; the sheet is not changed.
+    let horizontal = CellTextLayout.overflowClip(
+      cellMinX: textRect.minX,
+      cellMaxX: textRect.maxX,
+      textWidth: textWidth,
+      alignment: format.horizontalAlign,
+      insetX: 4,
+      sourceColumns: sourceColumns,
+      paneColumns: paneColumns,
+      columnOrigin: { self.xForColumn($0) },
+      columnWidth: { self.columnWidth(at: $0) },
+      blocks: { column in
+        guard column >= 0, row >= 0 else { return true }
+        if sourceColumns.contains(column) { return false }
+        let neighborAddress = CellAddress(row: row, col: column)
+        let neighborRole = self.mergeRole(at: neighborAddress, sheet: sheet)
+        if case .none = neighborRole {
+          let neighbor = sheet.cell(at: neighborAddress)
+          guard !neighbor.raw.isEmpty else { return false }
+          return !self.cachedCellPaint(
+            at: neighborAddress,
+            viewModel: viewModel,
+            sheet: sheet,
+            cell: neighbor
+          ).displayText.isEmpty
+        }
+        return true
+      }
+    )
     let spill = NSRect(x: horizontal.minX, y: cellRect.minY, width: horizontal.width, height: cellRect.height)
     guard spill.width > 0.5, dirtyRect.intersects(spill) else { return }
     let fillColor = CellFormatRenderer.fillColor(for: paint.format)
     let spillsPastCell = horizontal.minX < cellRect.minX - 0.5 || horizontal.maxX > cellRect.maxX + 0.5
-    if merge != nil || spillsPastCell {
+    if spillsPastCell || merge != nil {
       // Cover borders and fills that would otherwise stroke through the glyphs.
       let background = fillColor ?? NSColor.windowBackgroundColor
       background.setFill()
-      let cover = merge != nil ? cellRect.insetBy(dx: 1, dy: 1) : spill
+      let cover = spillsPastCell ? spill : cellRect.insetBy(dx: 1, dy: 1)
       if cover.width > 0.5, cover.height > 0.5 {
         cover.fill()
       }
@@ -4120,7 +4127,7 @@ final class SpreadsheetGridNSView: NSView {
     drawPreparedText(
       text,
       value: cached.value,
-      format: drawFormat,
+      format: format,
       textRect: textRect,
       clipRect: spill,
       fillColor: fillColor,
@@ -4495,8 +4502,12 @@ final class SpreadsheetGridNSView: NSView {
       // A merge lower in the sheet scrolls. Once its rect passes over that
       // strip, painting it there covers the frozen headers.
       if pinnedX, span.minRow < frozenRows {
-        let top = rect.intersection(frozenTopStripClipRect())
-        if top.width > 0.5, top.height > 0.5 { slices.append(top) }
+        let strip = frozenTopStripClipRect()
+        var top = rect.intersection(strip)
+        if top.width > 0.5, top.height > 0.5 {
+          top.size.width = max(top.width, strip.maxX - top.minX)
+          slices.append(top)
+        }
       }
       if pinnedY {
         let left = rect.intersection(frozenLeftStripClipRect())
@@ -4504,8 +4515,10 @@ final class SpreadsheetGridNSView: NSView {
       }
       return slices
     case .body:
-      let body = rect.intersection(scrollableCellsClipRect())
+      let bodyClip = scrollableCellsClipRect()
+      var body = rect.intersection(bodyClip)
       guard body.width > 0.5, body.height > 0.5 else { return [] }
+      body.size.width = max(body.width, bodyClip.maxX - body.minX)
       return [body]
     }
   }
