@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum FormulaError: Equatable, Sendable, CaseIterable {
+nonisolated enum FormulaError: Equatable, Hashable, Sendable, CaseIterable {
   case divZero
   case ref
   case value

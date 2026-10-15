@@ -179,6 +179,14 @@ final class SpreadsheetViewModel {
     formulaEngine.displayValue(at: address, sheet: activeSheet)
   }
 
+  /// Full workbook recalc using grouped aggregate range scans (does not run on open).
+  @discardableResult
+  func recalculateEntireWorkbook() -> TimeInterval {
+    let elapsed = formulaEngine.recalculateEntireWorkbook(workbook)
+    notifyGridRefresh()
+    return elapsed
+  }
+
   func displayString(at address: CellAddress) -> String {
     let cell = activeSheet.cell(at: address)
     return formulaEngine.displayString(at: address, sheet: activeSheet, format: cell.format)
