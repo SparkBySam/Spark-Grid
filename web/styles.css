@@ -285,6 +285,31 @@ main {
   margin-top: 8px;
 }
 
+.notes {
+  padding: 36px 0 12px;
+}
+.notes h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 3vw, 2rem);
+  letter-spacing: -0.03em;
+}
+.notes ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  max-width: 40rem;
+  color: var(--muted);
+}
+.notes li {
+  margin: 0 0 8px;
+}
+.hero .pitch {
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
 .suite {
   margin-top: 36px;
   padding: 22px 0;
