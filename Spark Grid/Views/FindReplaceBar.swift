@@ -3,6 +3,7 @@ import SwiftUI
 struct FindReplaceBar: View {
   @Bindable var viewModel: SpreadsheetViewModel
   @State private var findQueryDebounceTask: Task<Void, Never>?
+  @FocusState private var findFieldFocused: Bool
 
   var body: some View {
     HStack(spacing: 8) {
@@ -13,6 +14,7 @@ struct FindReplaceBar: View {
 
       TextField("Find", text: $viewModel.findQuery)
         .textFieldStyle(.plain)
+        .focused($findFieldFocused)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
@@ -119,8 +121,22 @@ struct FindReplaceBar: View {
     .frame(height: SpreadsheetChrome.findBarHeight)
     .background(Color(nsColor: .controlBackgroundColor))
     .foregroundStyle(Color(nsColor: .labelColor))
+    .onAppear {
+      claimFindField()
+    }
     .onDisappear {
       findQueryDebounceTask?.cancel()
+    }
+  }
+
+  /// The find field takes the key window before the cell editor can.
+  private func claimFindField() {
+    SpreadsheetGridNSView.endEditingInKeyWindowForFind()
+    findFieldFocused = true
+    DispatchQueue.main.async {
+      guard viewModel.isFindBarVisible else { return }
+      SpreadsheetGridNSView.endEditingInKeyWindowForFind()
+      findFieldFocused = true
     }
   }
 

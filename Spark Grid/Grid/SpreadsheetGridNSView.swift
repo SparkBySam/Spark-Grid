@@ -60,6 +60,8 @@ final class SpreadsheetGridNSView: NSView {
   /// How far past the viewport a scroll plane is rasterized, in points.
   /// A tick inside this margin blits the plane; it does not redraw cell text.
   static let liveScrollOverscan: CGFloat = 280
+  /// Kept tiles per pane. The live viewport plus the next screen in the scroll direction.
+  private static let scrollPlaneCacheLimit = 4
   private var contentRectOverride: NSRect?
   private var rasterTarget: RasterTarget?
   private var suppressSelectionWash = false
@@ -118,10 +120,10 @@ final class SpreadsheetGridNSView: NSView {
     case columnHeaders
     case rowHeaders
   }
-  private var bodyPlane: ScrollPlane?
-  private var frozenTopPlane: ScrollPlane?
-  private var frozenLeftPlane: ScrollPlane?
-  private var frozenCornerPlane: ScrollPlane?
+  private var bodyPlanes: [ScrollPlane] = []
+  private var frozenTopPlanes: [ScrollPlane] = []
+  private var frozenLeftPlanes: [ScrollPlane] = []
+  private var frozenCornerPlanes: [ScrollPlane] = []
   private(set) var liveScrollCellVisits = 0
   private(set) var liveScrollTextPaints = 0
   private(set) var liveScrollPlaneBuilds = 0
@@ -350,11 +352,13 @@ final class SpreadsheetGridNSView: NSView {
   private let frozenCornerScrollClip = ScrollClipView(frame: .zero)
   private let frozenTopScrollClip = ScrollClipView(frame: .zero)
   private let frozenLeftScrollClip = ScrollClipView(frame: .zero)
-  private var columnHeaderPlane: ScrollPlane?
-  private var rowHeaderPlane: ScrollPlane?
+  private var columnHeaderPlanes: [ScrollPlane] = []
+  private var rowHeaderPlanes: [ScrollPlane] = []
   private var scrollSurfacesPresented = false
   private var isAdjustingScrollSurfaces = false
-  private var scrollPlanePrefetchScheduled = false
+  private var scrollPlaneBuildScheduled = false
+  /// Direction of the latest scroll, used to raster the next screen after this frame.
+  private var lastScrollDelta = CGPoint.zero
 
   private var isPropagatingDisplay = false
   private var chartHosts: [UUID: OnSheetChartHost] = [:]
@@ -886,12 +890,13 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func invalidateScrollPlanes() {
-    bodyPlane = nil
-    frozenTopPlane = nil
-    frozenLeftPlane = nil
-    frozenCornerPlane = nil
-    columnHeaderPlane = nil
-    rowHeaderPlane = nil
+    bodyPlanes.removeAll(keepingCapacity: true)
+    frozenTopPlanes.removeAll(keepingCapacity: true)
+    frozenLeftPlanes.removeAll(keepingCapacity: true)
+    frozenCornerPlanes.removeAll(keepingCapacity: true)
+    columnHeaderPlanes.removeAll(keepingCapacity: true)
+    rowHeaderPlanes.removeAll(keepingCapacity: true)
+    lastScrollDelta = .zero
     hideScrollSurfaces()
   }
 
@@ -1138,17 +1143,38 @@ final class SpreadsheetGridNSView: NSView {
       && rect.minY < bounds.height
   }
 
+  /// Extra rows and columns drawn around the viewport. A short scroll is already
+  /// in that paint, and the frame does not build a region bitmap to get them.
+  private var viewportPaintOverscan = false
+  private let viewportPaintOverscanCells = 2
+
   private func visibleColumnRange() -> ClosedRange<Int> {
     let content = contentRect
-    let first = max(0, columnAtContent(x: content.minX))
-    let last = min(columnCount() - 1, columnAtContent(x: content.maxX))
+    var first = max(0, columnAtContent(x: content.minX))
+    var last = min(columnCount() - 1, columnAtContent(x: content.maxX))
+    if viewportPaintOverscan {
+      first = max(0, first - viewportPaintOverscanCells)
+      last = min(columnCount() - 1, last + viewportPaintOverscanCells)
+    }
+    if first > last {
+      let fallback = min(max(0, first), max(0, columnCount() - 1))
+      return fallback...fallback
+    }
     return first...last
   }
 
   private func visibleRowRange() -> ClosedRange<Int> {
     let content = contentRect
-    let first = max(0, rowAtContent(y: content.minY))
-    let last = min(rowCount() - 1, rowAtContent(y: content.maxY))
+    var first = max(0, rowAtContent(y: content.minY))
+    var last = min(rowCount() - 1, rowAtContent(y: content.maxY))
+    if viewportPaintOverscan {
+      first = max(0, first - viewportPaintOverscanCells)
+      last = min(rowCount() - 1, last + viewportPaintOverscanCells)
+    }
+    if first > last {
+      let fallback = min(max(0, first), max(0, rowCount() - 1))
+      return fallback...fallback
+    }
     return first...last
   }
 
@@ -1727,14 +1753,14 @@ final class SpreadsheetGridNSView: NSView {
     return image
   }
 
-  private func ensureBodyPlane() -> ScrollPlane? {
+  private func ensureBodyPlane(at scroll: CGPoint) -> ScrollPlane? {
     let pane = scrollableCellsClipRect()
     guard pane.width > 1, pane.height > 1, viewModel != nil else { return nil }
     let key = scrollPlaneKey()
-    if let existing = bodyPlane, existing.key == key, existing.covers(scroll: scrollOrigin, pane: pane) {
+    if let existing = takeCoveringPlane(in: bodyPlanes, key: key, scroll: scroll, pane: pane) {
       return existing
     }
-    let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: true, scrollsY: true)
+    let coverage = expandedCoverage(scroll: scroll, pane: pane, scrollsX: true, scrollsY: true)
     let override = contentRect(coveringScrollable: coverage.viewRect)
     prepareValuesCovering(viewRect: coverage.viewRect, scroll: coverage.origin, contentOverride: override)
     guard let image = captureManual(
@@ -1746,7 +1772,7 @@ final class SpreadsheetGridNSView: NSView {
     ) else { return nil }
     let plane = ScrollPlane(
       key: key,
-      exactScroll: scrollOrigin,
+      exactScroll: scroll,
       contentOrigin: coverage.origin,
       viewRect: coverage.viewRect,
       exactCells: image,
@@ -1756,24 +1782,28 @@ final class SpreadsheetGridNSView: NSView {
       scrollsX: true,
       scrollsY: true
     )
-    bodyPlane = plane
+    storePlane(plane, in: &bodyPlanes, pane: pane)
     liveScrollPlaneBuilds += 1
     return plane
   }
 
   private func ensureFrozenPlane(
-    existing: ScrollPlane?,
+    in cache: inout [ScrollPlane],
     pane: NSRect,
     scrollsX: Bool,
     scrollsY: Bool,
-    assign: (ScrollPlane) -> Void
+    at scroll: CGPoint
   ) -> ScrollPlane? {
     guard pane.width > 1, pane.height > 1, viewModel != nil else { return nil }
     let key = scrollPlaneKey()
-    if let existing, existing.key == key, existing.covers(scroll: scrollOrigin, pane: pane) {
+    let anchor = CGPoint(
+      x: scrollsX ? scroll.x : scrollOrigin.x,
+      y: scrollsY ? scroll.y : scrollOrigin.y
+    )
+    if let existing = takeCoveringPlane(in: cache, key: key, scroll: anchor, pane: pane) {
       return existing
     }
-    let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: scrollsX, scrollsY: scrollsY)
+    let coverage = expandedCoverage(scroll: anchor, pane: pane, scrollsX: scrollsX, scrollsY: scrollsY)
     let manualScroll = CGPoint(
       x: scrollsX ? coverage.origin.x : scrollOrigin.x,
       y: scrollsY ? coverage.origin.y : scrollOrigin.y
@@ -1794,7 +1824,7 @@ final class SpreadsheetGridNSView: NSView {
     ) else { return nil }
     let plane = ScrollPlane(
       key: key,
-      exactScroll: scrollOrigin,
+      exactScroll: anchor,
       contentOrigin: coverage.origin,
       viewRect: coverage.viewRect,
       exactCells: image,
@@ -1804,7 +1834,7 @@ final class SpreadsheetGridNSView: NSView {
       scrollsX: scrollsX,
       scrollsY: scrollsY
     )
-    assign(plane)
+    storePlane(plane, in: &cache, pane: pane)
     liveScrollPlaneBuilds += 1
     return plane
   }
@@ -1819,42 +1849,46 @@ final class SpreadsheetGridNSView: NSView {
     return NSRect(x: 0, y: top, width: headerSize, height: max(0, bounds.height - top))
   }
 
-  private func ensureColumnHeaderPlane() -> ScrollPlane? {
+  private func ensureColumnHeaderPlane(at scroll: CGPoint) -> ScrollPlane? {
     ensureHeaderPlane(
-      existing: columnHeaderPlane,
+      in: &columnHeaderPlanes,
       pane: scrollingColumnHeaderPane(),
       scrollsX: true,
       scrollsY: false,
       target: .columnHeaders,
-      assign: { self.columnHeaderPlane = $0 }
+      at: scroll
     )
   }
 
-  private func ensureRowHeaderPlane() -> ScrollPlane? {
+  private func ensureRowHeaderPlane(at scroll: CGPoint) -> ScrollPlane? {
     ensureHeaderPlane(
-      existing: rowHeaderPlane,
+      in: &rowHeaderPlanes,
       pane: scrollingRowHeaderPane(),
       scrollsX: false,
       scrollsY: true,
       target: .rowHeaders,
-      assign: { self.rowHeaderPlane = $0 }
+      at: scroll
     )
   }
 
   private func ensureHeaderPlane(
-    existing: ScrollPlane?,
+    in cache: inout [ScrollPlane],
     pane: NSRect,
     scrollsX: Bool,
     scrollsY: Bool,
     target: RasterTarget,
-    assign: (ScrollPlane) -> Void
+    at scroll: CGPoint
   ) -> ScrollPlane? {
     guard pane.width > 1, pane.height > 1, viewModel != nil else { return nil }
     let key = scrollPlaneKey()
-    if let existing, existing.key == key, existing.covers(scroll: scrollOrigin, pane: pane) {
+    let anchor = CGPoint(
+      x: scrollsX ? scroll.x : scrollOrigin.x,
+      y: scrollsY ? scroll.y : scrollOrigin.y
+    )
+    if let existing = takeCoveringPlane(in: cache, key: key, scroll: anchor, pane: pane) {
       return existing
     }
-    let coverage = expandedCoverage(scroll: scrollOrigin, pane: pane, scrollsX: scrollsX, scrollsY: scrollsY)
+    let coverage = expandedCoverage(scroll: anchor, pane: pane, scrollsX: scrollsX, scrollsY: scrollsY)
     let manualScroll = CGPoint(
       x: scrollsX ? coverage.origin.x : scrollOrigin.x,
       y: scrollsY ? coverage.origin.y : scrollOrigin.y
@@ -1868,7 +1902,7 @@ final class SpreadsheetGridNSView: NSView {
     ) else { return nil }
     let plane = ScrollPlane(
       key: key,
-      exactScroll: scrollOrigin,
+      exactScroll: anchor,
       contentOrigin: coverage.origin,
       viewRect: coverage.viewRect,
       exactCells: image,
@@ -1878,7 +1912,7 @@ final class SpreadsheetGridNSView: NSView {
       scrollsX: scrollsX,
       scrollsY: scrollsY
     )
-    assign(plane)
+    storePlane(plane, in: &cache, pane: pane)
     liveScrollPlaneBuilds += 1
     return plane
   }
@@ -1939,59 +1973,230 @@ final class SpreadsheetGridNSView: NSView {
   }
 
   private func buildScrollPlanesIfNeeded() {
-    _ = ensureBodyPlane()
-    _ = ensureColumnHeaderPlane()
-    _ = ensureRowHeaderPlane()
-    _ = ensureFrozenScrollPlanes()
+    buildScrollPlanes(at: scrollOrigin)
   }
 
-  private func ensureFrozenScrollPlanes() -> (corner: ScrollPlane?, top: ScrollPlane?, left: ScrollPlane?) {
+  private func buildScrollPlanes(at scroll: CGPoint) {
+    _ = ensureBodyPlane(at: scroll)
+    _ = ensureColumnHeaderPlane(at: scroll)
+    _ = ensureRowHeaderPlane(at: scroll)
+    _ = ensureFrozenScrollPlanes(at: scroll)
+  }
+
+  @discardableResult
+  private func ensureFrozenScrollPlanes(at scroll: CGPoint) -> (corner: ScrollPlane?, top: ScrollPlane?, left: ScrollPlane?) {
     let cornerPane = frozenCellsClipRect()
     let topPane = frozenTopStripClipRect()
     let leftPane = frozenLeftStripClipRect()
     let corner = frozenRowCount() > 0 && frozenColumnCount() > 0 && cornerPane.width > 1 && cornerPane.height > 1
       ? ensureFrozenPlane(
-        existing: frozenCornerPlane,
+        in: &frozenCornerPlanes,
         pane: cornerPane,
         scrollsX: false,
         scrollsY: false,
-        assign: { self.frozenCornerPlane = $0 }
+        at: scroll
       )
       : nil
     let top = frozenRowCount() > 0 && topPane.width > 1 && topPane.height > 1
       ? ensureFrozenPlane(
-        existing: frozenTopPlane,
+        in: &frozenTopPlanes,
         pane: topPane,
         scrollsX: true,
         scrollsY: false,
-        assign: { self.frozenTopPlane = $0 }
+        at: scroll
       )
       : nil
     let left = frozenColumnCount() > 0 && leftPane.width > 1 && leftPane.height > 1
       ? ensureFrozenPlane(
-        existing: frozenLeftPlane,
+        in: &frozenLeftPlanes,
         pane: leftPane,
         scrollsX: false,
         scrollsY: true,
-        assign: { self.frozenLeftPlane = $0 }
+        at: scroll
       )
       : nil
     return (corner, top, left)
   }
 
+  /// After a live paint, raster the current screen once the frame has been committed.
   private func scheduleScrollPlanePrefetch() {
-    guard rasterTarget == nil, !scrollPlanePrefetchScheduled, window != nil, viewModel != nil else { return }
-    let key = scrollPlaneKey()
-    if bodyPlane?.key == key, columnHeaderPlane?.key == key, rowHeaderPlane?.key == key {
-      return
-    }
-    scrollPlanePrefetchScheduled = true
+    guard !planesCover(scrollOrigin) else { return }
+    scheduleOffFrameScrollBuild()
+  }
+
+  /// One region per turn, after the scroll frame. The frame itself only blits.
+  private func scheduleOffFrameScrollBuild() {
+    guard !scrollPlaneBuildScheduled, rasterTarget == nil, window != nil, viewModel != nil else { return }
+    guard scrollRegionNeedingBuild() != nil else { return }
+    scrollPlaneBuildScheduled = true
     DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      self.scrollPlanePrefetchScheduled = false
-      guard self.rasterTarget == nil, !self.scrollSurfacesPresented, self.window != nil else { return }
-      self.buildScrollPlanesIfNeeded()
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.scrollPlaneBuildScheduled = false
+        self.performOffFrameScrollBuild()
+      }
     }
+  }
+
+  private func performOffFrameScrollBuild() {
+    guard rasterTarget == nil, window != nil, viewModel != nil else { return }
+    guard let target = scrollRegionNeedingBuild() else { return }
+    let presented = scrollSurfacesPresented
+    isAdjustingScrollSurfaces = true
+    buildScrollPlanes(at: target)
+    isAdjustingScrollSurfaces = false
+    if presented {
+      needsDisplay = false
+    }
+    guard planesCover(target) else { return }
+    guard presented || scrollSurfacesPresented else { return }
+    _ = applyScrollSurfaces()
+  }
+
+  /// The on-screen region wins. Otherwise the next uncovered step toward one viewport ahead.
+  private func scrollRegionNeedingBuild() -> CGPoint? {
+    if !planesCover(scrollOrigin) {
+      return scrollOrigin
+    }
+    return nextViewportStep()
+  }
+
+  private func nextViewportStep() -> CGPoint? {
+    let dx = lastScrollDelta.x
+    let dy = lastScrollDelta.y
+    guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return nil }
+    let pane = scrollableCellsClipRect()
+    guard pane.width > 1, pane.height > 1 else { return nil }
+    let dirX: CGFloat = abs(dx) > 0.5 ? (dx > 0 ? 1 : -1) : 0
+    let dirY: CGFloat = abs(dy) > 0.5 ? (dy > 0 ? 1 : -1) : 0
+    let goal = clampedScroll(CGPoint(
+      x: scrollOrigin.x + dirX * pane.width,
+      y: scrollOrigin.y + dirY * pane.height
+    ))
+    if planesCover(goal) { return nil }
+    let step = Self.liveScrollOverscan
+    var cursor = scrollOrigin
+    for _ in 0..<8 {
+      let next = clampedScroll(CGPoint(
+        x: cursor.x + dirX * step,
+        y: cursor.y + dirY * step
+      ))
+      if abs(next.x - cursor.x) < 0.5, abs(next.y - cursor.y) < 0.5 {
+        return nil
+      }
+      if !planesCover(next) {
+        return next
+      }
+      let passedX = dirX == 0 || (dirX > 0 ? next.x >= goal.x - 0.5 : next.x <= goal.x + 0.5)
+      let passedY = dirY == 0 || (dirY > 0 ? next.y >= goal.y - 0.5 : next.y <= goal.y + 0.5)
+      if passedX && passedY { return nil }
+      cursor = next
+    }
+    return nil
+  }
+
+  private func clampedScroll(_ scroll: CGPoint) -> CGPoint {
+    let saved = scrollOrigin
+    scrollOrigin = scroll
+    clampScrollOrigin()
+    let clamped = scrollOrigin
+    scrollOrigin = saved
+    return clamped
+  }
+
+  private func planesCover(_ scroll: CGPoint) -> Bool {
+    let key = scrollPlaneKey()
+    let bodyPane = scrollableCellsClipRect()
+    let columnPane = scrollingColumnHeaderPane()
+    let rowPane = scrollingRowHeaderPane()
+    guard bodyPlanes.contains(where: { $0.key == key && $0.covers(scroll: scroll, pane: bodyPane) }),
+          columnHeaderPlanes.contains(where: { $0.key == key && $0.covers(scroll: scroll, pane: columnPane) }),
+          rowHeaderPlanes.contains(where: { $0.key == key && $0.covers(scroll: scroll, pane: rowPane) })
+    else { return false }
+    let topPane = frozenTopStripClipRect()
+    let leftPane = frozenLeftStripClipRect()
+    let cornerPane = frozenCellsClipRect()
+    if frozenRowCount() > 0, topPane.height > 1,
+       !frozenTopPlanes.contains(where: { $0.key == key && $0.covers(scroll: scroll, pane: topPane) }) {
+      return false
+    }
+    if frozenColumnCount() > 0, leftPane.width > 1,
+       !frozenLeftPlanes.contains(where: { $0.key == key && $0.covers(scroll: scroll, pane: leftPane) }) {
+      return false
+    }
+    if frozenRowCount() > 0, frozenColumnCount() > 0, cornerPane.width > 1, cornerPane.height > 1,
+       !frozenCornerPlanes.contains(where: { $0.key == key && $0.covers(scroll: scroll, pane: cornerPane) }) {
+      return false
+    }
+    return true
+  }
+
+  private func planeForBlit(
+    in cache: [ScrollPlane],
+    key: String,
+    scroll: CGPoint,
+    pane: NSRect
+  ) -> ScrollPlane? {
+    if let covering = takeCoveringPlane(in: cache, key: key, scroll: scroll, pane: pane) {
+      return covering
+    }
+    return takeNearestPlane(in: cache, key: key, scroll: scroll)
+  }
+
+  /// The first covering tile stays on screen until the scroll leaves it.
+  private func takeCoveringPlane(
+    in cache: [ScrollPlane],
+    key: String,
+    scroll: CGPoint,
+    pane: NSRect
+  ) -> ScrollPlane? {
+    cache.first { $0.key == key && $0.covers(scroll: scroll, pane: pane) }
+  }
+
+  private func takeNearestPlane(
+    in cache: [ScrollPlane],
+    key: String,
+    scroll: CGPoint
+  ) -> ScrollPlane? {
+    var best: ScrollPlane?
+    var bestDistance = CGFloat.greatestFiniteMagnitude
+    for plane in cache where plane.key == key {
+      let dx = plane.scrollsX ? plane.exactScroll.x - scroll.x : 0
+      let dy = plane.scrollsY ? plane.exactScroll.y - scroll.y : 0
+      let distance = (dx * dx) + (dy * dy)
+      if distance < bestDistance {
+        bestDistance = distance
+        best = plane
+      }
+    }
+    return best
+  }
+
+  private func storePlane(_ plane: ScrollPlane, in cache: inout [ScrollPlane], pane: NSRect) {
+    cache.removeAll { $0.key == plane.key && $0.matchesExact(scroll: plane.exactScroll) }
+    cache.append(plane)
+    let limit = Self.scrollPlaneCacheLimit
+    let key = scrollPlaneKey()
+    while cache.count > limit {
+      let candidates = cache.indices.dropLast()
+      if let index = candidates.first(where: { index in
+        let candidate = cache[index]
+        return candidate.key != key || !candidate.covers(scroll: scrollOrigin, pane: pane)
+      }) {
+        cache.remove(at: index)
+        continue
+      }
+      guard let farthest = candidates.max(by: { lhs, rhs in
+        planeDistance(cache[lhs], from: scrollOrigin) < planeDistance(cache[rhs], from: scrollOrigin)
+      }) else { break }
+      cache.remove(at: farthest)
+    }
+  }
+
+  private func planeDistance(_ plane: ScrollPlane, from scroll: CGPoint) -> CGFloat {
+    let dx = plane.scrollsX ? plane.exactScroll.x - scroll.x : 0
+    let dy = plane.scrollsY ? plane.exactScroll.y - scroll.y : 0
+    return (dx * dx) + (dy * dy)
   }
 
   private func hideScrollSurfaces() {
@@ -2005,37 +2210,45 @@ final class SpreadsheetGridNSView: NSView {
     hidePinnedMergeText()
   }
 
-  /// Move already-rasterized panes. Returns false when a pane has to be painted
-  /// into the view instead.
+  /// Move already-rasterized panes. A miss blits the nearest tile and builds the
+  /// real region after this frame. Returns false only when there is no tile yet.
   private func applyScrollSurfaces() -> Bool {
     guard viewModel != nil, bounds.width > 2, bounds.height > 2 else { return false }
     isAdjustingScrollSurfaces = true
     defer { isAdjustingScrollSurfaces = false }
 
+    let key = scrollPlaneKey()
     let bodyPaneRect = scrollableCellsClipRect()
     let columnPane = scrollingColumnHeaderPane()
     let rowPane = scrollingRowHeaderPane()
-    guard let body = ensureBodyPlane(), body.covers(scroll: scrollOrigin, pane: bodyPaneRect),
-          let columns = ensureColumnHeaderPlane(), columns.covers(scroll: scrollOrigin, pane: columnPane),
-          let rows = ensureRowHeaderPlane(), rows.covers(scroll: scrollOrigin, pane: rowPane)
+    guard let body = planeForBlit(in: bodyPlanes, key: key, scroll: scrollOrigin, pane: bodyPaneRect),
+          let columns = planeForBlit(in: columnHeaderPlanes, key: key, scroll: scrollOrigin, pane: columnPane),
+          let rows = planeForBlit(in: rowHeaderPlanes, key: key, scroll: scrollOrigin, pane: rowPane)
     else {
       hideScrollSurfaces()
       return false
     }
-    let frozen = ensureFrozenScrollPlanes()
     let topPane = frozenTopStripClipRect()
     let leftPane = frozenLeftStripClipRect()
     let cornerPane = frozenCellsClipRect()
-    if frozenRowCount() > 0, topPane.height > 1, frozen.top?.covers(scroll: scrollOrigin, pane: topPane) != true {
+    let corner = frozenRowCount() > 0 && frozenColumnCount() > 0 && cornerPane.width > 1
+      ? planeForBlit(in: frozenCornerPlanes, key: key, scroll: scrollOrigin, pane: cornerPane)
+      : nil
+    let top = frozenRowCount() > 0 && topPane.height > 1
+      ? planeForBlit(in: frozenTopPlanes, key: key, scroll: scrollOrigin, pane: topPane)
+      : nil
+    let left = frozenColumnCount() > 0 && leftPane.width > 1
+      ? planeForBlit(in: frozenLeftPlanes, key: key, scroll: scrollOrigin, pane: leftPane)
+      : nil
+    if frozenRowCount() > 0, topPane.height > 1, top == nil {
       hideScrollSurfaces()
       return false
     }
-    if frozenColumnCount() > 0, leftPane.width > 1, frozen.left?.covers(scroll: scrollOrigin, pane: leftPane) != true {
+    if frozenColumnCount() > 0, leftPane.width > 1, left == nil {
       hideScrollSurfaces()
       return false
     }
-    if frozenRowCount() > 0, frozenColumnCount() > 0, cornerPane.width > 1,
-       frozen.corner?.covers(scroll: scrollOrigin, pane: cornerPane) != true {
+    if frozenRowCount() > 0, frozenColumnCount() > 0, cornerPane.width > 1, corner == nil {
       hideScrollSurfaces()
       return false
     }
@@ -2043,11 +2256,12 @@ final class SpreadsheetGridNSView: NSView {
     installScrollClip(bodyScrollClip, plane: body, frame: bodyPaneRect, superview: self)
     installScrollClip(columnHeaderScrollClip, plane: columns, frame: columnPane, superview: self)
     installScrollClip(rowHeaderScrollClip, plane: rows, frame: rowPane, superview: self)
-    installFrozenScrollClips(frozen)
+    installFrozenScrollClips((corner: corner, top: top, left: left))
     scrollSurfacesPresented = true
     needsDisplay = false
     displayPinnedMergeText()
     displaySelectionChrome()
+    scheduleOffFrameScrollBuild()
     return true
   }
 
@@ -2066,6 +2280,7 @@ final class SpreadsheetGridNSView: NSView {
     if superview !== self {
       superview.clipsToBounds = true
     }
+    clip.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     placeScrollSurface(clip, plane: plane)
     showScrollImage(clip, image: plane.cells)
   }
@@ -2151,9 +2366,11 @@ final class SpreadsheetGridNSView: NSView {
   private func prepareViewportValues() {
     guard !isPreparingPaintValues, rasterTarget == nil, let viewModel else { return }
     isPreparingPaintValues = true
+    viewportPaintOverscan = true
     beginDrawLayout()
     defer {
       endDrawLayout()
+      viewportPaintOverscan = false
       isPreparingPaintValues = false
     }
     guard let sheet = layoutSheet else { return }
@@ -2197,7 +2414,11 @@ final class SpreadsheetGridNSView: NSView {
 
   override func draw(_ dirtyRect: NSRect) {
     beginDrawLayout()
-    defer { endDrawLayout() }
+    viewportPaintOverscan = rasterTarget == nil
+    defer {
+      viewportPaintOverscan = false
+      endDrawLayout()
+    }
     if let target = rasterTarget {
       drawRasterStack(target, in: dirtyRect)
       return
@@ -2214,8 +2435,8 @@ final class SpreadsheetGridNSView: NSView {
     NSColor.windowBackgroundColor.setFill()
     dirtyRect.fill()
 
-    // One live paint. Scroll ticks do not enter this path: they move the
-    // scroll-plane views built after this frame.
+    // The visible rows and columns, plus a small overscan, from the cell store.
+    // A scroll frame takes this path and does not wait on a region bitmap.
     let skipGridlines = visibleRegionIsMostlyBordered()
     if let ctx = NSGraphicsContext.current {
       ctx.saveGraphicsState()
@@ -2263,7 +2484,6 @@ final class SpreadsheetGridNSView: NSView {
     drawStickyHeaders(in: dirtyRect)
     drawFreezeDividers(in: dirtyRect)
     drawHeaderCorner(in: dirtyRect)
-    scheduleScrollPlanePrefetch()
   }
 
   private enum GridLineRegion {
@@ -4946,7 +5166,7 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
-  func hideEditor(commit: Bool) {
+  func hideEditor(commit: Bool, claimGridFocus: Bool = true) {
     guard isEditorActive else { return }
     isEditorActive = false
     if commit, let viewModel {
@@ -4956,8 +5176,23 @@ final class SpreadsheetGridNSView: NSView {
       viewModel?.cancelEdit()
     }
     editor.isHidden = true
-    window?.makeFirstResponder(self)
+    if claimGridFocus {
+      window?.makeFirstResponder(self)
+    }
     needsDisplay = true
+  }
+
+  /// Find is about to take the key window. Commit an open cell and do not
+  /// hand focus back to the grid, or the next character edits that cell.
+  func endEditingForFind() {
+    if isEditorActive {
+      hideEditor(commit: true, claimGridFocus: false)
+    }
+  }
+
+  static func endEditingInKeyWindowForFind() {
+    let window = NSApp.keyWindow ?? NSApp.mainWindow
+    first(in: window?.contentView)?.endEditingForFind()
   }
 
   fileprivate func commitEditingForSave() {
@@ -5439,8 +5674,10 @@ final class SpreadsheetGridNSView: NSView {
         col: max(normalized.maxCol, end.col)
       )
       viewModel.extendSelection(to: fillEnd)
+      // Revealing the end cell slides the sheet under a still pointer, so the
+      // next drag event lands on the next row and the fill runs away. The
+      // autoscroll timer is what moves the sheet at the screen edge.
       updateAutoscrollTimer(at: point, kind: .fill(source))
-      scrollSelectionIntoView()
       return
     }
 
@@ -5507,13 +5744,14 @@ final class SpreadsheetGridNSView: NSView {
     scrollOrigin.y += event.scrollingDeltaY * (invert ? -1 : 1)
     clampScrollOrigin()
     guard scrollOrigin != previousOrigin else { return }
+    lastScrollDelta = CGPoint(x: scrollOrigin.x - previousOrigin.x, y: scrollOrigin.y - previousOrigin.y)
     updateEditorFrame()
     layoutOnSheetCharts()
-    // Move the rasterized panes. Repaint the view only when a plane does not
-    // cover this tick.
-    if !applyScrollSurfaces() {
-      invalidateScrollSurfaces()
+    // Paint the viewport from the cell store. Do not blit or raster a body plane.
+    if scrollSurfacesPresented {
+      hideScrollSurfaces()
     }
+    needsDisplay = true
   }
 
   func testingResetScrollCounters() {
@@ -5537,12 +5775,13 @@ final class SpreadsheetGridNSView: NSView {
     scrollOrigin.y += dy
     clampScrollOrigin()
     guard scrollOrigin != previousOrigin else { return }
+    lastScrollDelta = CGPoint(x: scrollOrigin.x - previousOrigin.x, y: scrollOrigin.y - previousOrigin.y)
     updateEditorFrame()
     layoutOnSheetCharts()
-    if !applyScrollSurfaces() {
-      invalidateScrollSurfaces()
-      display()
+    if scrollSurfacesPresented {
+      hideScrollSurfaces()
     }
+    display()
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
@@ -5988,6 +6227,10 @@ final class SpreadsheetGridNSView: NSView {
       default: break
       }
     case 36:
+      if viewModel.isFindBarVisible {
+        super.keyDown(with: event)
+        return
+      }
       viewModel.beginEditing()
       showEditor(selectAll: false)
       return
@@ -6005,7 +6248,7 @@ final class SpreadsheetGridNSView: NSView {
     default:
       // Command and control shortcuts must not type into the selected cell.
       let shortcutMods = event.modifierFlags.intersection([.command, .control])
-      if !shortcutMods.isEmpty {
+      if !shortcutMods.isEmpty || viewModel.isFindBarVisible {
         super.keyDown(with: event)
         break
       }

@@ -26,6 +26,16 @@ final class SpreadsheetDocumentStore {
   private var observedEditStamp: UInt64 = 0
   private var autosaveTask: Task<Void, Never>?
   private var isForceClosing = false
+  /// Export and file write already running off the current frame.
+  private var saveInFlight = false
+  private var inFlightChangeCount: UInt64 = 0
+  private var inFlightWorkbookToken: UInt64 = 0
+  private var queuedSave: WorkbookSaveSnapshot?
+  private var queuedSaveReportsErrors = false
+  /// Quit asked to terminate while a save was still writing.
+  private var waitingToTerminate = false
+  /// Close asked to dismiss this window once the save in flight finishes.
+  private weak var windowWaitingForSave: NSWindow?
   /// Quit delivers `applicationShouldTerminate` and `windowShouldClose` for the same close.
   /// The second call reuses this answer so the save prompt appears once.
   private var answeredCloseAttempt: Bool?
@@ -123,9 +133,10 @@ final class SpreadsheetDocumentStore {
     }
   }
 
+  /// Copies the workbook and starts the write. The window returns before the export finishes.
   func save(to url: URL? = nil) throws {
     guard let snapshot = makeSaveSnapshot(to: url) else { return }
-    try waitForBackgroundWrite(of: snapshot)
+    enqueueBackgroundWrite(snapshot, reportErrors: true)
   }
 
   /// Direct workbook writes that do not go through the live grid (tests).
@@ -145,6 +156,28 @@ final class SpreadsheetDocumentStore {
   func autosaveIfNeeded() {
     guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty else { return }
     performAutosave()
+  }
+
+  /// Quit and the last window. A save already in flight keeps the process until the file is written.
+  func terminationReply() -> NSApplication.TerminateReply {
+    guard attemptClose() else { return .terminateCancel }
+    if saveInFlight || queuedSave != nil {
+      waitingToTerminate = true
+      return .terminateLater
+    }
+    return .terminateNow
+  }
+
+  /// The close button stays interactive while an export finishes, then dismisses the window.
+  /// Quit already deferred termination, so that close may proceed without waiting on this frame.
+  func allowWindowToClose(_ window: NSWindow) -> Bool {
+    guard attemptClose() else { return false }
+    if waitingToTerminate { return true }
+    if saveInFlight || queuedSave != nil {
+      windowWaitingForSave = window
+      return false
+    }
+    return true
   }
 
   /// Prompts to save when closing with unsaved changes. Returns whether the app may close.
@@ -252,7 +285,7 @@ final class SpreadsheetDocumentStore {
       document.workbook = viewModel.workbook
     }
     documentDidChange()
-    guard isDirty else { return nil }
+    guard isDirty, !unfinishedSaveCoversCurrentChanges() else { return nil }
     return promptForUnsavedChanges()
   }
 
@@ -301,30 +334,9 @@ final class SpreadsheetDocumentStore {
 
   private func performAutosave() {
     guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty, !isAutosaving else { return }
+    guard !saveInFlight, queuedSave == nil else { return }
     guard let snapshot = makeSaveSnapshot(to: nil) else { return }
-    isAutosaving = true
-    let generation = snapshot.changeCount
-    let destination = snapshot.destination
-    Task.detached(priority: .utility) {
-      var failure: String?
-      do {
-        try SpreadsheetDocumentStore.write(snapshot)
-      } catch {
-        failure = error.localizedDescription
-      }
-      let message = failure
-      await MainActor.run { [weak self] in
-        guard let self else { return }
-        if snapshot.accessingSecurityScope {
-          destination.stopAccessingSecurityScopedResource()
-        }
-        self.isAutosaving = false
-        guard message == nil else { return }
-        guard self.changeCount == generation, self.fileURL == destination else { return }
-        self.markClean()
-        self.noteRecent(destination)
-      }
-    }
+    enqueueBackgroundWrite(snapshot, reportErrors: false)
   }
 
   /// Workbook copy taken on the main thread. Export and the file write run elsewhere.
@@ -333,6 +345,7 @@ final class SpreadsheetDocumentStore {
     var destination: URL
     var xlsx: Bool
     var changeCount: UInt64
+    var workbookToken: UInt64
     var accessingSecurityScope: Bool
     var includeFormulaCaches: Bool
   }
@@ -351,40 +364,126 @@ final class SpreadsheetDocumentStore {
       destination: destination,
       xlsx: destination.pathExtension.lowercased() == "xlsx",
       changeCount: changeCount,
+      workbookToken: externalWorkbookToken,
       accessingSecurityScope: accessing,
       includeFormulaCaches: importedFormulaCachesCurrent
     )
   }
 
-  /// Interactive save waits until the file is written, but the export is not on this thread.
-  /// The run loop keeps the window live while the background write finishes.
-  private func waitForBackgroundWrite(of snapshot: WorkbookSaveSnapshot) throws {
-    final class Box: @unchecked Sendable {
-      var error: Error?
+  /// One write at a time. A newer save replaces the queued snapshot; the window does not wait.
+  private func enqueueBackgroundWrite(_ snapshot: WorkbookSaveSnapshot, reportErrors: Bool) {
+    if saveInFlight {
+      if let queuedSave, queuedSave.accessingSecurityScope {
+        queuedSave.destination.stopAccessingSecurityScopedResource()
+      }
+      queuedSave = snapshot
+      queuedSaveReportsErrors = reportErrors
+      return
     }
-    let box = Box()
-    let group = DispatchGroup()
-    group.enter()
-    DispatchQueue.global(qos: .userInitiated).async {
+    beginBackgroundWrite(snapshot, reportErrors: reportErrors)
+  }
+
+  private func beginBackgroundWrite(_ snapshot: WorkbookSaveSnapshot, reportErrors: Bool) {
+    saveInFlight = true
+    inFlightChangeCount = snapshot.changeCount
+    inFlightWorkbookToken = snapshot.workbookToken
+    if !reportErrors {
+      isAutosaving = true
+    }
+    let destination = snapshot.destination
+    let generation = snapshot.changeCount
+    let workbookToken = snapshot.workbookToken
+    let accessingSecurityScope = snapshot.accessingSecurityScope
+    Task.detached(priority: reportErrors ? .userInitiated : .utility) {
+      var failure: String?
       do {
         try SpreadsheetDocumentStore.write(snapshot)
       } catch {
-        box.error = error
+        failure = error.localizedDescription
       }
-      group.leave()
+      let message = failure
+      await MainActor.run { [weak self] in
+        guard let self else {
+          if accessingSecurityScope {
+            destination.stopAccessingSecurityScopedResource()
+          }
+          return
+        }
+        self.finishBackgroundWrite(
+          destination: destination,
+          generation: generation,
+          workbookToken: workbookToken,
+          accessingSecurityScope: accessingSecurityScope,
+          reportErrors: reportErrors,
+          failure: message
+        )
+      }
     }
-    while group.wait(timeout: .now()) == .timedOut {
-      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+  }
+
+  private func finishBackgroundWrite(
+    destination: URL,
+    generation: UInt64,
+    workbookToken: UInt64,
+    accessingSecurityScope: Bool,
+    reportErrors: Bool,
+    failure: String?
+  ) {
+    if accessingSecurityScope {
+      destination.stopAccessingSecurityScopedResource()
     }
-    if snapshot.accessingSecurityScope {
-      snapshot.destination.stopAccessingSecurityScopedResource()
+    let stillThisDocument = externalWorkbookToken == workbookToken
+    let superseded = queuedSave != nil
+    if let failure {
+      if !superseded, reportErrors || waitingToTerminate || windowWaitingForSave != nil {
+        presentSaveError(NSError(
+          domain: "SparkGridSave",
+          code: 1,
+          userInfo: [NSLocalizedDescriptionKey: failure]
+        ))
+      }
+    } else if stillThisDocument, !superseded {
+      fileURL = destination
+      if changeCount == generation {
+        markClean()
+      }
+      noteRecent(destination)
     }
-    if let error = box.error { throw error }
-    fileURL = snapshot.destination
-    if changeCount == snapshot.changeCount {
-      markClean()
+    saveInFlight = false
+    if !reportErrors {
+      isAutosaving = false
     }
-    noteRecent(snapshot.destination)
+    if let next = queuedSave {
+      let report = queuedSaveReportsErrors
+      queuedSave = nil
+      beginBackgroundWrite(next, reportErrors: report)
+      return
+    }
+    let savedCurrentDocument = failure == nil && !isDirty
+    if waitingToTerminate {
+      waitingToTerminate = false
+      windowWaitingForSave = nil
+      NSApp.reply(toApplicationShouldTerminate: savedCurrentDocument)
+      return
+    }
+    if let window = windowWaitingForSave {
+      windowWaitingForSave = nil
+      if savedCurrentDocument {
+        window.close()
+      }
+    }
+  }
+
+  /// True when the snapshot already running includes every edit now in the document.
+  private func unfinishedSaveCoversCurrentChanges() -> Bool {
+    let token = externalWorkbookToken
+    if saveInFlight, inFlightChangeCount == changeCount, inFlightWorkbookToken == token {
+      return true
+    }
+    if let queuedSave, queuedSave.changeCount == changeCount, queuedSave.workbookToken == token {
+      return true
+    }
+    return false
   }
 
   nonisolated private static func write(_ snapshot: WorkbookSaveSnapshot) throws {

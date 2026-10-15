@@ -144,12 +144,12 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     guard let documentStore else { return .terminateNow }
-    return documentStore.attemptClose() ? .terminateNow : .terminateCancel
+    return documentStore.terminationReply()
   }
 
   func windowShouldClose(_ sender: NSWindow) -> Bool {
     guard let documentStore else { return true }
-    return documentStore.attemptClose()
+    return documentStore.allowWindowToClose(sender)
   }
 
   func resolvedSpreadsheetViewModel() -> SpreadsheetViewModel? {

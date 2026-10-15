@@ -1,7 +1,8 @@
 import Foundation
 
 /// Cross-sheet formula updates that run after the viewed sheet has already refreshed.
-/// The edit path only schedules this. A sheet opened early is finished on that switch.
+/// The edit path only schedules this. A sheet opened early is shown first; this pass
+/// fills its values afterward.
 nonisolated enum CrossSheetBackground {
   struct Request: Sendable {
     var token: UInt64
