@@ -364,11 +364,8 @@ final class FormulaEngine {
     self.workbook = workbook
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
-    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      if let value = cell.cachedFormulaValue {
-        valueCache[address] = value
-      }
-    }
+    // Imported results are copied when that cell is drawn. Walking the sheet
+    // here stalls the frame that opens the file.
     if recalculate {
       for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
         ingest(address: address, raw: cell.raw, sheet: sheet, recalculate: false)
@@ -394,11 +391,7 @@ final class FormulaEngine {
     let sheet = workbook.activeSheet
     activeSheetName = sheet.name
     valueCache = valuesBySheet[sheetKey(sheet.name)] ?? [:]
-    for (address, cell) in sheet.cells where FormulaSyntax.isFormula(cell.raw) {
-      if valueCache[address] == nil, let value = cell.cachedFormulaValue {
-        valueCache[address] = value
-      }
-    }
+    // A later paint reads imported results for the cells on screen.
     finishCrossSheetIfNeeded(for: sheet)
   }
 
@@ -457,23 +450,20 @@ final class FormulaEngine {
     name.lowercased()
   }
 
-  /// Parse every sheet's formulas into one graph. The open and edit paths do not wait on it.
+  /// Parse every sheet's formulas into one graph. The open frame does not build the input.
   private func scheduleWorkbookDependencyGraph() {
     dependencyGraphToken &+= 1
     dependencyGraph = nil
     let token = dependencyGraphToken
-    let input = workbookGraphInput(workbook)
+    let source = workbook
     DispatchQueue.global(qos: .utility).async { [weak self] in
+      let input = CrossSheetBackground.graphInput(for: source)
       let graph = WorkbookDependencyGraph.build(input)
       Task { @MainActor [weak self] in
         guard let self, self.dependencyGraphToken == token else { return }
         self.dependencyGraph = graph
       }
     }
-  }
-
-  private func workbookGraphInput(_ workbook: Workbook) -> WorkbookGraphInput {
-    CrossSheetBackground.graphInput(for: workbook)
   }
 
   /// The viewed sheet is already up to date. Other sheets catch up off the main thread.

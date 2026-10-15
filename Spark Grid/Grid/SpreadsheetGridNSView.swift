@@ -1143,17 +1143,38 @@ final class SpreadsheetGridNSView: NSView {
       && rect.minY < bounds.height
   }
 
+  /// Extra rows and columns drawn around the viewport. A short scroll is already
+  /// in that paint, and the frame does not build a region bitmap to get them.
+  private var viewportPaintOverscan = false
+  private let viewportPaintOverscanCells = 2
+
   private func visibleColumnRange() -> ClosedRange<Int> {
     let content = contentRect
-    let first = max(0, columnAtContent(x: content.minX))
-    let last = min(columnCount() - 1, columnAtContent(x: content.maxX))
+    var first = max(0, columnAtContent(x: content.minX))
+    var last = min(columnCount() - 1, columnAtContent(x: content.maxX))
+    if viewportPaintOverscan {
+      first = max(0, first - viewportPaintOverscanCells)
+      last = min(columnCount() - 1, last + viewportPaintOverscanCells)
+    }
+    if first > last {
+      let fallback = min(max(0, first), max(0, columnCount() - 1))
+      return fallback...fallback
+    }
     return first...last
   }
 
   private func visibleRowRange() -> ClosedRange<Int> {
     let content = contentRect
-    let first = max(0, rowAtContent(y: content.minY))
-    let last = min(rowCount() - 1, rowAtContent(y: content.maxY))
+    var first = max(0, rowAtContent(y: content.minY))
+    var last = min(rowCount() - 1, rowAtContent(y: content.maxY))
+    if viewportPaintOverscan {
+      first = max(0, first - viewportPaintOverscanCells)
+      last = min(rowCount() - 1, last + viewportPaintOverscanCells)
+    }
+    if first > last {
+      let fallback = min(max(0, first), max(0, rowCount() - 1))
+      return fallback...fallback
+    }
     return first...last
   }
 
@@ -2345,9 +2366,11 @@ final class SpreadsheetGridNSView: NSView {
   private func prepareViewportValues() {
     guard !isPreparingPaintValues, rasterTarget == nil, let viewModel else { return }
     isPreparingPaintValues = true
+    viewportPaintOverscan = true
     beginDrawLayout()
     defer {
       endDrawLayout()
+      viewportPaintOverscan = false
       isPreparingPaintValues = false
     }
     guard let sheet = layoutSheet else { return }
@@ -2391,7 +2414,11 @@ final class SpreadsheetGridNSView: NSView {
 
   override func draw(_ dirtyRect: NSRect) {
     beginDrawLayout()
-    defer { endDrawLayout() }
+    viewportPaintOverscan = rasterTarget == nil
+    defer {
+      viewportPaintOverscan = false
+      endDrawLayout()
+    }
     if let target = rasterTarget {
       drawRasterStack(target, in: dirtyRect)
       return
@@ -2408,8 +2435,8 @@ final class SpreadsheetGridNSView: NSView {
     NSColor.windowBackgroundColor.setFill()
     dirtyRect.fill()
 
-    // One live paint. Scroll ticks do not enter this path: they move the
-    // scroll-plane views built after this frame.
+    // The visible rows and columns, plus a small overscan, from the cell store.
+    // A scroll frame takes this path and does not wait on a region bitmap.
     let skipGridlines = visibleRegionIsMostlyBordered()
     if let ctx = NSGraphicsContext.current {
       ctx.saveGraphicsState()
@@ -2457,7 +2484,6 @@ final class SpreadsheetGridNSView: NSView {
     drawStickyHeaders(in: dirtyRect)
     drawFreezeDividers(in: dirtyRect)
     drawHeaderCorner(in: dirtyRect)
-    scheduleScrollPlanePrefetch()
   }
 
   private enum GridLineRegion {
@@ -5140,7 +5166,7 @@ final class SpreadsheetGridNSView: NSView {
     }
   }
 
-  func hideEditor(commit: Bool) {
+  func hideEditor(commit: Bool, claimGridFocus: Bool = true) {
     guard isEditorActive else { return }
     isEditorActive = false
     if commit, let viewModel {
@@ -5150,8 +5176,23 @@ final class SpreadsheetGridNSView: NSView {
       viewModel?.cancelEdit()
     }
     editor.isHidden = true
-    window?.makeFirstResponder(self)
+    if claimGridFocus {
+      window?.makeFirstResponder(self)
+    }
     needsDisplay = true
+  }
+
+  /// Find is about to take the key window. Commit an open cell and do not
+  /// hand focus back to the grid, or the next character edits that cell.
+  func endEditingForFind() {
+    if isEditorActive {
+      hideEditor(commit: true, claimGridFocus: false)
+    }
+  }
+
+  static func endEditingInKeyWindowForFind() {
+    let window = NSApp.keyWindow ?? NSApp.mainWindow
+    first(in: window?.contentView)?.endEditingForFind()
   }
 
   fileprivate func commitEditingForSave() {
@@ -5706,10 +5747,11 @@ final class SpreadsheetGridNSView: NSView {
     lastScrollDelta = CGPoint(x: scrollOrigin.x - previousOrigin.x, y: scrollOrigin.y - previousOrigin.y)
     updateEditorFrame()
     layoutOnSheetCharts()
-    // Blit a cached tile. The first visit of a region is built after this frame.
-    if !applyScrollSurfaces() {
-      invalidateScrollSurfaces()
+    // Paint the viewport from the cell store. Do not blit or raster a body plane.
+    if scrollSurfacesPresented {
+      hideScrollSurfaces()
     }
+    needsDisplay = true
   }
 
   func testingResetScrollCounters() {
@@ -5736,10 +5778,10 @@ final class SpreadsheetGridNSView: NSView {
     lastScrollDelta = CGPoint(x: scrollOrigin.x - previousOrigin.x, y: scrollOrigin.y - previousOrigin.y)
     updateEditorFrame()
     layoutOnSheetCharts()
-    if !applyScrollSurfaces() {
-      invalidateScrollSurfaces()
-      display()
+    if scrollSurfacesPresented {
+      hideScrollSurfaces()
     }
+    display()
   }
 
   override func menu(for event: NSEvent) -> NSMenu? {
@@ -6185,6 +6227,10 @@ final class SpreadsheetGridNSView: NSView {
       default: break
       }
     case 36:
+      if viewModel.isFindBarVisible {
+        super.keyDown(with: event)
+        return
+      }
       viewModel.beginEditing()
       showEditor(selectAll: false)
       return
@@ -6202,7 +6248,7 @@ final class SpreadsheetGridNSView: NSView {
     default:
       // Command and control shortcuts must not type into the selected cell.
       let shortcutMods = event.modifierFlags.intersection([.command, .control])
-      if !shortcutMods.isEmpty {
+      if !shortcutMods.isEmpty || viewModel.isFindBarVisible {
         super.keyDown(with: event)
         break
       }
