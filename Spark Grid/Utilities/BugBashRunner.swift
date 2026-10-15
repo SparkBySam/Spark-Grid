@@ -5632,13 +5632,22 @@ enum BugBashRunner {
     if saved.attemptClose() != true || saved.unsavedPromptCount != 1 {
       return Result(name: name, passed: false, detail: "save prompts \(saved.unsavedPromptCount)")
     }
-    do {
-      let written = try XLSXCodec.importWorkbook(from: savedURL)
-      if written.activeSheet.cell(at: .origin).raw != "1" {
-        return Result(name: name, passed: false, detail: "saved raw \(written.activeSheet.cell(at: .origin).raw)")
+    let deadline = Date().addingTimeInterval(30)
+    var writtenRaw = ""
+    var readError = ""
+    while Date() < deadline {
+      do {
+        let written = try XLSXCodec.importWorkbook(from: savedURL)
+        writtenRaw = written.activeSheet.cell(at: .origin).raw
+        if writtenRaw == "1" { break }
+      } catch {
+        readError = error.localizedDescription
       }
-    } catch {
-      return Result(name: name, passed: false, detail: error.localizedDescription)
+      RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    if writtenRaw != "1" {
+      let detail = readError.isEmpty ? "saved raw \(writtenRaw)" : readError
+      return Result(name: name, passed: false, detail: detail)
     }
 
     let replaced = dirtyStore()

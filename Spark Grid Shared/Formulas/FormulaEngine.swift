@@ -36,6 +36,8 @@ final class FormulaEngine {
   private var crossSheetHasResults = false
   private var crossSheetReadySheets: Set<String> = []
   private var pendingCrossSheet: CrossSheetBackground.Request?
+  /// Token of a sheet-switch calculation already running off the current frame.
+  private var crossSheetSheetFinishToken: [String: UInt64] = [:]
 
   private var workbook = Workbook.empty
   private var activeSheetName = "Sheet1"
@@ -511,7 +513,7 @@ final class FormulaEngine {
     }
   }
 
-  /// Sheet switch before the background pass finishes: calculate this sheet now.
+  /// Show the sheet now. A pending cross-sheet calculation finishes off this frame.
   private func finishCrossSheetIfNeeded(for sheet: Sheet) {
     let key = sheetKey(sheet.name)
     if crossSheetHasResults, crossSheetPublishedToken == crossSheetToken {
@@ -523,11 +525,21 @@ final class FormulaEngine {
       return
     }
     guard var request = pendingCrossSheet, request.token == crossSheetToken else { return }
+    if crossSheetSheetFinishToken[key] == request.token { return }
+    crossSheetSheetFinishToken[key] = request.token
     request.onlySheetName = sheet.name
-    let outcome = CrossSheetBackground.compute(request)
-    guard crossSheetToken == request.token else { return }
-    applyCrossSheetOutcome(outcome)
-    crossSheetReadySheets.insert(key)
+    let token = request.token
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let outcome = CrossSheetBackground.compute(request)
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        guard self.crossSheetSheetFinishToken[key] == token else { return }
+        self.crossSheetSheetFinishToken[key] = nil
+        guard self.crossSheetToken == token else { return }
+        self.applyCrossSheetOutcome(outcome)
+        self.crossSheetReadySheets.insert(key)
+      }
+    }
   }
 
   private func applyCrossSheetOutcome(_ outcome: CrossSheetBackground.Outcome) {
