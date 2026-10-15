@@ -1495,15 +1495,68 @@ final class SpreadsheetViewModel {
     return (minIndex, maxIndex, seen.count)
   }
 
-  func deleteSelectedRows() {
-    let range = selectionRange.normalized
-    let sheet = activeSheet
-    let spansFullWidth = range.minCol == 0 && range.maxCol >= sheet.effectiveColumnCount - 1
-    if spansFullWidth {
-      deleteRows(at: range.minRow, count: range.maxRow - range.minRow + 1)
-    } else {
-      deleteRows(at: selectionAnchor.row, count: 1)
+  /// Selected indexes on one axis, collapsed into contiguous runs. Gaps stay.
+  private func selectedStructureRuns(_ axis: StructureInsertAxis) -> [IndexRun] {
+    let ranges = selectionRanges.isEmpty ? [selectionRange] : selectionRanges
+    if ranges.count == 1 {
+      let n = ranges[0].normalized
+      let lower = axis == .row ? n.minRow : n.minCol
+      let upper = axis == .row ? n.maxRow : n.maxCol
+      guard upper >= lower else { return [] }
+      return [IndexRun(start: lower, count: upper - lower + 1)]
     }
+    var seen = Set<Int>()
+    for range in ranges {
+      let n = range.normalized
+      let lower = axis == .row ? n.minRow : n.minCol
+      let upper = axis == .row ? n.maxRow : n.maxCol
+      guard upper >= lower else { continue }
+      for index in lower...upper {
+        seen.insert(index)
+      }
+    }
+    let sorted = seen.sorted()
+    guard let first = sorted.first else { return [] }
+    var runs: [IndexRun] = []
+    var start = first
+    var previous = first
+    for index in sorted.dropFirst() {
+      if index == previous + 1 {
+        previous = index
+      } else {
+        runs.append(IndexRun(start: start, count: previous - start + 1))
+        start = index
+        previous = index
+      }
+    }
+    runs.append(IndexRun(start: start, count: previous - start + 1))
+    return runs
+  }
+
+  private struct IndexRun {
+    var start: Int
+    var count: Int
+  }
+
+  func deleteSelectedRows() {
+    // A whole-column selection is not a row delete. The menu hides this action.
+    if selectionAxis == .column {
+      deleteRows(at: selectionAnchor.row, count: 1)
+      return
+    }
+    let runs = selectedStructureRuns(.row)
+    guard let first = runs.first else { return }
+    if runs.count == 1 {
+      deleteRows(at: first.start, count: first.count)
+      return
+    }
+    // Higher rows first so earlier indexes stay put. One undo for the set.
+    undoManager?.beginUndoGrouping()
+    for run in runs.reversed() {
+      deleteRows(at: run.start, count: run.count)
+    }
+    undoManager?.endUndoGrouping()
+    undoManager?.setActionName("Delete Rows")
   }
 
   func deleteSelectedColumns() {

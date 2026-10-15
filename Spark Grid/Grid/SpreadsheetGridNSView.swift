@@ -5633,8 +5633,10 @@ final class SpreadsheetGridNSView: NSView {
         col: max(normalized.maxCol, end.col)
       )
       viewModel.extendSelection(to: fillEnd)
+      // Revealing the end cell slides the sheet under a still pointer, so the
+      // next drag event lands on the next row and the fill runs away. The
+      // autoscroll timer is what moves the sheet at the screen edge.
       updateAutoscrollTimer(at: point, kind: .fill(source))
-      scrollSelectionIntoView()
       return
     }
 
