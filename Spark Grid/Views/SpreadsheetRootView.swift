@@ -1,4 +1,5 @@
 import SwiftUI
+import SparkGridCore
 
 struct SpreadsheetRootView: View {
   @Bindable var store: SpreadsheetDocumentStore

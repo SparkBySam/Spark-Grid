@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 struct SpreadsheetGridView: NSViewRepresentable {
   var viewModel: SpreadsheetViewModel

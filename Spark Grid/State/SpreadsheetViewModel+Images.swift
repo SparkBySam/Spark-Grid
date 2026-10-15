@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 extension SpreadsheetViewModel {
   func insertImageFromFile(url: URL) {

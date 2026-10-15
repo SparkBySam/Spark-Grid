@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 
 /// Places category names on a chart so a label stays inside the chart
 /// when its bar is still on screen.

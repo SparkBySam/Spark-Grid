@@ -5,6 +5,7 @@
 
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 @main
 struct Spark_GridApp: App {

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SparkGridCore
 
 /// UI state and mutations for the active workbook. Undo integrates with the document undo manager.
 @Observable

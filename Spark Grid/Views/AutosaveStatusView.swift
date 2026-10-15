@@ -1,4 +1,5 @@
 import SwiftUI
+import SparkGridCore
 
 struct AutosaveStatusView: View {
   @Bindable var store: SpreadsheetDocumentStore

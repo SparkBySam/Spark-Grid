@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 
 /// Editable NSTableView backed by a `PreviewSession`.
 final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {

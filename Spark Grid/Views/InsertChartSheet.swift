@@ -1,4 +1,5 @@
 import SwiftUI
+import SparkGridCore
 
 /// Insert Chart chooser: kind, category column, value mode / column, live preview.
 /// A single-cell selection still opens this menu and waits for a real range.

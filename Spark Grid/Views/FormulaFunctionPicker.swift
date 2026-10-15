@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 /// Escape closes the Insert Function list. Return and other keys do not.
 enum FormulaFunctionListKeys {

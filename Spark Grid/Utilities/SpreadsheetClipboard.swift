@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SparkGridCore
 
 /// Tab-separated grid clipboard encoding (compatible with Excel, Google Sheets, Numbers).
 enum SpreadsheetClipboard {

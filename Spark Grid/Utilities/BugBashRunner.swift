@@ -2,6 +2,10 @@ import AppKit
 import CoreXLSX
 import Foundation
 import SwiftUI
+import SparkGridCore
+
+typealias Workbook = SparkGridCore.Workbook
+typealias Cell = SparkGridCore.Cell
 
 #if DEBUG
 enum BugBashRunner {

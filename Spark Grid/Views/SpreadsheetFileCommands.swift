@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import SparkGridCore
 
 struct SpreadsheetFileCommands: Commands {
   @Bindable var store: SpreadsheetDocumentStore

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 /// Intercepts `print:` in the responder chain for SwiftUI apps that don't adopt NSDocument printing.
 private final class PrintingResponder: NSResponder {

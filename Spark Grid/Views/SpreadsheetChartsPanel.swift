@@ -1,6 +1,7 @@
 import AppKit
 import Charts
 import SwiftUI
+import SparkGridCore
 
 struct SpreadsheetChartsPanel: View {
   @Bindable var viewModel: SpreadsheetViewModel

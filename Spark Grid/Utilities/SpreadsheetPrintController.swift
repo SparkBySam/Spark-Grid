@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 /// Renders one sheet region for print preview and printing.
 final class SpreadsheetPrintNSView: NSView {

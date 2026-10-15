@@ -1,4 +1,5 @@
 import SwiftUI
+import SparkGridCore
 
 struct SpreadsheetPrintPagePreview: View {
   let content: SpreadsheetPrintPreviewContent

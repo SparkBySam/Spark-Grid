@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 enum MergeAxis: Sendable {
   /// One rectangle covering the whole selection.

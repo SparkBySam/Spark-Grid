@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 struct CellFormatViewerSheet: View {
   private enum Category: String, CaseIterable, Identifiable {

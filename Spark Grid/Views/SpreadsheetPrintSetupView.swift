@@ -1,4 +1,5 @@
 import SwiftUI
+import SparkGridCore
 
 struct SpreadsheetPrintSetupView: View {
   @Bindable var viewModel: SpreadsheetViewModel

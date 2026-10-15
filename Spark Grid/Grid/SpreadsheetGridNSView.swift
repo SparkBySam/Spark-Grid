@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 /// AppKit spreadsheet grid with sticky row/column headers, selection, editing, and keyboard navigation.
 final class SpreadsheetGridNSView: NSView {

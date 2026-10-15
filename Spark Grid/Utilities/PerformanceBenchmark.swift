@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import SparkGridCore
 
 /// Release timings for the seven paths the app actually runs.
 ///

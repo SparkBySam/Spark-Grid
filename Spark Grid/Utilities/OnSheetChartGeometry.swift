@@ -1,4 +1,5 @@
 import CoreGraphics
+import SparkGridCore
 
 /// Cell-anchored frame for a chart drawn on the sheet grid.
 enum OnSheetChartGeometry {

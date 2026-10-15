@@ -1,5 +1,6 @@
 import Foundation
 import UniformTypeIdentifiers
+import SparkGridCore
 
 /// In-memory spreadsheet session for Quick Look preview + basic cell edits.
 final class PreviewSession {

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 /// Shared geometry for the strip above the grid so spacer and chrome stay in sync.
 enum SpreadsheetChrome {

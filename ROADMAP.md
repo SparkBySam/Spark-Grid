@@ -10,6 +10,7 @@ Release, 2026-10-15, commit `2958120`, KPI file: import 0.358 s, open 0.580 s, e
 
 ## Progress log
 
+- 2026-10-15 — W2: engine moved into `Packages/SparkGridCore` with nine layers. Layer check passed. Gate script still not built.
 - 2026-10-15 — W1: agent rulebook, status, gaps, and function parity. Gate not built yet.
 - 2026-10-15 — `2958120`: sheet switch returns before cross-sheet calc; save returns before the export write finishes. Viewport scroll and Find focus stay.
 - 2026-10-11 — Performance rules and the older KPI baseline recorded on `main`.

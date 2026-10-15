@@ -1,4 +1,5 @@
 import SwiftUI
+import SparkGridCore
 
 struct FindReplaceBar: View {
   @Bindable var viewModel: SpreadsheetViewModel

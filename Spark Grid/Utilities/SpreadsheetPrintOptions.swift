@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 enum SpreadsheetPrintScope: String, CaseIterable, Identifiable {
   case selectedCells = "Selected cells"

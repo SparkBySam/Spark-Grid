@@ -1,4 +1,5 @@
 import Foundation
+import SparkGridCore
 
 /// Conditional-format rules carried with a cell copy.
 ///

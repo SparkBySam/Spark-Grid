@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 /// Legal / marketing URLs. Marked `nonisolated` so SwiftUI `Button(action:)` can reference
 /// open helpers under default MainActor isolation (Xcode 27 / approachable concurrency).

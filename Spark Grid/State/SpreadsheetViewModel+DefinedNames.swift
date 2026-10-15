@@ -1,4 +1,5 @@
 import Foundation
+import SparkGridCore
 
 extension SpreadsheetViewModel {
   var definedNames: [NamedRange] {

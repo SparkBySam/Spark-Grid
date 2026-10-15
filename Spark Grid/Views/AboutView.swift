@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 private enum AppMetadata {
   static var versionString: String {

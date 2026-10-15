@@ -58,13 +58,13 @@ The gate script is W3. It is not in the tree during W1. When it lands, `scripts/
 
 It prints one summary line per stage and a final `PASS` or `FAIL`.
 
-W2 adds the package layers and `scripts/check-layers.sh`. Targets below `Rendering` must not import AppKit, SwiftUI, Cocoa, or UIKit, and must not reference `NSView`, `NSColor`, or `NSFont`.
+`Packages/SparkGridCore` is the engine. `scripts/check-layers.sh` fails if a target below `Rendering` imports AppKit, SwiftUI, Cocoa, or UIKit, or references `NSView`, `NSColor`, or `NSFont`. Run it from the repo root.
 
 Layers, lowest first. Each target depends only on layers below it:
 
 `GridCore`, `NumberFormat`, `Formula`, `Functions`, `Model`, `Calc`, `FileFormats`, `Engine`, `Rendering`.
 
-The app and Quick Look depend on the package. Engine code does not stay in the app target. Views read engine state and act through engine commands. New code does not mutate the model from a view. The command registry itself is W7.
+The app and Quick Look depend on the package and `import SparkGridCore`. New engine code goes in the package, not the app target. `SpreadsheetDocumentStore` and `SpreadsheetViewModel` still live in the app because they present panels, pasteboard data, and windows. W7 moves commands behind a Foundation engine API. Until then, new view code reads engine state and does not mutate the model except through the existing view-model methods. The command registry itself is W7.
 
 Hosted CI runs on a Mac and skips the private KPI check. If the runner's Xcode or Swift is older than this project, run the stages that work and say so here. Do not lower the deployment target or the Swift settings to make CI pass.
 

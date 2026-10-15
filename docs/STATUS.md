@@ -4,15 +4,15 @@ Updated: 2026-10-15. Commit this file in the same commit as the work it describe
 
 ## Phase
 
-Workflow gates, W1. The rulebook is landing. W2 (package layers) is next. W4 through W8 are not started. Phase A (correct answers) is paused and has no commits. Do not resume it until these gates say to.
+Workflow gates, W2. The engine is in `Packages/SparkGridCore`. W3 (the commit gate) is next. W4 through W8 are not started. Phase A (correct answers) is paused and has no commits.
 
 ## Next task
 
-W2. Move `Spark Grid Shared` into `Packages/SparkGridCore` with the layers in `AGENTS.md`, and add `scripts/check-layers.sh`.
+W3. Add `scripts/ci.sh`, `.githooks/pre-commit`, and `.github/workflows/ci.yml`. Run the gate and record the result.
 
 ## Last gate result
 
-Not run. `scripts/ci.sh` does not exist yet.
+`scripts/ci.sh` does not exist yet. `scripts/check-layers.sh` passed. `swift build`, `swift build -c release`, and `swift test` in `Packages/SparkGridCore` passed (1 test). Debug and Release `xcodebuild` of the app scheme passed.
 
 Answer check on 2026-10-15, scalar evaluator against displayed values, KPI workbook, commit `2958120`: 48191 formulas, 11894 mismatches. The ledger scalar check did not finish. This scalar check is not ground truth.
 

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 struct SpreadsheetCommands: Commands {
   @Bindable private var settings = AppSettings.shared

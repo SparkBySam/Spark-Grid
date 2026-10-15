@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import SwiftUI
+import SparkGridCore
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Codable {
   case system

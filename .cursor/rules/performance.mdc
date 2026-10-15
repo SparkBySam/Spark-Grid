@@ -13,7 +13,7 @@ alwaysApply: true
 - A fast path must work for any workbook with that formula pattern. If it only fires on the KPI file, it does not ship.
 - This must print nothing for new or changed code:
   ```
-  grep -rnE 'YTD|Ytd|ytd|KPI|"[Cc]onfig"|"[Dd]ashboard"' "Spark Grid Shared" "Spark Grid/State" "Spark Grid/Grid"
+  grep -rnE 'YTD|Ytd|ytd|KPI|"[Cc]onfig"|"[Dd]ashboard"' Packages/SparkGridCore/Sources "Spark Grid/State" "Spark Grid/Grid"
   ```
   Existing matches are debt. Delete them when you touch that code; do not add more.
 

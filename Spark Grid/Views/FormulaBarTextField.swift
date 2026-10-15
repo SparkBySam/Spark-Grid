@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SparkGridCore
 
 /// AppKit formula bar using NSTextView so ref colors survive focus/editing.
 struct FormulaBarTextField: NSViewRepresentable {

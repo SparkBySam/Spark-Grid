@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 extension SpreadsheetViewModel {
   /// Full conditional paint (format + data bars / icons).

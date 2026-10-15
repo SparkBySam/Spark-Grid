@@ -12,6 +12,8 @@
 		B1C2D3E4F5061728394A5B01 /* CoreXLSX in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5061728394A5B11 /* CoreXLSX */; };
 		B1C2D3E4F5061728394A5B02 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B1C2D3E4F5061728394A5B12 /* ZIPFoundation */; };
 		B1C2D3E4F5061728394A5B03 /* Spark Grid Quick Look.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5061728394A5B20 /* Spark Grid Quick Look.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A1C0DE0000000000000000A1 /* SparkGridCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1C0DE0000000000000000B1 /* SparkGridCore */; };
+		A1C0DE0000000000000000A2 /* SparkGridCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1C0DE0000000000000000B2 /* SparkGridCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,7 +50,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				Spark_Grid_Quick_Look.entitlements,
 			);
 			target = B1C2D3E4F5061728394A5B40 /* Spark Grid Quick Look */;
 		};
@@ -58,11 +59,6 @@
 		3480D7BB2FF1BB4B00719DD6 /* Spark Grid */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Spark Grid";
-			sourceTree = "<group>";
-		};
-		B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Spark Grid Shared";
 			sourceTree = "<group>";
 		};
 		B1C2D3E4F5061728394A5B61 /* Spark Grid Quick Look */ = {
@@ -81,6 +77,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1FB811D616374329B98005D5 /* CoreXLSX in Frameworks */,
+				A1C0DE0000000000000000A1 /* SparkGridCore in Frameworks */,
 				A7C4E91F2B8D4E6A9F012345 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -90,6 +87,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B1C2D3E4F5061728394A5B01 /* CoreXLSX in Frameworks */,
+				A1C0DE0000000000000000A2 /* SparkGridCore in Frameworks */,
 				B1C2D3E4F5061728394A5B02 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -101,7 +99,6 @@
 			isa = PBXGroup;
 			children = (
 				3480D7BB2FF1BB4B00719DD6 /* Spark Grid */,
-				B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */,
 				B1C2D3E4F5061728394A5B61 /* Spark Grid Quick Look */,
 				3480D7BA2FF1BB4B00719DD6 /* Products */,
 			);
@@ -135,11 +132,11 @@
 			);
 			fileSystemSynchronizedGroups = (
 				3480D7BB2FF1BB4B00719DD6 /* Spark Grid */,
-				B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */,
 			);
 			name = "Spark Grid";
 			packageProductDependencies = (
 				63EA0DF84EA14C72B3DAF40A /* CoreXLSX */,
+				A1C0DE0000000000000000B1 /* SparkGridCore */,
 				B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */,
 			);
 			productName = "Spark Grid";
@@ -159,12 +156,12 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				B1C2D3E4F5061728394A5B60 /* Spark Grid Shared */,
 				B1C2D3E4F5061728394A5B61 /* Spark Grid Quick Look */,
 			);
 			name = "Spark Grid Quick Look";
 			packageProductDependencies = (
 				B1C2D3E4F5061728394A5B11 /* CoreXLSX */,
+				A1C0DE0000000000000000B2 /* SparkGridCore */,
 				B1C2D3E4F5061728394A5B12 /* ZIPFoundation */,
 			);
 			productName = "Spark Grid Quick Look";
@@ -201,6 +198,7 @@
 			packageReferences = (
 				A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */,
 				C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				A1C0DE0000000000000000C1 /* XCLocalSwiftPackageReference "Packages/SparkGridCore" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3480D7BA2FF1BB4B00719DD6 /* Products */;
@@ -546,6 +544,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		A1C0DE0000000000000000C1 /* XCLocalSwiftPackageReference "Packages/SparkGridCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SparkGridCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -571,11 +576,6 @@
 			package = A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */;
 			productName = CoreXLSX;
 		};
-		B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
-			productName = ZIPFoundation;
-		};
 		B1C2D3E4F5061728394A5B11 /* CoreXLSX */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D4E5F60718293A4B5C /* XCRemoteSwiftPackageReference "CoreXLSX" */;
@@ -585,6 +585,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
 			productName = ZIPFoundation;
+		};
+		B8D5F02A3C9E5F7B0A123456 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C9E6A13B4D0F6A8C1B234567 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+		A1C0DE0000000000000000B1 /* SparkGridCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1C0DE0000000000000000C1 /* XCLocalSwiftPackageReference "Packages/SparkGridCore" */;
+			productName = SparkGridCore;
+		};
+		A1C0DE0000000000000000B2 /* SparkGridCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1C0DE0000000000000000C1 /* XCLocalSwiftPackageReference "Packages/SparkGridCore" */;
+			productName = SparkGridCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
