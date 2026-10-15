@@ -22,4 +22,4 @@ if ! grep -q 'name: "AnswerCheck"' "$manifest"; then
 fi
 
 cd "$root/Packages/SparkGridCore"
-swift test --filter AnswerCheck
+swift test --filter CorpusAnswerCheck

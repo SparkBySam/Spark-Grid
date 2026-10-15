@@ -103,6 +103,32 @@ let package = Package(
         "GridCore",
         "NumberFormat",
         "Formula",
+        "Functions",
+        "Calc",
+        "Model",
+        "FileFormats",
+        "Engine",
+      ],
+      swiftSettings: testSettings
+    ),
+    .testTarget(
+      name: "AnswerCheck",
+      dependencies: [
+        "GridCore",
+        "Formula",
+        "Calc",
+        "Model",
+        "FileFormats",
+        "Engine",
+      ],
+      swiftSettings: testSettings
+    ),
+    .testTarget(
+      name: "CommandFuzz",
+      dependencies: [
+        "GridCore",
+        "NumberFormat",
+        "Formula",
         "Calc",
         "Model",
         "FileFormats",

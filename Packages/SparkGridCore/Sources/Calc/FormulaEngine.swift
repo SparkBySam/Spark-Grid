@@ -375,6 +375,11 @@ public final class FormulaEngine {
     return CFAbsoluteTimeGetCurrent() - start
   }
 
+  /// Formula results stored by the last `recalculateEntireWorkbook` for one sheet.
+  public func formulaResults(on sheet: Sheet) -> [CellAddress: CellValue] {
+    recalculatedSheetValues[sheetKey(sheet.name)] ?? [:]
+  }
+
   /// Full rebuild for the workbook's active sheet (also enables cross-sheet lookups).
   /// When `recalculate` is false, formulas evaluate on demand via `displayValue` (faster open / sheet switch).
   public func rebuild(workbook: Workbook, recalculate: Bool = false) {

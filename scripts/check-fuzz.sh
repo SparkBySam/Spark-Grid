@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fuzz smoke. The CommandFuzz target is W5 and is not in the package yet.
+# Fuzz smoke. A long soak sets SPARK_GRID_FUZZ_STEPS. The default is short.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,5 +10,8 @@ if ! grep -q 'name: "CommandFuzz"' "$manifest"; then
   exit 1
 fi
 
+export SPARK_GRID_FUZZ_SEED="${SPARK_GRID_FUZZ_SEED:-1}"
+export SPARK_GRID_FUZZ_STEPS="${SPARK_GRID_FUZZ_STEPS:-20}"
+
 cd "$root/Packages/SparkGridCore"
-swift test --filter CommandFuzz
+swift test --filter CommandFuzzTests
