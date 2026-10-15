@@ -189,20 +189,22 @@ extension SpreadsheetViewModel {
     let snapped = originX == 0 && originY == 0 && endX == 0 && endY == 0
     let rows = max(snapped ? SheetChart.minimumSpan : 1, rowSpan)
     let cols = max(snapped ? SheetChart.minimumSpan : 1, colSpan)
-    let changed = row != start.anchorRow || col != start.anchorCol
+    let changed =
+      row != start.anchorRow || col != start.anchorCol
       || rows != start.rowSpan || cols != start.colSpan
       || originX != start.originXOffset || originY != start.originYOffset
       || endX != start.endXOffset || endY != start.endYOffset
     var sheet = activeSheet
-    guard sheet.charts[index].anchorRow != row
-      || sheet.charts[index].anchorCol != col
-      || sheet.charts[index].rowSpan != rows
-      || sheet.charts[index].colSpan != cols
-      || sheet.charts[index].originXOffset != originX
-      || sheet.charts[index].originYOffset != originY
-      || sheet.charts[index].endXOffset != endX
-      || sheet.charts[index].endYOffset != endY
-      || sheet.charts[index].frameIsCustom != (start.frameIsCustom || changed)
+    guard
+      sheet.charts[index].anchorRow != row
+        || sheet.charts[index].anchorCol != col
+        || sheet.charts[index].rowSpan != rows
+        || sheet.charts[index].colSpan != cols
+        || sheet.charts[index].originXOffset != originX
+        || sheet.charts[index].originYOffset != originY
+        || sheet.charts[index].endXOffset != endX
+        || sheet.charts[index].endYOffset != endY
+        || sheet.charts[index].frameIsCustom != (start.frameIsCustom || changed)
     else { return }
     sheet.charts[index].anchorRow = row
     sheet.charts[index].anchorCol = col
@@ -223,15 +225,16 @@ extension SpreadsheetViewModel {
     actionName: String = "Move Chart"
   ) {
     guard let after = chart(with: id) else { return }
-    guard before.anchorRow != after.anchorRow
-      || before.anchorCol != after.anchorCol
-      || before.rowSpan != after.rowSpan
-      || before.colSpan != after.colSpan
-      || before.originXOffset != after.originXOffset
-      || before.originYOffset != after.originYOffset
-      || before.endXOffset != after.endXOffset
-      || before.endYOffset != after.endYOffset
-      || before.frameIsCustom != after.frameIsCustom
+    guard
+      before.anchorRow != after.anchorRow
+        || before.anchorCol != after.anchorCol
+        || before.rowSpan != after.rowSpan
+        || before.colSpan != after.colSpan
+        || before.originXOffset != after.originXOffset
+        || before.originYOffset != after.originYOffset
+        || before.endXOffset != after.endXOffset
+        || before.endYOffset != after.endYOffset
+        || before.frameIsCustom != after.frameIsCustom
     else { return }
     let current = activeSheet.charts
     applyCharts(current, undoBefore: replacingChart(before, in: current), actionName: actionName)
@@ -318,7 +321,7 @@ extension SpreadsheetViewModel {
         CellRange(
           start: CellAddress(row: n.minRow, col: n.minCol),
           end: CellAddress(row: n.maxRow, col: n.maxCol)
-        ),
+        )
       ]
     case .horizontal:
       guard n.minCol != n.maxCol else { return [] }
@@ -370,14 +373,14 @@ extension SpreadsheetViewModel {
 
     guard !clearedLines.isEmpty else { return nil }
     return """
-    The top-left cell is kept; other values are cleared.
+      The top-left cell is kept; other values are cleared.
 
-    Kept:
-    \(keptLines.joined(separator: "\n"))
+      Kept:
+      \(keptLines.joined(separator: "\n"))
 
-    Cleared:
-    \(clearedLines.joined(separator: "\n"))
-    """
+      Cleared:
+      \(clearedLines.joined(separator: "\n"))
+      """
   }
 
   private func preview(_ raw: String) -> String {

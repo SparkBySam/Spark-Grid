@@ -1,11 +1,11 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
-public extension FormulaEvaluator {
+extension FormulaEvaluator {
   fileprivate struct ValueMatrix {
     public var rows: Int
     public var cols: Int
@@ -27,7 +27,9 @@ public extension FormulaEvaluator {
   }
 
   /// Excel-style aggregates skip #VALUE! / #REF! rows instead of failing the whole formula.
-  fileprivate func lookupForAggregate(_ ref: FormulaRef, memo: inout [LookupMemoKey: CellValue]) -> CellValue {
+  fileprivate func lookupForAggregate(_ ref: FormulaRef, memo: inout [LookupMemoKey: CellValue])
+    -> CellValue
+  {
     let key = LookupMemoKey(sheet: ref.sheet, row: ref.row, col: ref.col)
     if let cached = memo[key] { return cached }
     let value = lookup(ref)
@@ -69,8 +71,9 @@ public extension FormulaEvaluator {
     var memo: [LookupMemoKey: CellValue] = [:]
     let values = snapshotValues(anchor: anchor, memo: &memo)
     if let cache = aggregateRangeCache,
-       criteriaSupportsIndexLookup(test),
-       let lookupKey = lookupKeyForCriterion(criterion, test: test) {
+      criteriaSupportsIndexLookup(test),
+      let lookupKey = lookupKeyForCriterion(criterion, test: test)
+    {
       let rangeKey = aggregateRangeKey(for: anchor)
       let count = cache.countForCriteria(
         rangeKeys: [rangeKey],
@@ -110,10 +113,11 @@ public extension FormulaEvaluator {
     }
     var memo: [LookupMemoKey: CellValue] = [:]
     if let cache = aggregateRangeCache,
-       let lookupKeys = aggregateLookupKeys(
-         criteria: tests.map(\.2),
-         tests: tests.map(\.1)
-       ) {
+      let lookupKeys = aggregateLookupKeys(
+        criteria: tests.map(\.2),
+        tests: tests.map(\.1)
+      )
+    {
       let rangeKeys = tests.map { aggregateRangeKey(for: $0.0) }
       let matches = cache.countForCriteria(
         rangeKeys: rangeKeys,
@@ -248,7 +252,9 @@ public extension FormulaEvaluator {
     if case .error = text { return text }
     if case .error = start { return start }
     if case .error = count { return count }
-    guard let startNumber = start.asNumber, let countNumber = count.asNumber else { return .error(.value) }
+    guard let startNumber = start.asNumber, let countNumber = count.asNumber else {
+      return .error(.value)
+    }
     if startNumber < 1 || countNumber < 0 { return .error(.value) }
     let startIndex = Int(startNumber.rounded(.towardZero))
     let length = Int(countNumber.rounded(.towardZero))
@@ -278,7 +284,8 @@ public extension FormulaEvaluator {
       guard let instanceNumber = instance.asNumber else { return .error(.value) }
       let occurrence = Int(instanceNumber.rounded(.towardZero))
       if occurrence < 1 { return .error(.value) }
-      return .string(replaceOccurrence(in: source, needle: needle, with: replacement, occurrence: occurrence))
+      return .string(
+        replaceOccurrence(in: source, needle: needle, with: replacement, occurrence: occurrence))
     }
     return .string(source.replacingOccurrences(of: needle, with: replacement))
   }
@@ -299,7 +306,9 @@ public extension FormulaEvaluator {
     return .string(parts.joined(separator: delimiter.asString))
   }
 
-  public func evalDirectionalRound(_ args: [FormulaExpr], mode: NSDecimalNumber.RoundingMode) -> CellValue {
+  public func evalDirectionalRound(_ args: [FormulaExpr], mode: NSDecimalNumber.RoundingMode)
+    -> CellValue
+  {
     guard args.count == 1 || args.count == 2 else { return .error(.value) }
     let value = evaluate(args[0])
     if case .error = value { return value }
@@ -330,11 +339,13 @@ public extension FormulaEvaluator {
     let sumAnchor: RangeAnchor
     if args.count == 3 {
       guard let sum = rangeAnchor(args[2]) else { return .error(.value) }
-      sumAnchor = RangeAnchor(sheet: sum.sheet, row: sum.row, col: sum.col, rows: criteria.rows, cols: criteria.cols)
+      sumAnchor = RangeAnchor(
+        sheet: sum.sheet, row: sum.row, col: sum.col, rows: criteria.rows, cols: criteria.cols)
     } else {
       sumAnchor = criteria
     }
-    return reduceMatches(criteria: criteria, test: test, criterion: criterion, values: sumAnchor, kind: kind)
+    return reduceMatches(
+      criteria: criteria, test: test, criterion: criterion, values: sumAnchor, kind: kind)
   }
 
   private func multiCriteriaAggregate(_ args: [FormulaExpr], kind: AggregateKind) -> CellValue {
@@ -439,8 +450,9 @@ public extension FormulaEvaluator {
     let criteriaValues = snapshotValues(anchor: criteria, memo: &memo)
     let sumValues = snapshotValues(anchor: values, memo: &memo)
     if let cache = aggregateRangeCache,
-       criteriaSupportsIndexLookup(test),
-       let lookupKey = lookupKeyForCriterion(criterion, test: test) {
+      criteriaSupportsIndexLookup(test),
+      let lookupKey = lookupKeyForCriterion(criterion, test: test)
+    {
       let criteriaKey = aggregateRangeKey(for: criteria)
       let sumKey = aggregateRangeKey(for: values)
       let bucket = cache.sumForCriteria(
@@ -492,7 +504,9 @@ public extension FormulaEvaluator {
     test.op == .eq && !test.wildcard
   }
 
-  private func lookupKeyForCriterion(_ criterion: CellValue, test: CriteriaTest) -> AggregateValueKey? {
+  private func lookupKeyForCriterion(_ criterion: CellValue, test: CriteriaTest)
+    -> AggregateValueKey?
+  {
     guard criteriaSupportsIndexLookup(test) else { return nil }
     if case .error = criterion { return nil }
     if test.blank {
@@ -504,7 +518,9 @@ public extension FormulaEvaluator {
     return AggregateValueKey.from(cellValue: criterion)
   }
 
-  private func aggregateLookupKeys(criteria: [CellValue], tests: [CriteriaTest]) -> [AggregateValueKey]? {
+  private func aggregateLookupKeys(criteria: [CellValue], tests: [CriteriaTest])
+    -> [AggregateValueKey]?
+  {
     guard criteria.count == tests.count else { return nil }
     var keys: [AggregateValueKey] = []
     keys.reserveCapacity(criteria.count)
@@ -551,7 +567,8 @@ public extension FormulaEvaluator {
     case .number(let number):
       return CriteriaTest(op: .eq, number: number, text: "", wildcard: false, blank: false)
     case .bool(let flag):
-      return CriteriaTest(op: .eq, number: nil, text: flag ? "TRUE" : "FALSE", wildcard: false, blank: false)
+      return CriteriaTest(
+        op: .eq, number: nil, text: flag ? "TRUE" : "FALSE", wildcard: false, blank: false)
     case .blank:
       return CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: true)
     case .string(let text):
@@ -719,7 +736,9 @@ public extension FormulaEvaluator {
           }
           return false
         }
-        guard ti < haystack.count, needle[pi] == "?" || haystack[ti] == needle[pi] else { return false }
+        guard ti < haystack.count, needle[pi] == "?" || haystack[ti] == needle[pi] else {
+          return false
+        }
         ti += 1
         pi += 1
       }
@@ -777,7 +796,8 @@ public extension FormulaEvaluator {
       return ValueMatrix(rows: rows, cols: cols, values: rangeCellValues(start: start, end: end))
     case .unary(let op, let inner):
       guard let matrix = valueMatrix(inner) else { return nil }
-      return ValueMatrix(rows: matrix.rows, cols: matrix.cols, values: matrix.values.map { applyUnary(op, to: $0) })
+      return ValueMatrix(
+        rows: matrix.rows, cols: matrix.cols, values: matrix.values.map { applyUnary(op, to: $0) })
     case .binary(let op, let lhs, let rhs):
       guard let left = valueMatrix(lhs), let right = valueMatrix(rhs) else { return nil }
       return combine(op, left, right)
@@ -827,10 +847,14 @@ public extension FormulaEvaluator {
     }
   }
 
-  private func replaceOccurrence(in source: String, needle: String, with replacement: String, occurrence: Int) -> String {
+  private func replaceOccurrence(
+    in source: String, needle: String, with replacement: String, occurrence: Int
+  ) -> String {
     var found = 0
     var search = source.startIndex
-    while search < source.endIndex, let range = source.range(of: needle, range: search..<source.endIndex) {
+    while search < source.endIndex,
+      let range = source.range(of: needle, range: search..<source.endIndex)
+    {
       found += 1
       if found == occurrence {
         var result = source
@@ -912,8 +936,9 @@ public extension FormulaEvaluator {
       let criterion = evaluate(dynamic.criterionExpr)
       if case .error = criterion { return criterion }
       if let test = criteriaTestFromComparison(criterion: criterion, op: dynamic.op),
-         criteriaSupportsIndexLookup(test),
-         let lookupKey = lookupKeyForCriterion(criterion, test: test) {
+        criteriaSupportsIndexLookup(test),
+        let lookupKey = lookupKeyForCriterion(criterion, test: test)
+      {
         let rangeKey = aggregateRangeKey(for: plan.anchors[dynamic.columnIndex])
         let count = cache.countForMaskedCriteria(
           rangeKey: rangeKey,
@@ -930,7 +955,9 @@ public extension FormulaEvaluator {
     for dynamic in plan.dynamicTests {
       let criterion = evaluate(dynamic.criterionExpr)
       if case .error = criterion { return criterion }
-      guard let test = criteriaTestFromComparison(criterion: criterion, op: dynamic.op) else { return nil }
+      guard let test = criteriaTestFromComparison(criterion: criterion, op: dynamic.op) else {
+        return nil
+      }
       dynamicTests.append((dynamic.columnIndex, test))
     }
 
@@ -997,7 +1024,9 @@ public extension FormulaEvaluator {
     guard !args.isEmpty else { return nil }
     if args.count == 1 {
       var factors: [FormulaExpr] = []
-      guard collectMultiplyFactors(unwrapSumProductParen(args[0]), into: &factors) else { return nil }
+      guard collectMultiplyFactors(unwrapSumProductParen(args[0]), into: &factors) else {
+        return nil
+      }
       return factors.map { unwrapBooleanCoercion($0) }
     }
     return args.map { unwrapBooleanCoercion($0) }
@@ -1047,13 +1076,16 @@ public extension FormulaEvaluator {
       case .diffBound(let lhs, let rhs, let op, let threshold):
         let li = sumProductAnchorIndex(lhs, anchors: &anchors)
         let ri = sumProductAnchorIndex(rhs, anchors: &anchors)
-        diffBoundTests.append(.init(lhsColumnIndex: li, rhsColumnIndex: ri, op: op, threshold: threshold))
+        diffBoundTests.append(
+          .init(lhsColumnIndex: li, rhsColumnIndex: ri, op: op, threshold: threshold))
         staticHasher.combine(op.hashValue)
         staticHasher.combine(threshold)
       }
     }
 
-    guard !(staticTests.isEmpty && dynamicTests.isEmpty && diffBoundTests.isEmpty) else { return nil }
+    guard !(staticTests.isEmpty && dynamicTests.isEmpty && diffBoundTests.isEmpty) else {
+      return nil
+    }
     for anchor in anchors {
       mixSumProductAnchor(anchor, into: &staticHasher)
     }
@@ -1071,10 +1103,13 @@ public extension FormulaEvaluator {
     return expr
   }
 
-  private func collectMultiplyFactors(_ expr: FormulaExpr, into factors: inout [FormulaExpr]) -> Bool {
+  private func collectMultiplyFactors(_ expr: FormulaExpr, into factors: inout [FormulaExpr])
+    -> Bool
+  {
     switch expr {
     case .binary(.multiply, let lhs, let rhs):
-      guard collectMultiplyFactors(lhs, into: &factors), collectMultiplyFactors(rhs, into: &factors) else {
+      guard collectMultiplyFactors(lhs, into: &factors), collectMultiplyFactors(rhs, into: &factors)
+      else {
         return false
       }
       return true
@@ -1116,7 +1151,9 @@ public extension FormulaEvaluator {
       }
       let criterion = evaluate(lhs)
       if case .error = criterion { return nil }
-      guard let test = criteriaTestFromComparison(criterion: criterion, op: flipped) else { return nil }
+      guard let test = criteriaTestFromComparison(criterion: criterion, op: flipped) else {
+        return nil
+      }
       return .staticTest(anchor, test)
     }
     return nil
@@ -1130,10 +1167,10 @@ public extension FormulaEvaluator {
     guard op == .ge || op == .le else { return nil }
     guard case .number(let threshold) = evaluate(rhs) else { return nil }
     guard case .binary(.subtract, let left, let right) = unwrapSumProductParen(lhs),
-          let lhsAnchor = rangeAnchor(left),
-          let rhsAnchor = rangeAnchor(right),
-          lhsAnchor.rows == rhsAnchor.rows,
-          lhsAnchor.cols == rhsAnchor.cols
+      let lhsAnchor = rangeAnchor(left),
+      let rhsAnchor = rangeAnchor(right),
+      lhsAnchor.rows == rhsAnchor.rows,
+      lhsAnchor.cols == rhsAnchor.cols
     else {
       return nil
     }
@@ -1226,7 +1263,9 @@ public extension FormulaEvaluator {
     hasher.combine(test.blank)
   }
 
-  private func excelRound(_ value: Double, places: Int, mode: NSDecimalNumber.RoundingMode) -> Double {
+  private func excelRound(_ value: Double, places: Int, mode: NSDecimalNumber.RoundingMode)
+    -> Double
+  {
     // Foundation rounds toward ±infinity. Excel ROUNDUP is away from zero and ROUNDDOWN is toward zero,
     // so the sign is applied after rounding the magnitude.
     let negative = value < 0
@@ -1277,7 +1316,9 @@ public extension FormulaEvaluator {
       )
     }
     if let countifsKernel = stripCountifsKernelExpr(stripUnwrap(masterExpr)),
-       evaluateColumnCOUNTIFSStrip(master: master, members: members, expr: countifsKernel, sink: sink) {
+      evaluateColumnCOUNTIFSStrip(
+        master: master, members: members, expr: countifsKernel, sink: sink)
+    {
       return true
     }
     if evaluateColumnIFERRORVlookupStrip(
@@ -1308,7 +1349,9 @@ public extension FormulaEvaluator {
     let terms = stripAddChain(expr)
     guard terms.count >= 2 else { return false }
     return terms.allSatisfy { term in
-      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else { return false }
+      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else {
+        return false
+      }
       return true
     }
   }
@@ -1328,11 +1371,13 @@ public extension FormulaEvaluator {
   }
 
   /// `IFERROR( Σ SUMPRODUCT / divisor , "" )` quotient, peeling grouping `+` on the IFERROR value.
-  private func stripYtdIfErrorQuotient(_ expr: FormulaExpr) -> (numerator: FormulaExpr, denominator: FormulaExpr)? {
+  private func stripYtdIfErrorQuotient(_ expr: FormulaExpr) -> (
+    numerator: FormulaExpr, denominator: FormulaExpr
+  )? {
     guard case .call(let name, let args) = stripUnwrap(expr),
-          name.uppercased() == "IFERROR",
-          args.count == 2,
-          stripIsStaticEmptyLiteral(args[1])
+      name.uppercased() == "IFERROR",
+      args.count == 2,
+      stripIsStaticEmptyLiteral(args[1])
     else { return nil }
     var inner = stripUnwrap(args[0])
     for _ in 0..<6 {
@@ -1352,39 +1397,40 @@ public extension FormulaEvaluator {
     let terms = stripAddChain(stripUnwrap(numerator))
     guard terms.count >= 12 else { return nil }
     for term in terms {
-      guard case .call(let spName, _) = stripUnwrap(term), spName.uppercased() == "SUMPRODUCT" else { return nil }
+      guard case .call(let spName, _) = stripUnwrap(term), spName.uppercased() == "SUMPRODUCT"
+      else { return nil }
     }
     return terms
   }
 
   private func recordYtdStripPlanRejectsIfNeeded(master: CellAddress, expr: FormulaExpr) {
     #if DEBUG
-    guard let profile = recalcProfile,
-          let diag = stripPlanDiagnosticContext,
-          isYtdSummaryStripDiagnosticContext(diag.sheetName)
-    else { return }
-    if ytdCountifsSumStripCandidate(expr) {
-      let reject = diagnoseColumnCrossSheetCountifsSumPlanReject(expr, master: master)
-      if reject != "ytd.cnt.ok" {
-        profile.recordIfStripYtdPlanReject(
-          sheet: diag.sheetName,
-          masterA1: master.a1,
-          formula: diag.masterFormulaText,
-          rejectCode: reject
-        )
+      guard let profile = recalcProfile,
+        let diag = stripPlanDiagnosticContext,
+        isYtdSummaryStripDiagnosticContext(diag.sheetName)
+      else { return }
+      if ytdCountifsSumStripCandidate(expr) {
+        let reject = diagnoseColumnCrossSheetCountifsSumPlanReject(expr, master: master)
+        if reject != "ytd.cnt.ok" {
+          profile.recordIfStripYtdPlanReject(
+            sheet: diag.sheetName,
+            masterA1: master.a1,
+            formula: diag.masterFormulaText,
+            rejectCode: reject
+          )
+        }
       }
-    }
-    if ytdSumproductQuotientStripCandidate(expr) {
-      let reject = diagnoseColumnYtdSumproductQuotientPlanReject(expr, master: master)
-      if reject != "ytd.sp.ok" {
-        profile.recordIfStripYtdPlanReject(
-          sheet: diag.sheetName,
-          masterA1: master.a1,
-          formula: diag.masterFormulaText,
-          rejectCode: reject
-        )
+      if ytdSumproductQuotientStripCandidate(expr) {
+        let reject = diagnoseColumnYtdSumproductQuotientPlanReject(expr, master: master)
+        if reject != "ytd.sp.ok" {
+          profile.recordIfStripYtdPlanReject(
+            sheet: diag.sheetName,
+            masterA1: master.a1,
+            formula: diag.masterFormulaText,
+            rejectCode: reject
+          )
+        }
       }
-    }
     #endif
   }
 
@@ -1416,7 +1462,9 @@ public extension FormulaEvaluator {
     var termPlans: [ColumnCOUNTIFSPlan] = []
     var needleRef: FormulaRef?
     for term in terms {
-      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else { return nil }
+      guard case .call(let name, _) = stripUnwrap(term), name.uppercased() == "COUNTIFS" else {
+        return nil
+      }
       guard let plan = makeColumnCOUNTIFSPlan(stripUnwrap(term), master: master) else { return nil }
       guard ytdCrossSheetCountifsTermAccepts(plan) else { return nil }
       let critRef = plan.dynamicCriterionRefs[0]
@@ -1517,7 +1565,7 @@ public extension FormulaEvaluator {
     prepareForCellEvaluation(origin: master)
     for term in terms {
       guard case .call(_, let spArgs) = stripUnwrap(term),
-            let _ = parseSumProductBooleanPlan(spArgs)
+        parseSumProductBooleanPlan(spArgs) != nil
       else { return nil }
       calls.append(stripUnwrap(term))
     }
@@ -1529,8 +1577,8 @@ public extension FormulaEvaluator {
     master: CellAddress
   ) -> String {
     guard case .call(let name, let args) = stripUnwrap(expr),
-          name.uppercased() == "IFERROR",
-          args.count == 2
+      name.uppercased() == "IFERROR",
+      args.count == 2
     else { return "ytd.sp.iferrorTop" }
     guard stripIsStaticEmptyLiteral(args[1]) else { return "ytd.sp.fallbackEmpty" }
     guard let quotient = stripYtdIfErrorQuotient(expr) else {
@@ -1542,7 +1590,9 @@ public extension FormulaEvaluator {
     prepareForCellEvaluation(origin: master)
     for (index, term) in terms.enumerated() {
       let label = String(format: "t%02d", index + 1)
-      guard case .call(let spName, let spArgs) = stripUnwrap(term), spName.uppercased() == "SUMPRODUCT" else {
+      guard case .call(let spName, let spArgs) = stripUnwrap(term),
+        spName.uppercased() == "SUMPRODUCT"
+      else {
         return "ytd.sp.\(label).notSumproduct"
       }
       guard parseSumProductBooleanPlan(spArgs) != nil else {
@@ -1558,7 +1608,9 @@ public extension FormulaEvaluator {
     expr: FormulaExpr,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    guard let plan = makeColumnYtdSumproductQuotientPlan(stripUnwrap(expr), master: master) else { return false }
+    guard let plan = makeColumnYtdSumproductQuotientPlan(stripUnwrap(expr), master: master) else {
+      return false
+    }
     for origin in members {
       prepareForCellEvaluation(origin: origin)
       let rowDelta = origin.row - master.row
@@ -1566,9 +1618,10 @@ public extension FormulaEvaluator {
       var sum = 0.0
       var rowError: CellValue?
       for call in plan.sumproductCalls {
-        let adjusted = FormulaRewriter.adjustExpression(call, rowDelta: rowDelta, colDelta: colDelta)
+        let adjusted = FormulaRewriter.adjustExpression(
+          call, rowDelta: rowDelta, colDelta: colDelta)
         guard case .call(_, let spArgs) = stripUnwrap(adjusted),
-              let value = tryEvalBooleanSumProduct(spArgs)
+          let value = tryEvalBooleanSumProduct(spArgs)
         else {
           rowError = .error(.value)
           break
@@ -1618,7 +1671,9 @@ public extension FormulaEvaluator {
   }
 
   private func unpackIFBlankBranch(_ expr: FormulaExpr) -> IFBlankBranch? {
-    guard case .call(let name, let args) = expr, name.uppercased() == "IF", args.count == 3 else { return nil }
+    guard case .call(let name, let args) = expr, name.uppercased() == "IF", args.count == 3 else {
+      return nil
+    }
     guard stripIsStaticEmptyLiteral(args[1]) else { return nil }
     if let guardRef = stripBlankEqualityGuardRef(args[0]) {
       return IFBlankBranch(ifGuard: .single(guardRef), branch: args[2])
@@ -1630,11 +1685,13 @@ public extension FormulaEvaluator {
   }
 
   private func stripAndBothBlankGuardRefs(_ condition: FormulaExpr) -> (FormulaRef, FormulaRef)? {
-    guard case .call(let name, let args) = stripUnwrap(condition), name.uppercased() == "AND", args.count == 2 else {
+    guard case .call(let name, let args) = stripUnwrap(condition), name.uppercased() == "AND",
+      args.count == 2
+    else {
       return nil
     }
     guard let left = stripBlankEqualityGuardRef(args[0]),
-          let right = stripBlankEqualityGuardRef(args[1])
+      let right = stripBlankEqualityGuardRef(args[1])
     else { return nil }
     return (left, right)
   }
@@ -1715,7 +1772,8 @@ public extension FormulaEvaluator {
     }
   }
 
-  private func shiftedRef(_ ref: FormulaRef, master: CellAddress, origin: CellAddress) -> FormulaRef {
+  private func shiftedRef(_ ref: FormulaRef, master: CellAddress, origin: CellAddress) -> FormulaRef
+  {
     let rowDelta = origin.row - master.row
     let colDelta = origin.col - master.col
     return ref.adjusted(rowDelta: rowDelta, colDelta: colDelta) ?? ref
@@ -1748,8 +1806,11 @@ public extension FormulaEvaluator {
   ) -> String {
     switch ifGuard {
     case .andBothBlank(let left, let right):
-      if makeColumnTextJoinPlan(branch, guardA: left, guardB: right) != nil { return "textJoinUnexpected" }
-      if makeColumnDuplicateStatusPlan(branch, pickRef: left, altRef: right, master: master) != nil {
+      if makeColumnTextJoinPlan(branch, guardA: left, guardB: right) != nil {
+        return "textJoinUnexpected"
+      }
+      if makeColumnDuplicateStatusPlan(branch, pickRef: left, altRef: right, master: master) != nil
+      {
         return "dupStatusUnexpected"
       }
     case .single(let ref):
@@ -1758,9 +1819,12 @@ public extension FormulaEvaluator {
       }
     }
     if let kernel = stripCountifsKernelExpr(branch) {
-      return makeColumnCOUNTIFSPlan(kernel, master: master) == nil ? "countifsPlan" : "countifsUnexpected"
+      return makeColumnCOUNTIFSPlan(kernel, master: master) == nil
+        ? "countifsPlan" : "countifsUnexpected"
     }
-    if case .call(let name, _) = stripUnwrap(branch), name.uppercased() == "IFERROR" { return "iferrorNotVlk" }
+    if case .call(let name, _) = stripUnwrap(branch), name.uppercased() == "IFERROR" {
+      return "iferrorNotVlk"
+    }
     return "otherBranch"
   }
 
@@ -1782,7 +1846,9 @@ public extension FormulaEvaluator {
   }
 
   private func stripCountifRangeCriterion(_ expr: FormulaExpr) -> (RangeAnchor, FormulaRef)? {
-    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIF", args.count == 2 else {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIF",
+      args.count == 2
+    else {
       return nil
     }
     guard let anchor = rangeAnchor(args[0]), anchor.cols == 1 else { return nil }
@@ -1809,14 +1875,17 @@ public extension FormulaEvaluator {
     guardRef: FormulaRef,
     master: CellAddress
   ) -> ColumnCountifPickPlan? {
-    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF",
+      args.count == 3
+    else {
       return nil
     }
     guard let pickRef = stripNotEmptyPickRef(args[0]) else { return nil }
     guard let (rangeA, critA) = stripCountifRangeCriterion(args[1]),
-          let (rangeG, critG) = stripCountifRangeCriterion(args[2])
+      let (rangeG, critG) = stripCountifRangeCriterion(args[2])
     else { return nil }
-    guard stripRefSameShapeAs(critA, other: pickRef), stripRefSameShapeAs(critG, other: guardRef) else { return nil }
+    guard stripRefSameShapeAs(critA, other: pickRef), stripRefSameShapeAs(critG, other: guardRef)
+    else { return nil }
 
     prepareForCellEvaluation(origin: master)
     var memo: [LookupMemoKey: CellValue] = [:]
@@ -1860,8 +1929,9 @@ public extension FormulaEvaluator {
     }
     let test = criteriaTest(from: criterion)
     if let cache = aggregateRangeCache,
-       criteriaSupportsIndexLookup(test),
-       let lookupKey = lookupKeyForCriterion(criterion, test: test) {
+      criteriaSupportsIndexLookup(test),
+      let lookupKey = lookupKeyForCriterion(criterion, test: test)
+    {
       let count = cache.countForCriteria(
         rangeKeys: [rangeKey],
         criteriaKeys: [lookupKey],
@@ -1894,14 +1964,20 @@ public extension FormulaEvaluator {
     guardA: FormulaRef,
     guardB: FormulaRef
   ) -> ColumnTextJoinPlan? {
-    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "TEXTJOIN", args.count == 4 else {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "TEXTJOIN",
+      args.count == 4
+    else {
       return nil
     }
     guard case .string(let delimiter) = stripUnwrap(args[0]) else { return nil }
     guard let ignoreEmpty = stripExcelBoolLiteral(args[1]) else { return nil }
-    guard let joinA = stripFormulaCellRef(args[2]), let joinB = stripFormulaCellRef(args[3]) else { return nil }
-    guard stripRefSameShapeAs(joinA, other: guardA), stripRefSameShapeAs(joinB, other: guardB) else { return nil }
-    return ColumnTextJoinPlan(joinRefA: joinA, joinRefB: joinB, delimiter: delimiter, ignoreEmpty: ignoreEmpty)
+    guard let joinA = stripFormulaCellRef(args[2]), let joinB = stripFormulaCellRef(args[3]) else {
+      return nil
+    }
+    guard stripRefSameShapeAs(joinA, other: guardA), stripRefSameShapeAs(joinB, other: guardB)
+    else { return nil }
+    return ColumnTextJoinPlan(
+      joinRefA: joinA, joinRefB: joinB, delimiter: delimiter, ignoreEmpty: ignoreEmpty)
   }
 
   private func emitColumnTextJoinRow(
@@ -1966,7 +2042,8 @@ public extension FormulaEvaluator {
     guard case .range(let start, let end) = resolvedExpr(stripUnwrap(rangeExpr)) else { return nil }
     guard start.absRow, !end.absRow, start.col == end.col else { return nil }
     guard end.row == keyRef.row, end.col == keyRef.col else { return nil }
-    guard let critRef = stripFormulaCellRef(criterion), stripRefSameCellAs(critRef, keyRef: keyRef) else {
+    guard let critRef = stripFormulaCellRef(criterion), stripRefSameCellAs(critRef, keyRef: keyRef)
+    else {
       return nil
     }
     guard critRef.row == end.row, critRef.col == end.col else { return nil }
@@ -1978,28 +2055,33 @@ public extension FormulaEvaluator {
     keyRef: FormulaRef,
     master: CellAddress
   ) -> DuplicateStatusArmPlan? {
-    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "IF", args.count == 3 else {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "IF",
+      args.count == 3
+    else {
       return nil
     }
     guard let countifsExpr = stripCountGreaterThanOneExpr(args[0]),
-          case .call(let countifsName, let countifsArgs) = stripUnwrap(countifsExpr),
-          countifsName.uppercased() == "COUNTIFS",
-          countifsArgs.count == 2
+      case .call(let countifsName, let countifsArgs) = stripUnwrap(countifsExpr),
+      countifsName.uppercased() == "COUNTIFS",
+      countifsArgs.count == 2
     else { return nil }
     guard stripStaticLabel(args[1], "DUPLICATE") else { return nil }
     guard case .call(let innerName, let innerArgs) = stripUnwrap(args[2]),
-          innerName.uppercased() == "IF",
-          innerArgs.count == 3
+      innerName.uppercased() == "IF",
+      innerArgs.count == 3
     else { return nil }
     guard let countifExpr = stripCountGreaterThanOneExpr(innerArgs[0]),
-          case .call(let countifName, let countifArgs) = stripUnwrap(countifExpr),
-          countifName.uppercased() == "COUNTIF",
-          countifArgs.count == 2
+      case .call(let countifName, let countifArgs) = stripUnwrap(countifExpr),
+      countifName.uppercased() == "COUNTIF",
+      countifArgs.count == 2
     else { return nil }
-    guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE") else { return nil }
-    guard let prefix = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
-          let (fixedAnchor, fixedCrit) = stripCountifRangeCriterion(countifExpr),
-          stripRefSameCellAs(fixedCrit, keyRef: keyRef)
+    guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE")
+    else { return nil }
+    guard
+      let prefix = stripGrowingCountifsPrefix(
+        countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
+      let (fixedAnchor, fixedCrit) = stripCountifRangeCriterion(countifExpr),
+      stripRefSameCellAs(fixedCrit, keyRef: keyRef)
     else { return nil }
     guard fixedAnchor.col == prefix.keyCol else { return nil }
 
@@ -2020,14 +2102,18 @@ public extension FormulaEvaluator {
     altRef: FormulaRef,
     master: CellAddress
   ) -> ColumnDuplicateStatusPlan? {
-    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF",
+      args.count == 3
+    else {
       return nil
     }
-    guard let branchPick = stripNotEmptyPickRef(args[0]), stripRefSameCellAs(branchPick, keyRef: pickRef) else {
+    guard let branchPick = stripNotEmptyPickRef(args[0]),
+      stripRefSameCellAs(branchPick, keyRef: pickRef)
+    else {
       return nil
     }
     guard let pickArm = parseDuplicateStatusArm(args[1], keyRef: pickRef, master: master),
-          let altArm = parseDuplicateStatusArm(args[2], keyRef: altRef, master: master)
+      let altArm = parseDuplicateStatusArm(args[2], keyRef: altRef, master: master)
     else { return nil }
     return ColumnDuplicateStatusPlan(
       pickRef: pickRef,
@@ -2066,7 +2152,9 @@ public extension FormulaEvaluator {
   }
 
   private func diagnoseStripCountifRangeCriterionReject(_ expr: FormulaExpr) -> String {
-    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIF", args.count == 2 else {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "COUNTIF",
+      args.count == 2
+    else {
       return "dup.countif.notCall2"
     }
     guard let anchor = rangeAnchor(args[0]), anchor.cols == 1 else {
@@ -2084,13 +2172,15 @@ public extension FormulaEvaluator {
     arm: String
   ) -> String? {
     let prefix = "dup.\(arm)."
-    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "IF", args.count == 3 else {
+    guard case .call(let name, let args) = stripUnwrap(expr), name.uppercased() == "IF",
+      args.count == 3
+    else {
       return prefix + "ifTop"
     }
     guard let countifsExpr = stripCountGreaterThanOneExpr(args[0]),
-          case .call(let countifsName, let countifsArgs) = stripUnwrap(countifsExpr),
-          countifsName.uppercased() == "COUNTIFS",
-          countifsArgs.count == 2
+      case .call(let countifsName, let countifsArgs) = stripUnwrap(countifsExpr),
+      countifsName.uppercased() == "COUNTIFS",
+      countifsArgs.count == 2
     else {
       return prefix + "countifsGt1"
     }
@@ -2098,19 +2188,20 @@ public extension FormulaEvaluator {
       return prefix + "duplicateLabel"
     }
     guard case .call(let innerName, let innerArgs) = stripUnwrap(args[2]),
-          innerName.uppercased() == "IF",
-          innerArgs.count == 3
+      innerName.uppercased() == "IF",
+      innerArgs.count == 3
     else {
       return prefix + "innerIf"
     }
     guard let countifExpr = stripCountGreaterThanOneExpr(innerArgs[0]),
-          case .call(let countifName, let countifArgs) = stripUnwrap(countifExpr),
-          countifName.uppercased() == "COUNTIF",
-          countifArgs.count == 2
+      case .call(let countifName, let countifArgs) = stripUnwrap(countifExpr),
+      countifName.uppercased() == "COUNTIF",
+      countifArgs.count == 2
     else {
       return prefix + "countifGt1"
     }
-    guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE") else {
+    guard stripStaticLabel(innerArgs[1], "ORIGINAL"), stripStaticLabel(innerArgs[2], "UNIQUE")
+    else {
       return prefix + "originalUniqueLabel"
     }
     let prefixReject = diagnoseStripGrowingCountifsPrefixReject(
@@ -2131,8 +2222,10 @@ public extension FormulaEvaluator {
     guard stripRefSameCellAs(fixedCrit, keyRef: keyRef) else {
       return prefix + "fixedCritKeyCell"
     }
-    guard let growing = stripGrowingCountifsPrefix(countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
-          let (fixedAnchor, _) = stripCountifRangeCriterion(countifExpr)
+    guard
+      let growing = stripGrowingCountifsPrefix(
+        countifsArgs[0], criterion: countifsArgs[1], keyRef: keyRef),
+      let (fixedAnchor, _) = stripCountifRangeCriterion(countifExpr)
     else {
       return prefix + "prefixOrCountif"
     }
@@ -2147,7 +2240,9 @@ public extension FormulaEvaluator {
     pickRef: FormulaRef,
     altRef: FormulaRef
   ) -> String {
-    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF", args.count == 3 else {
+    guard case .call(let name, let args) = stripUnwrap(branch), name.uppercased() == "IF",
+      args.count == 3
+    else {
       return "dup.branch.ifTop"
     }
     guard let branchPick = stripNotEmptyPickRef(args[0]) else {
@@ -2183,7 +2278,8 @@ public extension FormulaEvaluator {
       if dupReject != "dup.branch.ok" {
         return dupReject
       }
-      if makeColumnDuplicateStatusPlan(branch, pickRef: left, altRef: right, master: master) != nil {
+      if makeColumnDuplicateStatusPlan(branch, pickRef: left, altRef: right, master: master) != nil
+      {
         return "ifBlank.dupUnexpected"
       }
       return "ifBlank.dupSnapshot"
@@ -2192,7 +2288,8 @@ public extension FormulaEvaluator {
         return "ifBlank.countifPickUnexpected"
       }
       if let kernel = stripCountifsKernelExpr(branch) {
-        return makeColumnCOUNTIFSPlan(kernel, master: master) == nil ? "ifBlank.countifsPlan" : "ifBlank.countifsUnexpected"
+        return makeColumnCOUNTIFSPlan(kernel, master: master) == nil
+          ? "ifBlank.countifsPlan" : "ifBlank.countifsUnexpected"
       }
       if case .call(let name, _) = stripUnwrap(branch), name.uppercased() == "IFERROR" {
         return "ifBlank.iferrorNotVlk"
@@ -2243,14 +2340,15 @@ public extension FormulaEvaluator {
       return
     }
     prefixCounts[key, default: 0] += 1
-    if prefixCounts[key]! > 1 {
+    if let seen = prefixCounts[key], seen > 1 {
       sink(origin, .string("DUPLICATE"))
       return
     }
     let test = criteriaTest(from: value)
     if let cache = aggregateRangeCache,
-       criteriaSupportsIndexLookup(test),
-       let lookupKey = lookupKeyForCriterion(value, test: test) {
+      criteriaSupportsIndexLookup(test),
+      let lookupKey = lookupKeyForCriterion(value, test: test)
+    {
       let full = cache.countForCriteria(
         rangeKeys: [arm.fixedRangeKey],
         criteriaKeys: [lookupKey],
@@ -2276,11 +2374,16 @@ public extension FormulaEvaluator {
     altRef: FormulaRef,
     sink: (CellAddress, CellValue) -> Void
   ) -> Bool {
-    guard let plan = makeColumnDuplicateStatusPlan(branch, pickRef: pickRef, altRef: altRef, master: master) else {
+    guard
+      let plan = makeColumnDuplicateStatusPlan(
+        branch, pickRef: pickRef, altRef: altRef, master: master)
+    else {
       return false
     }
-    var pickCounts = seedDuplicatePrefixCounts(arm: plan.pickArm, throughRow: master.row - 1, master: master)
-    var altCounts = seedDuplicatePrefixCounts(arm: plan.altArm, throughRow: master.row - 1, master: master)
+    var pickCounts = seedDuplicatePrefixCounts(
+      arm: plan.pickArm, throughRow: master.row - 1, master: master)
+    var altCounts = seedDuplicatePrefixCounts(
+      arm: plan.altArm, throughRow: master.row - 1, master: master)
     for origin in members {
       prepareForCellEvaluation(origin: origin)
       if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
@@ -2339,7 +2442,7 @@ public extension FormulaEvaluator {
       return (start, end)
     case .namedRange(let name):
       guard let resolved = namedRangeLookup(name),
-            case .range(let start, let end) = resolved
+        case .range(let start, let end) = resolved
       else { return nil }
       return (start, end)
     default:
@@ -2347,12 +2450,15 @@ public extension FormulaEvaluator {
     }
   }
 
-  private func makeColumnIFERRORVlookupPlan(_ expr: FormulaExpr, master: CellAddress) -> ColumnIFERRORVlookupPlan? {
-    guard case .call(let outer, let outerArgs) = stripUnwrap(expr), outer.uppercased() == "IFERROR", outerArgs.count == 2
+  private func makeColumnIFERRORVlookupPlan(_ expr: FormulaExpr, master: CellAddress)
+    -> ColumnIFERRORVlookupPlan?
+  {
+    guard case .call(let outer, let outerArgs) = stripUnwrap(expr), outer.uppercased() == "IFERROR",
+      outerArgs.count == 2
     else { return nil }
     guard case .call(let inner, let vargs) = stripUnwrap(outerArgs[0]),
-          inner.uppercased() == "VLOOKUP",
-          vargs.count >= 3, vargs.count <= 4
+      inner.uppercased() == "VLOOKUP",
+      vargs.count >= 3, vargs.count <= 4
     else { return nil }
     guard let needleRef = stripFormulaCellRef(vargs[0]) else { return nil }
 
@@ -2422,14 +2528,17 @@ public extension FormulaEvaluator {
       sink(origin, evaluate(fallbackExpr))
       return
     }
-    if let hit = cache.exactLookup(key: plan.tableKey, needle: needle, build: {
-      buildExactLookupMap(
-        horizontal: false,
-        bounds: plan.bounds,
-        start: plan.tableStart,
-        resultOffset: plan.resultOffset
-      )
-    }) {
+    if let hit = cache.exactLookup(
+      key: plan.tableKey, needle: needle,
+      build: {
+        buildExactLookupMap(
+          horizontal: false,
+          bounds: plan.bounds,
+          start: plan.tableStart,
+          resultOffset: plan.resultOffset
+        )
+      })
+    {
       recalcProfile?.ifStripHits += 1
       sink(origin, hit)
     } else {
@@ -2438,8 +2547,12 @@ public extension FormulaEvaluator {
     }
   }
 
-  private func makeColumnCOUNTIFSPlan(_ countifsExpr: FormulaExpr, master: CellAddress) -> ColumnCOUNTIFSPlan? {
-    guard case .call(let name, let args) = stripUnwrap(countifsExpr), name.uppercased() == "COUNTIFS" else {
+  private func makeColumnCOUNTIFSPlan(_ countifsExpr: FormulaExpr, master: CellAddress)
+    -> ColumnCOUNTIFSPlan?
+  {
+    guard case .call(let name, let args) = stripUnwrap(countifsExpr),
+      name.uppercased() == "COUNTIFS"
+    else {
       return nil
     }
     guard args.count >= 2, args.count.isMultiple(of: 2) else { return nil }
@@ -2462,7 +2575,8 @@ public extension FormulaEvaluator {
       if let ref = stripFormulaCellRef(criterionExpr) {
         dynamicCriterionRefs.append(ref)
         staticCriteria.append(.blank)
-        staticTests.append(CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: false))
+        staticTests.append(
+          CriteriaTest(op: .eq, number: nil, text: "", wildcard: false, blank: false))
       } else {
         let value = evaluate(criterionExpr)
         if case .error = value { return nil }
@@ -2519,7 +2633,8 @@ public extension FormulaEvaluator {
       return
     }
     if let cache = aggregateRangeCache,
-       let lookupKeys = aggregateLookupKeys(criteria: criteriaValues, tests: tests) {
+      let lookupKeys = aggregateLookupKeys(criteria: criteriaValues, tests: tests)
+    {
       let matches = cache.countForCriteria(
         rangeKeys: plan.rangeKeys,
         criteriaKeys: lookupKeys,
@@ -2599,7 +2714,9 @@ public extension FormulaEvaluator {
         }
         return true
       }
-      if let countifPickPlan = makeColumnCountifPickPlan(branchExpr, guardRef: guardRef, master: master) {
+      if let countifPickPlan = makeColumnCountifPickPlan(
+        branchExpr, guardRef: guardRef, master: master)
+      {
         for origin in members {
           prepareForCellEvaluation(origin: origin)
           if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
@@ -2620,7 +2737,8 @@ public extension FormulaEvaluator {
         return true
       }
       if let countifsExpr = stripCountifsKernelExpr(branchExpr),
-         let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master) {
+        let countifsPlan = makeColumnCOUNTIFSPlan(countifsExpr, master: master)
+      {
         for origin in members {
           prepareForCellEvaluation(origin: origin)
           if ifBlankGuardIsActive(ifGuard, master: master, origin: origin) {
@@ -2636,23 +2754,24 @@ public extension FormulaEvaluator {
       }
     }
     #if DEBUG
-    if let profile = recalcProfile {
-      let missReason = diagnoseIfStripBranchKernelMiss(branchExpr, ifGuard: ifGuard, master: master)
-      profile.recordIfStripPlanMiss(missReason)
-      if missReason == "otherBranch", let diag = stripPlanDiagnosticContext {
-        let rejectCode = diagnoseIfStripOtherBranchReject(
-          branch: branchExpr,
-          ifGuard: ifGuard,
-          master: master
-        )
-        profile.recordIfStripOtherBranch(
-          sheet: diag.sheetName,
-          masterA1: master.a1,
-          formula: diag.masterFormulaText,
-          rejectCode: rejectCode
-        )
+      if let profile = recalcProfile {
+        let missReason = diagnoseIfStripBranchKernelMiss(
+          branchExpr, ifGuard: ifGuard, master: master)
+        profile.recordIfStripPlanMiss(missReason)
+        if missReason == "otherBranch", let diag = stripPlanDiagnosticContext {
+          let rejectCode = diagnoseIfStripOtherBranchReject(
+            branch: branchExpr,
+            ifGuard: ifGuard,
+            master: master
+          )
+          profile.recordIfStripOtherBranch(
+            sheet: diag.sheetName,
+            masterA1: master.a1,
+            formula: diag.masterFormulaText,
+            rejectCode: rejectCode
+          )
+        }
       }
-    }
     #endif
     return false
   }

@@ -1,11 +1,11 @@
-import Foundation
-import GridCore
-import NumberFormat
-import Formula
-import Functions
-import Model
 import Calc
 import FileFormats
+import Formula
+import Foundation
+import Functions
+import GridCore
+import Model
+import NumberFormat
 
 public enum SheetStructureMutation {
   public static func insertRows(into sheet: inout Sheet, at index: Int, count: Int = 1) {
@@ -95,7 +95,8 @@ public enum SheetStructureMutation {
     sheet.recomputePopulatedExtents()
     sheet.rebuildFormulaIngestIndex()
     sheet.columnWidths = deleteKeyedValues(sheet.columnWidths, range: index..<(index + count))
-    sheet.columnWidths = shiftKeyedValues(sheet.columnWidths, threshold: index + count, delta: -count)
+    sheet.columnWidths = shiftKeyedValues(
+      sheet.columnWidths, threshold: index + count, delta: -count)
     sheet.frozenColumns = max(0, min(sheet.frozenColumns, index))
     shiftSheetAnnotations(&sheet, axis: .column, index: index, delta: -count, deleteCount: count)
   }
@@ -113,14 +114,18 @@ public enum SheetStructureMutation {
       shiftRange($0, axis: axis, index: index, delta: delta, deleteCount: deleteCount)
     }
     sheet.conditionalFormats = sheet.conditionalFormats.compactMap { rule in
-      guard let range = shiftRange(rule.range, axis: axis, index: index, delta: delta, deleteCount: deleteCount)
+      guard
+        let range = shiftRange(
+          rule.range, axis: axis, index: index, delta: delta, deleteCount: deleteCount)
       else { return nil }
       var next = rule
       next.range = range
       return next
     }
     if var filter = sheet.autoFilter {
-      if let range = shiftRange(filter.range, axis: axis, index: index, delta: delta, deleteCount: deleteCount) {
+      if let range = shiftRange(
+        filter.range, axis: axis, index: index, delta: delta, deleteCount: deleteCount)
+      {
         filter.range = range
         if axis == .column {
           filter.selectedValuesByColumn = shiftColumnMap(
@@ -141,19 +146,25 @@ public enum SheetStructureMutation {
       }
     }
     sheet.charts = sheet.charts.compactMap { chart in
-      guard let range = shiftRange(chart.dataRange, axis: axis, index: index, delta: delta, deleteCount: deleteCount)
+      guard
+        let range = shiftRange(
+          chart.dataRange, axis: axis, index: index, delta: delta, deleteCount: deleteCount)
       else { return nil }
       var next = chart
       next.dataRange = range
       switch axis {
       case .row:
-        if let anchor = shiftIndex(chart.anchorRow, index: index, delta: delta, deleteCount: deleteCount) {
+        if let anchor = shiftIndex(
+          chart.anchorRow, index: index, delta: delta, deleteCount: deleteCount)
+        {
           next.anchorRow = anchor
         } else {
           return nil
         }
       case .column:
-        if let anchor = shiftIndex(chart.anchorCol, index: index, delta: delta, deleteCount: deleteCount) {
+        if let anchor = shiftIndex(
+          chart.anchorCol, index: index, delta: delta, deleteCount: deleteCount)
+        {
           next.anchorCol = anchor
         } else {
           return nil
@@ -165,12 +176,18 @@ public enum SheetStructureMutation {
       var next = image
       switch axis {
       case .row:
-        guard let anchor = shiftIndex(image.anchorRow, index: index, delta: delta, deleteCount: deleteCount) else {
+        guard
+          let anchor = shiftIndex(
+            image.anchorRow, index: index, delta: delta, deleteCount: deleteCount)
+        else {
           return nil
         }
         next.anchorRow = anchor
       case .column:
-        guard let anchor = shiftIndex(image.anchorCol, index: index, delta: delta, deleteCount: deleteCount) else {
+        guard
+          let anchor = shiftIndex(
+            image.anchorCol, index: index, delta: delta, deleteCount: deleteCount)
+        else {
           return nil
         }
         next.anchorCol = anchor
@@ -190,7 +207,7 @@ public enum SheetStructureMutation {
     switch axis {
     case .row:
       guard let minRow = shiftIndex(n.minRow, index: index, delta: delta, deleteCount: deleteCount),
-            let maxRow = shiftIndex(n.maxRow, index: index, delta: delta, deleteCount: deleteCount)
+        let maxRow = shiftIndex(n.maxRow, index: index, delta: delta, deleteCount: deleteCount)
       else { return nil }
       return CellRange(
         start: CellAddress(row: minRow, col: n.minCol),
@@ -198,7 +215,7 @@ public enum SheetStructureMutation {
       )
     case .column:
       guard let minCol = shiftIndex(n.minCol, index: index, delta: delta, deleteCount: deleteCount),
-            let maxCol = shiftIndex(n.maxCol, index: index, delta: delta, deleteCount: deleteCount)
+        let maxCol = shiftIndex(n.maxCol, index: index, delta: delta, deleteCount: deleteCount)
       else { return nil }
       return CellRange(
         start: CellAddress(row: n.minRow, col: minCol),
@@ -233,7 +250,9 @@ public enum SheetStructureMutation {
     return result
   }
 
-  private static func shiftKeyedValues(_ values: [Int: CGFloat], threshold: Int, delta: Int) -> [Int: CGFloat] {
+  private static func shiftKeyedValues(_ values: [Int: CGFloat], threshold: Int, delta: Int)
+    -> [Int: CGFloat]
+  {
     var result: [Int: CGFloat] = [:]
     for (key, value) in values {
       if key >= threshold {
@@ -245,7 +264,9 @@ public enum SheetStructureMutation {
     return result
   }
 
-  private static func deleteKeyedValues(_ values: [Int: CGFloat], range: Range<Int>) -> [Int: CGFloat] {
+  private static func deleteKeyedValues(_ values: [Int: CGFloat], range: Range<Int>) -> [Int:
+    CGFloat]
+  {
     values.filter { !range.contains($0.key) }
   }
 

@@ -1,14 +1,14 @@
-import Foundation
-import UniformTypeIdentifiers
-import GridCore
-import NumberFormat
-import Formula
-import Functions
-import Model
 import Calc
 import FileFormats
+import Formula
+import Foundation
+import Functions
+import GridCore
+import Model
+import NumberFormat
+import UniformTypeIdentifiers
 
-public extension UTType {
+extension UTType {
   /// Excel Open XML workbook (.xlsx).
   public static var spreadsheetML: UTType {
     UTType(importedAs: "org.openxmlformats.spreadsheetml.sheet")
@@ -21,7 +21,9 @@ public extension UTType {
 /// rather than `DocumentGroup`. FileDocument is deprecated in the macOS 27 SDK in favor of the
 /// class-based `Document` protocols, which we do not need until/unless we adopt DocumentGroup.
 public struct SpreadsheetDocument {
-  public static var readableContentTypes: [UTType] { [.spreadsheetML, .commaSeparatedText, .plainText] }
+  public static var readableContentTypes: [UTType] {
+    [.spreadsheetML, .commaSeparatedText, .plainText]
+  }
   public static var writableContentTypes: [UTType] { [.spreadsheetML, .commaSeparatedText] }
 
   public var workbook: Workbook
@@ -30,7 +32,9 @@ public struct SpreadsheetDocument {
     self.workbook = workbook
   }
 
-  public static func workbook(from data: Data, sheetName: String, contentType: UTType? = nil) throws -> Workbook {
+  public static func workbook(from data: Data, sheetName: String, contentType: UTType? = nil) throws
+    -> Workbook
+  {
     if isXLSX(data: data, contentType: contentType) {
       return try XLSXCodec.importWorkbook(from: data)
     }
@@ -54,14 +58,15 @@ public struct SpreadsheetDocument {
 
   private static func isXLSX(data: Data, contentType: UTType?) -> Bool {
     if let contentType,
-       contentType.conforms(to: .spreadsheetML)
+      contentType.conforms(to: .spreadsheetML)
         || contentType.identifier == "org.openxmlformats.spreadsheetml.sheet"
         || contentType.identifier == "com.microsoft.excel.xlsx"
     {
       return true
     }
     // ZIP local file header signature
-    return data.starts(with: [0x50, 0x4B, 0x03, 0x04]) || data.starts(with: [0x50, 0x4B, 0x05, 0x06])
+    return data.starts(with: [0x50, 0x4B, 0x03, 0x04])
+      || data.starts(with: [0x50, 0x4B, 0x05, 0x06])
   }
 
   private static func decodeText(from data: Data) -> String {
@@ -72,8 +77,8 @@ public struct SpreadsheetDocument {
   }
 }
 
-private extension String {
-  var deletingPathExtension: String {
+extension String {
+  fileprivate var deletingPathExtension: String {
     (self as NSString).deletingPathExtension
   }
 }

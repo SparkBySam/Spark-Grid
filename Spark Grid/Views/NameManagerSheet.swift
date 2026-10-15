@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct NameManagerSheet: View {
   @Bindable var viewModel: SpreadsheetViewModel

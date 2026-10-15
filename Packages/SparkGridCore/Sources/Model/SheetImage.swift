@@ -1,8 +1,8 @@
 import CoreGraphics
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 /// Embedded picture anchored on a sheet (Excel drawing / oneCellAnchor).
 public nonisolated struct SheetImage: Identifiable, Codable, Equatable, Sendable {

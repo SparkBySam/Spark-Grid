@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 /// One cell in a workbook. `sheetID` indexes `WorkbookDependencyGraph.sheetNames`.
 public nonisolated struct FormulaCoord: Hashable, Sendable {
@@ -208,7 +208,7 @@ public nonisolated struct WorkbookGraphInput: Sendable {
   public var fallbackMaxCol: Int
 }
 
-public extension WorkbookDependencyGraph {
+extension WorkbookDependencyGraph {
   public nonisolated static func build(_ input: WorkbookGraphInput) -> WorkbookDependencyGraph {
     let namesByKey = Dictionary(uniqueKeysWithValues: input.names.map { ($0.key, $0) })
     var perSheet: [[BuiltFormula]] = Array(repeating: [], count: input.sheets.count)
@@ -266,8 +266,9 @@ public extension WorkbookDependencyGraph {
           masterCol = cell.col
         }
         lastRow = cell.row
+        guard let expr else { continue }
         let precedents = collect(
-          expr!,
+          expr,
           formulaSheet: sheet.sheetID,
           input: input,
           namesByKey: namesByKey
@@ -286,7 +287,8 @@ public extension WorkbookDependencyGraph {
     var cellPrecedents: [[FormulaCoord]] = []
     var rangePrecedents: [[FormulaRangeRef]] = []
     var cellDependents: [FormulaCoord: [Int]] = [:]
-    var rangesBySheet: [Int: [(minRow: Int, maxRow: Int, minCol: Int, maxCol: Int, formula: Int)]] = [:]
+    var rangesBySheet: [Int: [(minRow: Int, maxRow: Int, minCol: Int, maxCol: Int, formula: Int)]] =
+      [:]
     for sheetFormulas in perSheet {
       for formula in sheetFormulas {
         let formulaID = formulaCoords.count
@@ -325,7 +327,9 @@ public extension WorkbookDependencyGraph {
   ) -> (cells: [FormulaCoord], ranges: [FormulaRangeRef]) {
     var cells: [FormulaCoord] = []
     var ranges: [FormulaRangeRef] = []
-    collect(expr, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells, ranges: &ranges)
+    collect(
+      expr, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells,
+      ranges: &ranges)
     return (cells, ranges)
   }
 
@@ -352,7 +356,9 @@ public extension WorkbookDependencyGraph {
         ranges: &ranges
       )
     case .cellRef(let ref):
-      guard let sheetID = sheetID(for: ref.sheet, formulaSheet: formulaSheet, input: input) else { return }
+      guard let sheetID = sheetID(for: ref.sheet, formulaSheet: formulaSheet, input: input) else {
+        return
+      }
       if ref.isRowOpen || ref.isColOpen {
         let extent = extent(for: sheetID, input: input)
         let start = ref
@@ -379,7 +385,9 @@ public extension WorkbookDependencyGraph {
       }
     case .range(let start, let end):
       let sheetName = start.sheet ?? end.sheet
-      guard let sheetID = sheetID(for: sheetName, formulaSheet: formulaSheet, input: input) else { return }
+      guard let sheetID = sheetID(for: sheetName, formulaSheet: formulaSheet, input: input) else {
+        return
+      }
       let extent = extent(for: sheetID, input: input)
       let bounds = A1Reference.resolvedBounds(
         start: start,
@@ -397,13 +405,21 @@ public extension WorkbookDependencyGraph {
         ranges: &ranges
       )
     case .unary(_, let inner):
-      collect(inner, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells, ranges: &ranges)
+      collect(
+        inner, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells,
+        ranges: &ranges)
     case .binary(_, let lhs, let rhs):
-      collect(lhs, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells, ranges: &ranges)
-      collect(rhs, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells, ranges: &ranges)
+      collect(
+        lhs, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells,
+        ranges: &ranges)
+      collect(
+        rhs, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells,
+        ranges: &ranges)
     case .call(_, let args):
       for arg in args {
-        collect(arg, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells, ranges: &ranges)
+        collect(
+          arg, formulaSheet: formulaSheet, input: input, namesByKey: namesByKey, cells: &cells,
+          ranges: &ranges)
       }
     }
   }

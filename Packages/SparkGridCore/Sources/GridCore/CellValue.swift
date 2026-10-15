@@ -38,19 +38,24 @@ public nonisolated enum FormulaError: Equatable, Hashable, Sendable, CaseIterabl
     case .divZero:
       return "Division by zero."
     case .ref:
-      return "Invalid cell reference. The formula points at a cell that doesn’t exist (often after deleting rows or columns)."
+      return
+        "Invalid cell reference. The formula points at a cell that doesn’t exist (often after deleting rows or columns)."
     case .value:
-      return "Wrong type of argument or operand. Check that values and ranges are the kinds this formula expects."
+      return
+        "Wrong type of argument or operand. Check that values and ranges are the kinds this formula expects."
     case .arrayResult:
-      return "This formula produces more than one value, but it sits in a single cell. Wrap it in SUM(…) to combine the results, or use ARRAYFORMULA to fill a range."
+      return
+        "This formula produces more than one value, but it sits in a single cell. Wrap it in SUM(…) to combine the results, or use ARRAYFORMULA to fill a range."
     case .name:
-      return "Unknown function or named range. Check the spelling, or define the name under Sheet → Name Manager…"
+      return
+        "Unknown function or named range. Check the spelling, or define the name under Sheet → Name Manager…"
     case .cycle:
       return "Circular reference. This formula depends on itself (directly or through other cells)."
     case .na:
       return "Value not available. A lookup didn’t find a match."
     case .error:
-      return "Couldn’t parse or evaluate this formula. Check for typos, missing parentheses, or unsupported syntax."
+      return
+        "Couldn’t parse or evaluate this formula. Check for typos, missing parentheses, or unsupported syntax."
     }
   }
 
@@ -166,7 +171,8 @@ public nonisolated enum CellValue: Equatable, Sendable {
   }
 
   /// Cached `<v>` using the cell's OOXML type. Untyped text keeps the old classification.
-  public static func fromImportedCache(_ raw: String, type: ImportedFormulaValueType?) -> CellValue {
+  public static func fromImportedCache(_ raw: String, type: ImportedFormulaValueType?) -> CellValue
+  {
     switch type {
     case .boolean:
       switch raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
@@ -202,16 +208,16 @@ public nonisolated enum CellValue: Equatable, Sendable {
       return .number(number)
     }
     if trimmed.hasPrefix("$"),
-       let number = Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: ""))
+      let number = Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: ""))
     {
       return .number(number)
     }
     if trimmed.hasSuffix("%"),
-       let number = Double(
-         String(trimmed.dropLast())
-           .trimmingCharacters(in: .whitespaces)
-           .replacingOccurrences(of: ",", with: "")
-       )
+      let number = Double(
+        String(trimmed.dropLast())
+          .trimmingCharacters(in: .whitespaces)
+          .replacingOccurrences(of: ",", with: "")
+      )
     {
       return .number(number / 100)
     }

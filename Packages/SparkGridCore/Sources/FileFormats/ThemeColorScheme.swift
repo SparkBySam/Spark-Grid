@@ -1,8 +1,8 @@
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
+import NumberFormat
 
 /// Office theme color scheme (ECMA-376 clrScheme).
 public struct ThemeColorScheme: Sendable {
@@ -21,11 +21,12 @@ public struct ThemeColorScheme: Sendable {
     ]
     guard themeIndex >= 0, themeIndex < names.count else { return nil }
     let name = names[themeIndex]
-    guard var base = colorsByName[name]
-      ?? colorsByName[name == "dk1" ? "tx1" : name]
-      ?? colorsByName[name == "lt1" ? "bg1" : name]
-      ?? colorsByName[name == "dk2" ? "tx2" : name]
-      ?? colorsByName[name == "lt2" ? "bg2" : name]
+    guard
+      var base = colorsByName[name]
+        ?? colorsByName[name == "dk1" ? "tx1" : name]
+        ?? colorsByName[name == "lt1" ? "bg1" : name]
+        ?? colorsByName[name == "dk2" ? "tx2" : name]
+        ?? colorsByName[name == "lt2" ? "bg2" : name]
     else { return nil }
     if tint != 0 {
       base = Self.applyTint(base, tint: tint)
@@ -66,10 +67,10 @@ public struct ThemeColorScheme: Sendable {
     for name in names {
       let pattern = #"<a:\#(name)\b[^>]*>([\s\S]*?)</a:\#(name)>"#
       guard let regex = try? NSRegularExpression(pattern: pattern),
-            let match = regex.firstMatch(
-              in: themeXML,
-              range: NSRange(location: 0, length: (themeXML as NSString).length)
-            )
+        let match = regex.firstMatch(
+          in: themeXML,
+          range: NSRange(location: 0, length: (themeXML as NSString).length)
+        )
       else { continue }
       let body = (themeXML as NSString).substring(with: match.range(at: 1))
       if let color = parseColorElement(in: body) {
@@ -95,8 +96,8 @@ public struct ThemeColorScheme: Sendable {
 
   private static func colorFromQuotedHex(_ token: String) -> CodableColor? {
     guard let q1 = token.firstIndex(of: "\""),
-          let q2 = token.lastIndex(of: "\""),
-          q1 < q2
+      let q2 = token.lastIndex(of: "\""),
+      q1 < q2
     else { return nil }
     let hex = String(token[token.index(after: q1)..<q2])
     guard let value = UInt32(hex, radix: 16) else { return nil }
@@ -119,18 +120,26 @@ public struct ThemeResolvedStyleColors: Sendable {
 }
 
 public enum ThemeColorLookup {
-  public static func resolve(fromAttributes attrs: String, scheme: ThemeColorScheme) -> CodableColor? {
+  public static func resolve(fromAttributes attrs: String, scheme: ThemeColorScheme)
+    -> CodableColor?
+  {
     guard let themeStr = attribute(attrs, "theme"), let theme = Int(themeStr) else { return nil }
     let tint = attribute(attrs, "tint").flatMap(Double.init) ?? 0
     return scheme.color(themeIndex: theme, tint: tint)
   }
 
-  public static func parseStyleColors(stylesXML: String, scheme: ThemeColorScheme) -> ThemeResolvedStyleColors {
+  public static func parseStyleColors(stylesXML: String, scheme: ThemeColorScheme)
+    -> ThemeResolvedStyleColors
+  {
     var result = ThemeResolvedStyleColors()
-    if let fontsRange = stylesXML.range(of: #"<fonts\b[^>]*>[\s\S]*?</fonts>"#, options: .regularExpression) {
+    if let fontsRange = stylesXML.range(
+      of: #"<fonts\b[^>]*>[\s\S]*?</fonts>"#, options: .regularExpression)
+    {
       let fontsXML = String(stylesXML[fontsRange])
       let pattern = #"<font>(.*?)</font>"#
-      if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
+      if let regex = try? NSRegularExpression(
+        pattern: pattern, options: [.dotMatchesLineSeparators])
+      {
         let ns = fontsXML as NSString
         for (index, match) in regex.matches(
           in: fontsXML,
@@ -143,10 +152,14 @@ public enum ThemeColorLookup {
         }
       }
     }
-    if let fillsRange = stylesXML.range(of: #"<fills\b[^>]*>[\s\S]*?</fills>"#, options: .regularExpression) {
+    if let fillsRange = stylesXML.range(
+      of: #"<fills\b[^>]*>[\s\S]*?</fills>"#, options: .regularExpression)
+    {
       let fillsXML = String(stylesXML[fillsRange])
       let pattern = #"<fill>(.*?)</fill>"#
-      if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
+      if let regex = try? NSRegularExpression(
+        pattern: pattern, options: [.dotMatchesLineSeparators])
+      {
         let ns = fillsXML as NSString
         for (index, match) in regex.matches(
           in: fillsXML,
@@ -160,7 +173,9 @@ public enum ThemeColorLookup {
         }
       }
     }
-    if let xfsRange = stylesXML.range(of: #"<cellXfs\b[^>]*>[\s\S]*?</cellXfs>"#, options: .regularExpression) {
+    if let xfsRange = stylesXML.range(
+      of: #"<cellXfs\b[^>]*>[\s\S]*?</cellXfs>"#, options: .regularExpression)
+    {
       let xfsXML = String(stylesXML[xfsRange])
       let xfPattern = #"<xf\b([^>/]*)(?:/>|>)"#
       if let regex = try? NSRegularExpression(pattern: xfPattern) {
@@ -171,12 +186,12 @@ public enum ThemeColorLookup {
         ).enumerated() {
           let attrs = ns.substring(with: match.range(at: 1))
           if let fontId = attribute(attrs, "fontId").flatMap(Int.init),
-             let color = result.fontColorsById[fontId]
+            let color = result.fontColorsById[fontId]
           {
             result.fontColorsByCellXfId[index] = color
           }
           if let fillId = attribute(attrs, "fillId").flatMap(Int.init),
-             let color = result.fillColorsById[fillId]
+            let color = result.fillColorsById[fillId]
           {
             result.fillColorsByCellXfId[index] = color
           }
@@ -186,7 +201,9 @@ public enum ThemeColorLookup {
     return result
   }
 
-  private static func firstThemeOrRGBColor(in xml: String, scheme: ThemeColorScheme) -> CodableColor? {
+  private static func firstThemeOrRGBColor(in xml: String, scheme: ThemeColorScheme)
+    -> CodableColor?
+  {
     let colorPattern = #"<[^>]*?(?:fgColor|bgColor|color)\b([^>/]*)/?\s*>"#
     guard let regex = try? NSRegularExpression(pattern: colorPattern) else { return nil }
     let ns = xml as NSString
@@ -210,11 +227,13 @@ public enum ThemeColorLookup {
   }
 
   private static func attribute(_ attrs: String, _ name: String) -> String? {
-    guard let range = attrs.range(of: #"\#(name)="[^"]*""#, options: .regularExpression) else { return nil }
+    guard let range = attrs.range(of: #"\#(name)="[^"]*""#, options: .regularExpression) else {
+      return nil
+    }
     let token = String(attrs[range])
     guard let q1 = token.firstIndex(of: "\""),
-          let q2 = token.lastIndex(of: "\""),
-          q1 < q2
+      let q2 = token.lastIndex(of: "\""),
+      q1 < q2
     else { return nil }
     return String(token[token.index(after: q1)..<q2])
   }

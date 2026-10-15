@@ -68,7 +68,7 @@ Add a function to this table when you find a worksheet function that is missing.
 | `ROUNDUP` | Math | yes | no |
 | `SEC` | Math | no | no |
 | `SECH` | Math | no | no |
-| `SEQUENCE` | Math | no | no |
+| `SEQUENCE` | Math | yes | no |
 | `SERIESSUM` | Math | no | no |
 | `SIGN` | Math | no | no |
 | `SIN` | Math | no | no |
@@ -243,7 +243,7 @@ Add a function to this table when you find a worksheet function that is missing.
 | `PROPER` | Text | no | no |
 | `REPLACE` | Text | no | no |
 | `REPLACEB` | Text | no | no |
-| `REPT` | Text | no | no |
+| `REPT` | Text | yes | no |
 | `RIGHT` | Text | yes | no |
 | `RIGHTB` | Text | no | no |
 | `SEARCH` | Text | no | no |

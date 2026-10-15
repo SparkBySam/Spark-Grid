@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct SpreadsheetGridView: NSViewRepresentable {
   var viewModel: SpreadsheetViewModel
@@ -52,7 +52,8 @@ struct SpreadsheetGridView: NSViewRepresentable {
       context.coordinator.lastSelectionEnd = viewModel.selectionEnd
       context.coordinator.lastFormulaHighlightRevision = viewModel.formulaHighlightRevision
       nsView.refreshSelectionDisplay()
-    } else if viewModel.formulaHighlightRevision != context.coordinator.lastFormulaHighlightRevision {
+    } else if viewModel.formulaHighlightRevision != context.coordinator.lastFormulaHighlightRevision
+    {
       context.coordinator.lastFormulaHighlightRevision = viewModel.formulaHighlightRevision
       nsView.refreshFormulaHighlights()
     }
@@ -94,7 +95,8 @@ struct SpreadsheetGridView: NSViewRepresentable {
 
     func sheetKey(for viewModel: SpreadsheetViewModel) -> String {
       let sheet = viewModel.activeSheet
-      return "\(viewModel.workbook.activeSheetIndex)-\(sheet.id.uuidString)-\(sheet.effectiveRowCount)-\(sheet.effectiveColumnCount)-\(sheet.frozenRows)-\(sheet.frozenColumns)"
+      return
+        "\(viewModel.workbook.activeSheetIndex)-\(sheet.id.uuidString)-\(sheet.effectiveRowCount)-\(sheet.effectiveColumnCount)-\(sheet.frozenRows)-\(sheet.frozenColumns)"
     }
   }
 }

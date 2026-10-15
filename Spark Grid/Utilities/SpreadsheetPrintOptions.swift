@@ -109,7 +109,9 @@ struct SpreadsheetPrintOptions: Equatable {
   /// Document title used for headers/footers (file name without extension when available).
   var documentTitle: String = "Untitled"
 
-  static func `default`(for viewModel: SpreadsheetViewModel, documentTitle: String = "Untitled") -> SpreadsheetPrintOptions {
+  static func `default`(for viewModel: SpreadsheetViewModel, documentTitle: String = "Untitled")
+    -> SpreadsheetPrintOptions
+  {
     SpreadsheetPrintOptions(
       scope: .populatedCells,
       paper: .letter,
@@ -136,7 +138,7 @@ struct SpreadsheetPrintOptions: Equatable {
           sheet: viewModel.activeSheet,
           range: viewModel.selectionRange,
           hiddenRows: activeHidden
-        ),
+        )
       ]
     case .populatedCells:
       let sheet = viewModel.activeSheet
@@ -144,12 +146,15 @@ struct SpreadsheetPrintOptions: Equatable {
       return [SpreadsheetPrintPage(sheet: sheet, range: range, hiddenRows: activeHidden)]
     case .wholeSheet:
       let sheet = viewModel.activeSheet
-      return [SpreadsheetPrintPage(sheet: sheet, range: sheet.wholeSheetRange(), hiddenRows: activeHidden)]
+      return [
+        SpreadsheetPrintPage(sheet: sheet, range: sheet.wholeSheetRange(), hiddenRows: activeHidden)
+      ]
     case .workbook:
       return viewModel.workbook.sheets.compactMap { sheet in
         guard let bounds = sheet.populatedBounds else { return nil }
         let hidden = sheet.id == viewModel.activeSheet.id ? activeHidden : []
-        return SpreadsheetPrintPage(sheet: sheet, range: bounds, title: sheet.name, hiddenRows: hidden)
+        return SpreadsheetPrintPage(
+          sheet: sheet, range: bounds, title: sheet.name, hiddenRows: hidden)
       }
     }
   }
@@ -210,7 +215,9 @@ struct SpreadsheetPrintOptions: Equatable {
     return NSPoint(x: x, y: y)
   }
 
-  func headerFooterLines(sheetName: String, pageIndex: Int, pageCount: Int) -> (header: String, footer: String) {
+  func headerFooterLines(sheetName: String, pageIndex: Int, pageCount: Int) -> (
+    header: String, footer: String
+  ) {
     var left: [String] = []
     var right: [String] = []
 

@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
 import Observation
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Codable {
   case system
@@ -81,11 +81,14 @@ struct StoredShortcut: Codable, Equatable {
   }
 
   func matches(_ event: NSEvent) -> Bool {
-    guard let chars = event.charactersIgnoringModifiers?.lowercased(), !chars.isEmpty else { return false }
+    guard let chars = event.charactersIgnoringModifiers?.lowercased(), !chars.isEmpty else {
+      return false
+    }
     let first = String(chars.prefix(1))
     guard first == key.lowercased() else { return false }
     let relevant: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
-    return event.modifierFlags.intersection(relevant) == NSEvent.ModifierFlags(rawValue: modifiers).intersection(relevant)
+    return event.modifierFlags.intersection(relevant)
+      == NSEvent.ModifierFlags(rawValue: modifiers).intersection(relevant)
   }
 }
 
@@ -130,7 +133,7 @@ final class AppSettings {
     invertScrollDirection = defaults.bool(forKey: invertScrollKey)
     showToolbarLabels = defaults.bool(forKey: toolbarLabelsKey)
     if let raw = defaults.string(forKey: appearanceModeKey),
-       let mode = AppearanceMode(rawValue: raw)
+      let mode = AppearanceMode(rawValue: raw)
     {
       appearanceMode = mode
     } else {
@@ -142,9 +145,10 @@ final class AppSettings {
       autosaveEnabled = true
     }
     let storedInterval = defaults.integer(forKey: autosaveIntervalKey)
-    autosaveIntervalSeconds = Self.autosaveIntervalOptions.contains(storedInterval) ? storedInterval : 30
+    autosaveIntervalSeconds =
+      Self.autosaveIntervalOptions.contains(storedInterval) ? storedInterval : 30
     if let data = defaults.data(forKey: shortcutsKey),
-       let decoded = try? JSONDecoder().decode([HotkeyAction: StoredShortcut].self, from: data)
+      let decoded = try? JSONDecoder().decode([HotkeyAction: StoredShortcut].self, from: data)
     {
       shortcuts = decoded
     } else {
@@ -226,7 +230,8 @@ final class AppSettings {
       modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue
     ),
     .undo: StoredShortcut(key: "z", modifiers: NSEvent.ModifierFlags.command.rawValue),
-    .redo: StoredShortcut(key: "z", modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue),
+    .redo: StoredShortcut(
+      key: "z", modifiers: NSEvent.ModifierFlags.command.union(.shift).rawValue),
     .save: StoredShortcut(key: "s", modifiers: NSEvent.ModifierFlags.command.rawValue),
     .bold: StoredShortcut(key: "b", modifiers: NSEvent.ModifierFlags.command.rawValue),
     .italic: StoredShortcut(key: "i", modifiers: NSEvent.ModifierFlags.command.rawValue),
@@ -236,7 +241,8 @@ final class AppSettings {
 
 extension StoredShortcut {
   static func from(event: NSEvent) -> StoredShortcut? {
-    guard let chars = event.charactersIgnoringModifiers?.lowercased(), let first = chars.first else { return nil }
+    guard let chars = event.charactersIgnoringModifiers?.lowercased(), let first = chars.first
+    else { return nil }
     let relevant: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
     let mods = event.modifierFlags.intersection(relevant).rawValue
     guard mods != 0 else { return nil }

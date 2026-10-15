@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct SpreadsheetCommands: Commands {
   @Bindable private var settings = AppSettings.shared
@@ -15,20 +15,28 @@ struct SpreadsheetCommands: Commands {
 
     CommandGroup(replacing: .undoRedo) {
       Button("Undo") { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }
-        .keyboardShortcut(settings.keyEquivalent(for: .undo), modifiers: settings.eventModifiers(for: .undo))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .undo), modifiers: settings.eventModifiers(for: .undo))
       Button("Redo") { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
-        .keyboardShortcut(settings.keyEquivalent(for: .redo), modifiers: settings.eventModifiers(for: .redo))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .redo), modifiers: settings.eventModifiers(for: .redo))
     }
 
     CommandGroup(replacing: .pasteboard) {
       Button("Cut") { viewModel?.cutSelection() }
-        .keyboardShortcut(settings.keyEquivalent(for: .cut), modifiers: settings.eventModifiers(for: .cut))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .cut), modifiers: settings.eventModifiers(for: .cut)
+        )
         .disabled(viewModel == nil)
       Button("Copy") { viewModel?.copySelectionToPasteboard() }
-        .keyboardShortcut(settings.keyEquivalent(for: .copy), modifiers: settings.eventModifiers(for: .copy))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .copy), modifiers: settings.eventModifiers(for: .copy)
+        )
         .disabled(viewModel == nil)
       Button("Paste") { SpreadsheetPaste.perform(on: viewModel) }
-        .keyboardShortcut(settings.keyEquivalent(for: .paste), modifiers: settings.eventModifiers(for: .paste))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .paste), modifiers: settings.eventModifiers(for: .paste)
+        )
         .disabled(viewModel == nil)
 
       Divider()

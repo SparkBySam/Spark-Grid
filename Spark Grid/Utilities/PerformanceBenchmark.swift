@@ -16,7 +16,8 @@ enum PerformanceBenchmark {
     let env = ProcessInfo.processInfo.environment
     let reference = env["SPARK_GRID_BENCHMARK_REFERENCE"] ?? ""
     let root = env["SPARK_GRID_BENCHMARK_ROOT"] ?? FileManager.default.currentDirectoryPath
-    let answersDirectory = env["SPARK_GRID_BENCHMARK_ANSWERS"]
+    let answersDirectory =
+      env["SPARK_GRID_BENCHMARK_ANSWERS"]
       ?? (root as NSString).appendingPathComponent("scripts/answers")
     let logPath = env["SPARK_GRID_BENCHMARK_LOG"] ?? "/tmp/spark-grid-phase0-baseline.txt"
     var lines: [String] = []
@@ -43,8 +44,12 @@ enum PerformanceBenchmark {
       emit("benchmark reference \(reference)")
       emit("benchmark ledger \(otherPath)")
       _ = NSApplication.shared
-      try measure(url: URL(fileURLWithPath: reference), label: "reference", env: env, answersDirectory: answersDirectory, emit: emit)
-      try measure(url: URL(fileURLWithPath: otherPath), label: "ledger", env: env, answersDirectory: answersDirectory, emit: emit)
+      try measure(
+        url: URL(fileURLWithPath: reference), label: "reference", env: env,
+        answersDirectory: answersDirectory, emit: emit)
+      try measure(
+        url: URL(fileURLWithPath: otherPath), label: "ledger", env: env,
+        answersDirectory: answersDirectory, emit: emit)
       emit("benchmark done")
       exit(0)
     } catch {
@@ -75,7 +80,8 @@ enum PerformanceBenchmark {
     process.standardError = pipe
     try process.run()
     process.waitUntilExit()
-    let outputText = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let outputText =
+      String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     emit(outputText.trimmingCharacters(in: .whitespacesAndNewlines))
     guard process.terminationStatus == 0 else {
       throw BenchmarkFailure("ledger generator exited \(process.terminationStatus)")
@@ -97,7 +103,10 @@ enum PerformanceBenchmark {
     let importSeconds = CFAbsoluteTimeGetCurrent() - importStarted
     let afterResident = residentBytes()
     emit(String(format: "importWorkbook %.3f s", importSeconds))
-    emit(String(format: "resident-after-import %.2f MB delta %.2f MB", Double(afterResident) / 1_048_576, Double(afterResident &- beforeResident) / 1_048_576))
+    emit(
+      String(
+        format: "resident-after-import %.2f MB delta %.2f MB", Double(afterResident) / 1_048_576,
+        Double(afterResident &- beforeResident) / 1_048_576))
     if label == "ledger" {
       try validateLedger(imported)
       emit("ledger shape ok")
@@ -131,7 +140,9 @@ enum PerformanceBenchmark {
       RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
     }
     AppSettings.shared.autosaveEnabled = autosaveWasEnabled
-    emit("autosave-finished\t\(autosaveStore.isAutosaving ? "busy" : "idle")\t\(FileManager.default.fileExists(atPath: autosaveURL.path))")
+    emit(
+      "autosave-finished\t\(autosaveStore.isAutosaving ? "busy" : "idle")\t\(FileManager.default.fileExists(atPath: autosaveURL.path))"
+    )
 
     let store = SpreadsheetDocumentStore()
     // Sheet ids are random, so a new store's saved fingerprint does not match its
@@ -172,7 +183,8 @@ enum PerformanceBenchmark {
       emit("first-screen\t\(name)\t\(formatSeconds(paintSeconds))")
     }
 
-    let scrollIndex = scrollSheetIndex(in: viewModel.workbook, preferredName: env["SPARK_GRID_BENCHMARK_SCROLL_SHEET"])
+    let scrollIndex = scrollSheetIndex(
+      in: viewModel.workbook, preferredName: env["SPARK_GRID_BENCHMARK_SCROLL_SHEET"])
     let scroll = timeWorstScroll(grid: grid, viewModel: viewModel, sheetIndex: scrollIndex)
     emit("scroll-worst\t\(scroll.sheet)\t\(formatSeconds(scroll.worst))\tticks \(scroll.ticks)")
     grid.close()
@@ -197,7 +209,8 @@ enum PerformanceBenchmark {
     let editViewModel = SpreadsheetViewModel(workbook: loaded)
     store.activeViewModel = editViewModel
     store.documentDidChange()
-    let editGrid = BenchmarkGrid(viewModel: editViewModel, frame: viewportFrame(for: editViewModel.activeSheet))
+    let editGrid = BenchmarkGrid(
+      viewModel: editViewModel, frame: viewportFrame(for: editViewModel.activeSheet))
     editGrid.grid.needsDisplay = true
     editGrid.grid.display()
     let editAddress = firstNumericLiteral(in: editViewModel.activeSheet) ?? .origin
@@ -213,31 +226,35 @@ enum PerformanceBenchmark {
     syncOnChange(store: store, viewModel: editViewModel)
     let editSyncSeconds = CFAbsoluteTimeGetCurrent() - editSyncStarted
     editGrid.close()
-    emit("commitEdit\t\(editViewModel.activeSheet.name)!\(editAddress.a1)\t\(formatSeconds(commitSeconds))")
+    emit(
+      "commitEdit\t\(editViewModel.activeSheet.name)!\(editAddress.a1)\t\(formatSeconds(commitSeconds))"
+    )
     emit(String(format: "edit-onchange %.3f s", editSyncSeconds))
     emit(String(format: "edit %.3f s", commitSeconds + editSyncSeconds))
     emit("edit-dirty\t\(store.isDirty)")
 
     let slowest = firstScreens.max(by: { $0.1 < $1.1 })
     emit("first-screen-slowest\t\(slowest?.0 ?? "")\t\(formatSeconds(slowest?.1 ?? 0))")
-    emit(summaryLine(
-      label: label,
-      open: openSeconds,
-      unsaved: unsavedSeconds,
-      firstScreen: slowest?.1 ?? 0,
-      firstScreenName: slowest?.0 ?? "",
-      edit: commitSeconds + editSyncSeconds,
-      commit: commitSeconds,
-      tab: selectSeconds + selectSyncSeconds,
-      export: exportSeconds,
-      scroll: scroll.worst,
-      scrollSheet: scroll.sheet,
-      importSeconds: importSeconds,
-      fingerprint: fingerprintSeconds,
-      residentMB: Double(afterResident) / 1_048_576
-    ))
+    emit(
+      summaryLine(
+        label: label,
+        open: openSeconds,
+        unsaved: unsavedSeconds,
+        firstScreen: slowest?.1 ?? 0,
+        firstScreenName: slowest?.0 ?? "",
+        edit: commitSeconds + editSyncSeconds,
+        commit: commitSeconds,
+        tab: selectSeconds + selectSyncSeconds,
+        export: exportSeconds,
+        scroll: scroll.worst,
+        scrollSheet: scroll.sheet,
+        importSeconds: importSeconds,
+        fingerprint: fingerprintSeconds,
+        residentMB: Double(afterResident) / 1_048_576
+      ))
 
-    try checkAnswers(workbook: imported, label: label, answersDirectory: answersDirectory, emit: emit)
+    try checkAnswers(
+      workbook: imported, label: label, answersDirectory: answersDirectory, emit: emit)
   }
 
   private static func checkAnswers(
@@ -263,7 +280,8 @@ enum PerformanceBenchmark {
     for sheetIndex in stripped.sheets.indices {
       viewModel.selectSheet(at: sheetIndex)
       let sheet = viewModel.activeSheet
-      let addresses = sheet.cells.keys.filter { FormulaSyntax.isFormula(sheet.cell(at: $0).raw) }.sorted()
+      let addresses = sheet.cells.keys.filter { FormulaSyntax.isFormula(sheet.cell(at: $0).raw) }
+        .sorted()
       for address in addresses {
         let actual = viewModel.displayValue(at: address)
         let expected = byKey[AnswerKey(sheet: sheetIndex, address: address)] ?? .error(.error)
@@ -278,7 +296,9 @@ enum PerformanceBenchmark {
     }
     emit("answer-check \(label) formulas \(checked) mismatches \(mismatches.count)")
     for mismatch in mismatches.prefix(15) {
-      emit("mismatch \(mismatch.0) scalar \(ScalarFormulaAnswers.encode(mismatch.1)) path \(ScalarFormulaAnswers.encode(mismatch.2))")
+      emit(
+        "mismatch \(mismatch.0) scalar \(ScalarFormulaAnswers.encode(mismatch.1)) path \(ScalarFormulaAnswers.encode(mismatch.2))"
+      )
     }
     let url = URL(fileURLWithPath: answersDirectory).appendingPathComponent("\(label)-answers.txt")
     try ScalarFormulaAnswers.write(scalar, label: label, mismatches: mismatches.count, to: url)
@@ -352,14 +372,18 @@ enum PerformanceBenchmark {
     if screens <= 36 {
       return Array(1...max(1, screens))
     }
-    let raw = [1, 2, 3, max(1, screens / 4), max(1, screens / 2), max(1, (screens * 3) / 4), screens]
+    let raw = [
+      1, 2, 3, max(1, screens / 4), max(1, screens / 2), max(1, (screens * 3) / 4), screens,
+    ]
     return Array(Set(raw.filter { $0 >= 1 && $0 <= screens })).sorted()
   }
 
   private static func scrollSheetIndex(in workbook: Workbook, preferredName: String?) -> Int {
     if let preferredName,
-       !preferredName.isEmpty,
-       let index = workbook.sheets.firstIndex(where: { $0.name.caseInsensitiveCompare(preferredName) == .orderedSame })
+      !preferredName.isEmpty,
+      let index = workbook.sheets.firstIndex(where: {
+        $0.name.caseInsensitiveCompare(preferredName) == .orderedSame
+      })
     {
       return index
     }
@@ -383,7 +407,8 @@ enum PerformanceBenchmark {
     return NSRect(x: 0, y: 0, width: width + 2, height: height + 2)
   }
 
-  private static func syncOnChange(store: SpreadsheetDocumentStore, viewModel: SpreadsheetViewModel) {
+  private static func syncOnChange(store: SpreadsheetDocumentStore, viewModel: SpreadsheetViewModel)
+  {
     store.document.workbook = viewModel.workbook
     store.documentDidChange()
   }
@@ -420,7 +445,7 @@ enum PerformanceBenchmark {
 
   private static func validateLedger(_ workbook: Workbook) throws {
     guard let tallest = workbook.sheets.max(by: { $0.maxPopulatedRow < $1.maxPopulatedRow }),
-          tallest.maxPopulatedRow + 1 >= 50_000
+      tallest.maxPopulatedRow + 1 >= 50_000
     else { throw BenchmarkFailure("ledger does not have 50000 rows") }
 
     var sawVLookup = false
@@ -480,7 +505,8 @@ enum PerformanceBenchmark {
 
   private static func residentBytes() -> UInt64 {
     var info = mach_task_basic_info()
-    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size)
+    var count = mach_msg_type_number_t(
+      MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size)
     let result: kern_return_t = withUnsafeMutablePointer(to: &info) {
       $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
         task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
@@ -568,7 +594,8 @@ enum PerformanceBenchmark {
         throw BenchmarkFailure("cache \(address.a1) is \(cell.importedFormulaResult ?? "nil")")
       }
       guard cell.importedFormulaValueType == type else {
-        throw BenchmarkFailure("type \(address.a1) is \(String(describing: cell.importedFormulaValueType))")
+        throw BenchmarkFailure(
+          "type \(address.a1) is \(String(describing: cell.importedFormulaValueType))")
       }
       let shown = engine.displayValue(at: address, sheet: importedSheet)
       guard shown == value else {

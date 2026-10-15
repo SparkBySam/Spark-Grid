@@ -92,17 +92,19 @@ enum OnSheetChartGeometry {
     if frozenRows > 0 {
       let height = min(contentRect.height, max(0, frozenRowBoundaryY - contentRect.minY))
       if height > 0 {
-        rects.append(CGRect(
-          x: contentRect.minX,
-          y: contentRect.minY,
-          width: contentRect.width,
-          height: height
-        ))
+        rects.append(
+          CGRect(
+            x: contentRect.minX,
+            y: contentRect.minY,
+            width: contentRect.width,
+            height: height
+          ))
       }
     }
     if frozenColumns > 0 {
       let width = min(contentRect.width, max(0, frozenColumnBoundaryX - contentRect.minX))
-      let y = frozenRows > 0
+      let y =
+        frozenRows > 0
         ? min(contentRect.maxY, max(contentRect.minY, frozenRowBoundaryY))
         : contentRect.minY
       let height = contentRect.maxY - y
@@ -125,7 +127,7 @@ enum OnSheetChartGeometry {
   ) -> Bool {
     guard frozenColumns > 0 || frozenRows > 0 else { return false }
     guard point.x >= contentRect.minX, point.x < contentRect.maxX,
-          point.y >= contentRect.minY, point.y < contentRect.maxY
+      point.y >= contentRect.minY, point.y < contentRect.maxY
     else { return false }
     if frozenRows > 0, point.y <= frozenRowBoundaryY { return true }
     if frozenColumns > 0, point.x <= frozenColumnBoundaryX { return true }
@@ -176,7 +178,9 @@ enum OnSheetChartGeometry {
 
   /// Which handle `point` lands on. Nil when it misses the frame, including the
   /// thin band just outside the border where a corner handle still counts.
-  static func frameHandle(at point: CGPoint, in rect: CGRect, thickness: CGFloat) -> ChartFrameHandle? {
+  static func frameHandle(at point: CGPoint, in rect: CGRect, thickness: CGFloat)
+    -> ChartFrameHandle?
+  {
     guard rect.width >= 1, rect.height >= 1, thickness > 0 else { return nil }
     let hit = rect.insetBy(dx: -thickness / 2, dy: -thickness / 2)
     guard hit.contains(point) else { return nil }
@@ -221,10 +225,10 @@ enum OnSheetChartGeometry {
     rowHeight: ((Int) -> CGFloat)? = nil
   ) -> ChartFrameAnchor {
     if freePlacement,
-       let xForColumn,
-       let yForRow,
-       let columnWidth,
-       let rowHeight
+      let xForColumn,
+      let yForRow,
+      let columnWidth,
+      let rowHeight
     {
       return anchorAfterFreeDrag(
         handle: handle,

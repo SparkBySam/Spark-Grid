@@ -1,7 +1,7 @@
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 /// Overlay style applied when a conditional formatting rule matches.
 /// Only non-nil fields are applied (Excel dxf semantics).
@@ -78,7 +78,8 @@ public nonisolated struct ConditionalFormatStyle: Codable, Equatable, Hashable, 
     return nil
   }
 
-  public func withBoldCheckbox(isOn: Bool, previous: Bool?, touched: Bool) -> ConditionalFormatStyle {
+  public func withBoldCheckbox(isOn: Bool, previous: Bool?, touched: Bool) -> ConditionalFormatStyle
+  {
     var copy = self
     if isOn {
       copy.bold = true
@@ -223,8 +224,10 @@ public nonisolated enum ConditionalFormatPredicate: Codable, Equatable, Sendable
     case .lessOrEqual(let v): return "Cell value ≤ \(formatNumber(v))"
     case .equal(let v): return "Cell value = \(formatNumber(v))"
     case .notEqual(let v): return "Cell value ≠ \(formatNumber(v))"
-    case .between(let a, let b): return "Cell value between \(formatNumber(a)) and \(formatNumber(b))"
-    case .notBetween(let a, let b): return "Cell value not between \(formatNumber(a)) and \(formatNumber(b))"
+    case .between(let a, let b):
+      return "Cell value between \(formatNumber(a)) and \(formatNumber(b))"
+    case .notBetween(let a, let b):
+      return "Cell value not between \(formatNumber(a)) and \(formatNumber(b))"
     case .textContains(let s): return "Text contains “\(s)”"
     case .blanks: return "Blanks"
     case .nonBlanks: return "Non-blanks"
@@ -245,7 +248,7 @@ public nonisolated enum ConditionalFormatPredicate: Codable, Equatable, Sendable
   public var primaryEditText: String? {
     switch self {
     case .greaterThan(let v), .lessThan(let v), .greaterOrEqual(let v), .lessOrEqual(let v),
-         .equal(let v), .notEqual(let v):
+      .equal(let v), .notEqual(let v):
       return Self.editNumber(v)
     case .between(let a, _), .notBetween(let a, _):
       return Self.editNumber(a)
@@ -287,7 +290,8 @@ public nonisolated enum ConditionalFormatPredicate: Codable, Equatable, Sendable
     }
   }
 
-  public func replacingEditValues(primary: String, secondary: String) -> ConditionalFormatPredicate? {
+  public func replacingEditValues(primary: String, secondary: String) -> ConditionalFormatPredicate?
+  {
     switch self {
     case .greaterThan:
       guard let v = Self.parseEditNumber(primary) else { return nil }
@@ -308,10 +312,14 @@ public nonisolated enum ConditionalFormatPredicate: Codable, Equatable, Sendable
       guard let v = Self.parseEditNumber(primary) else { return nil }
       return .notEqual(v)
     case .between:
-      guard let a = Self.parseEditNumber(primary), let b = Self.parseEditNumber(secondary) else { return nil }
+      guard let a = Self.parseEditNumber(primary), let b = Self.parseEditNumber(secondary) else {
+        return nil
+      }
       return .between(a, b)
     case .notBetween:
-      guard let a = Self.parseEditNumber(primary), let b = Self.parseEditNumber(secondary) else { return nil }
+      guard let a = Self.parseEditNumber(primary), let b = Self.parseEditNumber(secondary) else {
+        return nil
+      }
       return .notBetween(a, b)
     case .textContains:
       guard !primary.isEmpty else { return nil }
@@ -362,9 +370,12 @@ public nonisolated struct ConditionalFormatRule: Identifiable, Codable, Equatabl
     self.style = style
   }
 
-  public func edited(rangeText: String, primary: String, secondary: String) -> ConditionalFormatRule? {
+  public func edited(rangeText: String, primary: String, secondary: String)
+    -> ConditionalFormatRule?
+  {
     guard let range = CellRange.fromA1(rangeText) else { return nil }
-    guard let predicate = predicate.replacingEditValues(primary: primary, secondary: secondary) else { return nil }
+    guard let predicate = predicate.replacingEditValues(primary: primary, secondary: secondary)
+    else { return nil }
     var copy = self
     copy.range = range
     copy.predicate = predicate
@@ -402,12 +413,14 @@ public nonisolated enum ConditionalFormatEvaluator {
 
       switch rule.predicate {
       case .colorScale(let stops):
-        guard let fill = colorScaleFill(
-          stops: stops,
-          value: value,
-          range: rule.range,
-          numericValuesInRange: numericValuesInRange
-        ) else { continue }
+        guard
+          let fill = colorScaleFill(
+            stops: stops,
+            value: value,
+            range: rule.range,
+            numericValuesInRange: numericValuesInRange
+          )
+        else { continue }
         result.fillColor = fill
         applyContrastingText(to: &result, fill: fill, ruleTextColor: rule.style.textColor)
         paint.format = result.isDefault ? nil : result
@@ -415,11 +428,13 @@ public nonisolated enum ConditionalFormatEvaluator {
         if rule.stopIfTrue { break ruleList }
 
       case .dataBar(let style):
-        guard let fraction = dataBarFraction(
-          value: value,
-          range: rule.range,
-          numericValuesInRange: numericValuesInRange
-        ) else { continue }
+        guard
+          let fraction = dataBarFraction(
+            value: value,
+            range: rule.range,
+            numericValuesInRange: numericValuesInRange
+          )
+        else { continue }
         paint.dataBarFraction = fraction
         paint.dataBarColor = style.color
         paint.dataBarShowValue = style.showValue
@@ -427,26 +442,30 @@ public nonisolated enum ConditionalFormatEvaluator {
         if rule.stopIfTrue { break ruleList }
 
       case .iconSet(let style):
-        guard let glyph = iconGlyph(
-          style: style,
-          value: value,
-          range: rule.range,
-          numericValuesInRange: numericValuesInRange
-        ) else { continue }
+        guard
+          let glyph = iconGlyph(
+            style: style,
+            value: value,
+            range: rule.range,
+            numericValuesInRange: numericValuesInRange
+          )
+        else { continue }
         paint.icon = glyph
         applied = true
         if rule.stopIfTrue { break ruleList }
 
       default:
-        guard matches(
-          rule.predicate,
-          value: value,
-          displayString: displayString,
-          numberFormat: numberFormat,
-          address: address,
-          origin: origin,
-          evaluateFormula: evaluateFormula
-        ) else { continue }
+        guard
+          matches(
+            rule.predicate,
+            value: value,
+            displayString: displayString,
+            numberFormat: numberFormat,
+            address: address,
+            origin: origin,
+            evaluateFormula: evaluateFormula
+          )
+        else { continue }
 
         let ruleTextColor = rule.style.textColor
         result = rule.style.applying(to: result)
@@ -521,33 +540,45 @@ public nonisolated enum ConditionalFormatEvaluator {
       guard !needle.isEmpty else { return false }
       return displayString.localizedCaseInsensitiveContains(needle)
     case .greaterThan(let n):
-      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else {
+        return false
+      }
       return v.cell > v.threshold
     case .lessThan(let n):
-      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else {
+        return false
+      }
       return v.cell < v.threshold
     case .greaterOrEqual(let n):
-      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else {
+        return false
+      }
       return v.cell >= v.threshold
     case .lessOrEqual(let n):
-      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else {
+        return false
+      }
       return v.cell <= v.threshold
     case .equal(let n):
-      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else {
+        return false
+      }
       return abs(v.cell - v.threshold) < 1e-9
     case .notEqual(let n):
-      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else { return false }
+      guard let v = compareNumber(value, threshold: n, numberFormat: numberFormat) else {
+        return false
+      }
       return abs(v.cell - v.threshold) >= 1e-9
     case .between(let a, let b):
       guard let loPair = compareNumber(value, threshold: a, numberFormat: numberFormat),
-            let hiPair = compareNumber(value, threshold: b, numberFormat: numberFormat)
+        let hiPair = compareNumber(value, threshold: b, numberFormat: numberFormat)
       else { return false }
       let lo = min(loPair.threshold, hiPair.threshold)
       let hi = max(loPair.threshold, hiPair.threshold)
       return loPair.cell >= lo && loPair.cell <= hi
     case .notBetween(let a, let b):
       guard let loPair = compareNumber(value, threshold: a, numberFormat: numberFormat),
-            let hiPair = compareNumber(value, threshold: b, numberFormat: numberFormat)
+        let hiPair = compareNumber(value, threshold: b, numberFormat: numberFormat)
       else { return false }
       let lo = min(loPair.threshold, hiPair.threshold)
       let hi = max(loPair.threshold, hiPair.threshold)

@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct SortRangeSheet: View {
   @Bindable var viewModel: SpreadsheetViewModel

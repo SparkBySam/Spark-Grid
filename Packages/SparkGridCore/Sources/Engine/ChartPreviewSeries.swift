@@ -1,11 +1,11 @@
-import Foundation
-import GridCore
-import NumberFormat
-import Formula
-import Functions
-import Model
 import Calc
 import FileFormats
+import Formula
+import Foundation
+import Functions
+import GridCore
+import Model
+import NumberFormat
 
 /// Builds plottable series from an explicit chart configuration (category + value / count).
 public enum ChartPreviewSeries {
@@ -90,7 +90,8 @@ public enum ChartPreviewSeries {
     let dataRows = Array((n.minRow + 1)...n.maxRow)
     let sampleRows = dataRows.isEmpty ? [n.minRow] : dataRows
     return (n.minCol...n.maxCol).map { col in
-      let header = labelFor(CellAddress(row: headerRow, col: col)).trimmingCharacters(in: .whitespacesAndNewlines)
+      let header = labelFor(CellAddress(row: headerRow, col: col)).trimmingCharacters(
+        in: .whitespacesAndNewlines)
       var numeric = 0
       var text = 0
       for row in sampleRows {
@@ -113,12 +114,14 @@ public enum ChartPreviewSeries {
   ) -> Suggestion {
     let n = range.normalized
     let options = columnOptions(in: range, labelFor: labelFor, numberFor: numberFor)
-    let hasHeader = detectHeaderRow(in: range, options: options, labelFor: labelFor, numberFor: numberFor)
+    let hasHeader = detectHeaderRow(
+      in: range, options: options, labelFor: labelFor, numberFor: numberFor)
 
     let textCols = options.filter(\.isMostlyText)
     let numericCols = options.filter(\.isMostlyNumeric)
 
-    let category = textCols.first?.column
+    let category =
+      textCols.first?.column
       ?? options.first(where: { !$0.isMostlyNumeric })?.column
       ?? n.minCol
 
@@ -143,7 +146,9 @@ public enum ChartPreviewSeries {
     )
   }
 
-  public static func seriesDescription(for chart: SheetChart, categoryHeader: String, valueHeader: String) -> String {
+  public static func seriesDescription(
+    for chart: SheetChart, categoryHeader: String, valueHeader: String
+  ) -> String {
     let cat = categoryHeader.isEmpty ? "categories" : categoryHeader
     switch chart.valueMode {
     case .count:
@@ -204,7 +209,9 @@ public enum ChartPreviewSeries {
       var result: [Point] = []
       var index = 0
       for row in startRow...n.maxRow {
-        guard let value = numberFor(CellAddress(row: row, col: valueColumn)), value.isFinite else { continue }
+        guard let value = numberFor(CellAddress(row: row, col: valueColumn)), value.isFinite else {
+          continue
+        }
         let raw = labelFor(CellAddress(row: row, col: categoryColumn))
           .trimmingCharacters(in: .whitespacesAndNewlines)
         let label = raw.isEmpty ? "\(index + 1)" : raw
@@ -226,7 +233,9 @@ public enum ChartPreviewSeries {
         }
         counts[label, default: 0] += 1
       }
-      return order.enumerated().map { Point(id: $0.offset, label: $0.element, value: counts[$0.element] ?? 0) }
+      return order.enumerated().map {
+        Point(id: $0.offset, label: $0.element, value: counts[$0.element] ?? 0)
+      }
     }
   }
 

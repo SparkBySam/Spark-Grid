@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct SpreadsheetDataCommands: Commands {
   @FocusedValue(\.spreadsheetViewModel) private var viewModel: SpreadsheetViewModel?

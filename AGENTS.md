@@ -21,14 +21,14 @@ This file is the source of truth for Cursor, Claude Code, and any other agent. I
 
 ## Never crash
 
-These rules apply to new and changed non-test code now. The SwiftLint errors that enforce them land with the gate (W3) and the crash-safety work (W4). Existing violations are debt. Delete them when you touch that code. Do not add more.
+SwiftLint enforces these rules on non-test code. The existing violations were removed in W4. Do not add more.
 
 - No `force_unwrapping`, `force_try`, `force_cast`, or `implicitly_unwrapped_optional`.
 - No `fatalError`, `preconditionFailure`, `precondition(`, `assert(`, or `unowned` outside tests.
 - No `!` on dictionary or array lookups. Use a safe index helper.
 - Treat numbers from files, formulas, pastes, and command parameters as hostile. Use checked or saturating arithmetic. Cap allocations sized by input: whole-column references, huge ranges, `REPT`, `SEQUENCE`, fill, and paste.
 - Bound formula nesting, dependency-chain depth, and names that refer to names. Evaluation of a long chain must be iterative, not a recursive call per precedent.
-- Swift traps cannot be caught. Keep a crash-safe recovery copy of every open document, written in the background after edits, and offer to restore it on the next launch. That recovery copy is W4. Do not pretend it exists before then.
+- Swift traps cannot be caught. After an edit, the app writes a recovery copy of the open workbook in the background (`CrashRecoveryStore`, under Application Support). If the next launch finds that copy and no clean quit, it asks whether to restore it. Benchmark launches skip the prompt.
 - Every crash fix lands with a regression test.
 
 ## Privacy and clean-room

@@ -1,10 +1,10 @@
 import AppKit
+import Calc
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
-import Calc
+import NumberFormat
 
 /// Overflow, wrap, and clip geometry shared by the grid, printing, and tests.
 public enum CellTextLayout {
@@ -82,26 +82,26 @@ public enum CellTextLayout {
       let spillsLeft = alignment == .right || alignment == .center
       let spillsRight = alignment != .right
       if spillsRight,
-         let boundary = blockBoundary(
-           from: sourceColumns,
-           towardHigherColumns: true,
-           paneColumns: paneColumns,
-           columnOrigin: columnOrigin,
-           columnWidth: columnWidth,
-           blocks: blocks
-         )
+        let boundary = blockBoundary(
+          from: sourceColumns,
+          towardHigherColumns: true,
+          paneColumns: paneColumns,
+          columnOrigin: columnOrigin,
+          columnWidth: columnWidth,
+          blocks: blocks
+        )
       {
         maxX = min(maxX, boundary)
       }
       if spillsLeft,
-         let boundary = blockBoundary(
-           from: sourceColumns,
-           towardHigherColumns: false,
-           paneColumns: paneColumns,
-           columnOrigin: columnOrigin,
-           columnWidth: columnWidth,
-           blocks: blocks
-         )
+        let boundary = blockBoundary(
+          from: sourceColumns,
+          towardHigherColumns: false,
+          paneColumns: paneColumns,
+          columnOrigin: columnOrigin,
+          columnWidth: columnWidth,
+          blocks: blocks
+        )
       {
         minX = max(minX, boundary)
       }
@@ -127,7 +127,8 @@ public enum CellTextLayout {
     var scaled = format
     let base = scaled.fontSize ?? CellFormatRenderer.defaultFontSize
     scaled.fontSize = base * zoom
-    let contentWidth = max(1, columnWidth * zoom - horizontalInset(zoom: zoom) * 2 - extraWidthInset)
+    let contentWidth = max(
+      1, columnWidth * zoom - horizontalInset(zoom: zoom) * 2 - extraWidthInset)
     let bounds = (text as NSString).boundingRect(
       with: NSSize(width: contentWidth, height: 10_000),
       options: [.usesLineFragmentOrigin, .usesFontLeading],

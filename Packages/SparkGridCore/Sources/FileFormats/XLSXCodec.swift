@@ -1,14 +1,14 @@
 import CoreGraphics
 import CoreXLSX
-import Foundation
-import ZIPFoundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
+import GridCore
 import Model
+import NumberFormat
+import ZIPFoundation
 
-fileprivate typealias Workbook = Model.Workbook
-fileprivate typealias Cell = Model.Cell
+private typealias Workbook = Model.Workbook
+private typealias Cell = Model.Cell
 
 public nonisolated enum XLSXCodec {
   public enum CodecError: LocalizedError {
@@ -42,7 +42,9 @@ public nonisolated enum XLSXCodec {
     return try importWorkbook(from: data)
   }
 
-  private static func importWorkbookLegacy(from file: XLSXFile, archiveData: Data) throws -> Workbook {
+  private static func importWorkbookLegacy(from file: XLSXFile, archiveData: Data) throws
+    -> Workbook
+  {
     let sharedStrings = try? file.parseSharedStrings()
     let styles = try? file.parseStyles()
     let themeScheme = importThemeScheme(archiveData: archiveData)
@@ -193,9 +195,12 @@ public nonisolated enum XLSXCodec {
   }
 
   /// Walk `<sheet>` elements in document order and resolve each `r:id` to its worksheet part.
-  private static func worksheetPathsInWorkbookOrder(archiveData: Data) -> [(name: String?, path: String)] {
+  private static func worksheetPathsInWorkbookOrder(archiveData: Data) -> [(
+    name: String?, path: String
+  )] {
     guard let workbookXML = zipEntryString(archiveData: archiveData, entryPath: "xl/workbook.xml"),
-          let relsXML = zipEntryString(archiveData: archiveData, entryPath: "xl/_rels/workbook.xml.rels")
+      let relsXML = zipEntryString(
+        archiveData: archiveData, entryPath: "xl/_rels/workbook.xml.rels")
     else { return [] }
     let targets = worksheetRelationshipTargets(in: relsXML)
     guard !targets.isEmpty else { return [] }
@@ -204,7 +209,7 @@ public nonisolated enum XLSXCodec {
     var ordered: [(name: String?, path: String)] = []
     for attributes in xmlElementAttributes(in: sheetsXML, localName: "sheet") {
       guard let relationship = xmlRelationshipId(in: attributes),
-            let target = targets[relationship]
+        let target = targets[relationship]
       else { return [] }
       let rawName = xmlAttribute(attributes, named: "name")?
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -218,9 +223,11 @@ public nonisolated enum XLSXCodec {
     var targets: [String: String] = [:]
     for attributes in xmlElementAttributes(in: relsXML, localName: "Relationship") {
       guard let id = xmlAttribute(attributes, named: "Id") ?? xmlAttribute(attributes, named: "id"),
-            let type = xmlAttribute(attributes, named: "Type") ?? xmlAttribute(attributes, named: "type"),
-            let target = xmlAttribute(attributes, named: "Target") ?? xmlAttribute(attributes, named: "target"),
-            relationshipTypeIsWorksheet(type)
+        let type = xmlAttribute(attributes, named: "Type")
+          ?? xmlAttribute(attributes, named: "type"),
+        let target = xmlAttribute(attributes, named: "Target")
+          ?? xmlAttribute(attributes, named: "target"),
+        relationshipTypeIsWorksheet(type)
       else { continue }
       targets[id] = target
     }
@@ -237,10 +244,10 @@ public nonisolated enum XLSXCodec {
     if let id = xmlAttribute(attributes, named: "r:id"), !id.isEmpty { return id }
     let pattern = #":id\s*=\s*(?:"([^"]*)"|'([^']*)')"#
     guard let regex = try? NSRegularExpression(pattern: pattern),
-          let match = regex.firstMatch(
-            in: attributes,
-            range: NSRange(location: 0, length: (attributes as NSString).length)
-          )
+      let match = regex.firstMatch(
+        in: attributes,
+        range: NSRange(location: 0, length: (attributes as NSString).length)
+      )
     else { return nil }
     let ns = attributes as NSString
     if match.range(at: 1).location != NSNotFound, match.range(at: 1).length > 0 {
@@ -270,9 +277,11 @@ public nonisolated enum XLSXCodec {
         index = after
         continue
       }
-      guard let nameEnd = xml[after...].firstIndex(where: {
-        $0 == " " || $0 == ">" || $0 == "/" || $0 == "\t" || $0 == "\n" || $0 == "\r"
-      }) else { return nil }
+      guard
+        let nameEnd = xml[after...].firstIndex(where: {
+          $0 == " " || $0 == ">" || $0 == "/" || $0 == "\t" || $0 == "\n" || $0 == "\r"
+        })
+      else { return nil }
       let rawName = xml[after..<nameEnd]
       let local = rawName.split(separator: ":").last.map(String.init) ?? String(rawName)
       guard let tagEnd = xml.range(of: ">", range: nameEnd..<xml.endIndex) else { return nil }
@@ -304,9 +313,11 @@ public nonisolated enum XLSXCodec {
         index = after
         continue
       }
-      guard let nameEnd = xml[after...].firstIndex(where: {
-        $0 == " " || $0 == ">" || $0 == "/" || $0 == "\t" || $0 == "\n" || $0 == "\r"
-      }) else { break }
+      guard
+        let nameEnd = xml[after...].firstIndex(where: {
+          $0 == " " || $0 == ">" || $0 == "/" || $0 == "\t" || $0 == "\n" || $0 == "\r"
+        })
+      else { break }
       let rawName = xml[after..<nameEnd]
       let local = rawName.split(separator: ":").last.map(String.init) ?? String(rawName)
       guard let tagEnd = xml.range(of: ">", range: nameEnd..<xml.endIndex) else { break }
@@ -319,15 +330,18 @@ public nonisolated enum XLSXCodec {
   }
 
   /// CoreXLSX does not expose `definedNames`. Read them from workbook XML the same way shared formulas are read from sheet XML.
-  private static func importDefinedNames(archiveData: Data, sheets: [Sheet]) -> [String: NamedRange] {
+  private static func importDefinedNames(archiveData: Data, sheets: [Sheet]) -> [String: NamedRange]
+  {
     guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/workbook.xml"),
-          let blockStart = xml.range(of: "<definedNames"),
-          let blockEnd = xml.range(of: "</definedNames>", range: blockStart.upperBound..<xml.endIndex)
+      let blockStart = xml.range(of: "<definedNames"),
+      let blockEnd = xml.range(of: "</definedNames>", range: blockStart.upperBound..<xml.endIndex)
     else { return [:] }
     let section = String(xml[blockStart.lowerBound..<blockEnd.upperBound])
-    guard let regex = try? NSRegularExpression(
-      pattern: #"<(?:[\w]+:)?definedName\b([^>]*)>([\s\S]*?)</(?:[\w]+:)?definedName>"#
-    ) else { return [:] }
+    guard
+      let regex = try? NSRegularExpression(
+        pattern: #"<(?:[\w]+:)?definedName\b([^>]*)>([\s\S]*?)</(?:[\w]+:)?definedName>"#
+      )
+    else { return [:] }
 
     struct RawName {
       var name: String
@@ -342,11 +356,15 @@ public nonisolated enum XLSXCodec {
       guard match.numberOfRanges > 2 else { continue }
       let attrs = nsSection.substring(with: match.range(at: 1))
       let body = decodeXMLEntities(nsSection.substring(with: match.range(at: 2)))
-      guard let rawName = xmlAttribute(attrs, named: "name")?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !rawName.isEmpty
+      guard
+        let rawName = xmlAttribute(attrs, named: "name")?.trimmingCharacters(
+          in: .whitespacesAndNewlines),
+        !rawName.isEmpty
       else { continue }
       let localSheet: String?
-      if let local = xmlAttribute(attrs, named: "localSheetId"), let index = Int(local), sheets.indices.contains(index) {
+      if let local = xmlAttribute(attrs, named: "localSheetId"), let index = Int(local),
+        sheets.indices.contains(index)
+      {
         localSheet = sheets[index].name
       } else {
         localSheet = nil
@@ -382,11 +400,11 @@ public nonisolated enum XLSXCodec {
     ]
     for pattern in patterns {
       guard let regex = try? NSRegularExpression(pattern: pattern),
-            let match = regex.firstMatch(
-              in: attributes,
-              range: NSRange(location: 0, length: (attributes as NSString).length)
-            ),
-            match.numberOfRanges > 1
+        let match = regex.firstMatch(
+          in: attributes,
+          range: NSRange(location: 0, length: (attributes as NSString).length)
+        ),
+        match.numberOfRanges > 1
       else { continue }
       return decodeXMLEntities((attributes as NSString).substring(with: match.range(at: 1)))
     }
@@ -399,7 +417,9 @@ public nonisolated enum XLSXCodec {
     archiveData: Data,
     worksheetPath: String
   ) {
-    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else {
+      return
+    }
 
     struct SharedMaster {
       var address: CellAddress
@@ -410,9 +430,10 @@ public nonisolated enum XLSXCodec {
     var followers: [(CellAddress, Int)] = []
 
     forEachCellElement(in: xml) { attrs, body in
-      guard let ref = xmlAttribute(attrs, named: "r")?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !ref.isEmpty,
-            let address = address(fromA1: ref)
+      guard
+        let ref = xmlAttribute(attrs, named: "r")?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !ref.isEmpty,
+        let address = address(fromA1: ref)
       else { return }
 
       guard let fTag = sharedFormulaTag(in: body) else { return }
@@ -477,7 +498,9 @@ public nonisolated enum XLSXCodec {
         searchStart = openEnd.upperBound
         continue
       }
-      guard let close = xml.range(of: "</c>", range: openEnd.upperBound..<xml.endIndex) else { break }
+      guard let close = xml.range(of: "</c>", range: openEnd.upperBound..<xml.endIndex) else {
+        break
+      }
       let cellBody = String(xml[openEnd.upperBound..<close.lowerBound])
       body(attrs, cellBody)
       searchStart = close.upperBound
@@ -491,18 +514,23 @@ public nonisolated enum XLSXCodec {
     worksheetPath: String,
     sharedStrings: SharedStrings?
   ) {
-    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else {
+      return
+    }
     forEachCellElement(in: xml) { attrs, body in
       guard body.contains("<f") else { return }
-      guard let ref = xmlAttribute(attrs, named: "r")?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !ref.isEmpty,
-            let address = address(fromA1: ref)
+      guard
+        let ref = xmlAttribute(attrs, named: "r")?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !ref.isEmpty,
+        let address = address(fromA1: ref)
       else { return }
-      guard let cached = formulaCachedValueFromCellXML(
-        attrs: attrs,
-        body: body,
-        sharedStrings: sharedStrings
-      ) else { return }
+      guard
+        let cached = formulaCachedValueFromCellXML(
+          attrs: attrs,
+          body: body,
+          sharedStrings: sharedStrings
+        )
+      else { return }
       var cell = sheet.cell(at: address)
       guard FormulaSyntax.isFormula(cell.raw) else { return }
       cell.importedFormulaResult = cached.text
@@ -521,12 +549,13 @@ public nonisolated enum XLSXCodec {
     body: String,
     sharedStrings: SharedStrings?
   ) -> FormulaCache? {
-    let cellTypeEarly = xmlAttribute(attrs, named: "t")?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cellTypeEarly = xmlAttribute(attrs, named: "t")?.trimmingCharacters(
+      in: .whitespacesAndNewlines)
     if body.contains("<v/>") || body.contains("<v />") {
       return emptyStringFormulaCache(cellType: cellTypeEarly)
     }
     guard let vOpen = body.range(of: "<v>"),
-          let vClose = body.range(of: "</v>", range: vOpen.upperBound..<body.endIndex)
+      let vClose = body.range(of: "</v>", range: vOpen.upperBound..<body.endIndex)
     else { return nil }
     let raw = decodeXMLEntities(String(body[vOpen.upperBound..<vClose.lowerBound]))
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -585,13 +614,17 @@ public nonisolated enum XLSXCodec {
   }
 
   public static func zipEntryString(archiveData: Data, entryPath: String) -> String? {
-    guard let data = zipEntryData(archiveData: archiveData, entryPath: entryPath) else { return nil }
+    guard let data = zipEntryData(archiveData: archiveData, entryPath: entryPath) else {
+      return nil
+    }
     return String(data: data, encoding: .utf8)
   }
 
   /// Swap stored parts, then rebuild with the same stored-zip writer import already reads.
   public static func replacingZipEntries(_ archiveData: Data, entries: [String: Data]) -> Data? {
-    guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else { return nil }
+    guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else {
+      return nil
+    }
     var files: [String: Data] = [:]
     for entry in archive {
       let path = entry.path
@@ -614,7 +647,9 @@ public nonisolated enum XLSXCodec {
     let cached = ZipPackage.cachedEntry(at: entryPath)
     if cached.0 { return cached.1 }
     let normalized = entryPath.hasPrefix("/") ? String(entryPath.dropFirst()) : entryPath
-    guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else { return nil }
+    guard let archive = try? Archive(data: archiveData, accessMode: .read, pathEncoding: nil) else {
+      return nil
+    }
     let candidates = [normalized, normalized.hasPrefix("xl/") ? normalized : "xl/\(normalized)"]
     for path in candidates {
       guard let entry = archive[path] else { continue }
@@ -666,14 +701,16 @@ public nonisolated enum XLSXCodec {
           model.importedFormulaResult = cached.text
           model.importedFormulaValueType = cached.type
         }
-        if let styles, let format = cellFormat(
-          styleIndex: cell.styleIndex,
-          styles: styles,
-          underlinedFontIds: underlinedFontIds,
-          themeStyleColors: themeStyleColors,
-          textRotationsByStyleIndex: textRotationsByStyleIndex,
-          clipTextStyleIndexes: clipTextStyleIndexes
-        ) {
+        if let styles,
+          let format = cellFormat(
+            styleIndex: cell.styleIndex,
+            styles: styles,
+            underlinedFontIds: underlinedFontIds,
+            themeStyleColors: themeStyleColors,
+            textRotationsByStyleIndex: textRotationsByStyleIndex,
+            clipTextStyleIndexes: clipTextStyleIndexes
+          )
+        {
           model.format = format
         }
         sheet.setCell(model, at: address)
@@ -683,16 +720,19 @@ public nonisolated enum XLSXCodec {
 
   /// CoreXLSX omits `textRotation` on alignment — parse it from styles.xml cellXfs.
   public static func importTextRotationsByStyleIndex(archiveData: Data) -> [Int: Int] {
-    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else { return [:] }
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else {
+      return [:]
+    }
     guard let start = xml.range(of: "<cellXfs"),
-          let end = xml.range(of: "</cellXfs>", range: start.upperBound..<xml.endIndex)
+      let end = xml.range(of: "</cellXfs>", range: start.upperBound..<xml.endIndex)
     else { return [:] }
 
     let section = String(xml[start.lowerBound..<end.upperBound])
-    guard let xfRegex = try? NSRegularExpression(
-      pattern: #"<xf\b[^>]*>(.*?)</xf>|<xf\b[^>]*/>"#,
-      options: [.dotMatchesLineSeparators]
-    ),
+    guard
+      let xfRegex = try? NSRegularExpression(
+        pattern: #"<xf\b[^>]*>(.*?)</xf>|<xf\b[^>]*/>"#,
+        options: [.dotMatchesLineSeparators]
+      ),
       let rotationRegex = try? NSRegularExpression(pattern: #"textRotation="(-?\d+)""#)
     else { return [:] }
 
@@ -705,11 +745,12 @@ public nonisolated enum XLSXCodec {
     ).enumerated() {
       let chunk = nsSection.substring(with: match.range)
       let nsChunk = chunk as NSString
-      guard let rotMatch = rotationRegex.firstMatch(
-        in: chunk,
-        options: [],
-        range: NSRange(location: 0, length: nsChunk.length)
-      ), rotMatch.numberOfRanges > 1,
+      guard
+        let rotMatch = rotationRegex.firstMatch(
+          in: chunk,
+          options: [],
+          range: NSRange(location: 0, length: nsChunk.length)
+        ), rotMatch.numberOfRanges > 1,
         let rotation = Int(nsChunk.substring(with: rotMatch.range(at: 1)))
       else { continue }
       rotations[index] = rotation
@@ -719,16 +760,19 @@ public nonisolated enum XLSXCodec {
 
   /// Clip is not an OOXML alignment flag. Spark Grid stores it beside wrapText so a round trip keeps it.
   public static func importClipTextStyleIndexes(archiveData: Data) -> Set<Int> {
-    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else { return [] }
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else {
+      return []
+    }
     guard let start = xml.range(of: "<cellXfs"),
-          let end = xml.range(of: "</cellXfs>", range: start.upperBound..<xml.endIndex)
+      let end = xml.range(of: "</cellXfs>", range: start.upperBound..<xml.endIndex)
     else { return [] }
 
     let section = String(xml[start.lowerBound..<end.upperBound])
-    guard let xfRegex = try? NSRegularExpression(
-      pattern: #"<xf\b[^>]*>(.*?)</xf>|<xf\b[^>]*/>"#,
-      options: [.dotMatchesLineSeparators]
-    ),
+    guard
+      let xfRegex = try? NSRegularExpression(
+        pattern: #"<xf\b[^>]*>(.*?)</xf>|<xf\b[^>]*/>"#,
+        options: [.dotMatchesLineSeparators]
+      ),
       let clipRegex = try? NSRegularExpression(pattern: #"sparkTextDisplay="clip""#)
     else { return [] }
 
@@ -843,9 +887,9 @@ public nonisolated enum XLSXCodec {
     }
 
     if let fillId = xf?.fillId,
-       let fills = styles.fills?.items,
-       fillId >= 0,
-       fillId < fills.count
+      let fills = styles.fills?.items,
+      fillId >= 0,
+      fillId < fills.count
     {
       let pattern = fills[fillId].patternFill
       if pattern.patternType != "none" {
@@ -868,9 +912,9 @@ public nonisolated enum XLSXCodec {
       }
 
       if let borderId = xf.borderId,
-         let borders = styles.borders?.items,
-         borderId >= 0,
-         borderId < borders.count
+        let borders = styles.borders?.items,
+        borderId >= 0,
+        borderId < borders.count
       {
         let imported = cellBorders(from: borders[borderId])
         if imported.hasAny {
@@ -942,14 +986,16 @@ public nonisolated enum XLSXCodec {
   }
 
   private static func styleFormat(at styleIndex: Int, styles: Styles) -> CoreXLSX.Format? {
-    guard let items = styles.cellFormats?.items, items.indices.contains(styleIndex) else { return nil }
+    guard let items = styles.cellFormats?.items, items.indices.contains(styleIndex) else {
+      return nil
+    }
     return items[styleIndex]
   }
 
   private static func styleFont(_ xf: CoreXLSX.Format?, styles: Styles) -> CoreXLSX.Font? {
     guard let fontID = xf?.fontId,
-          let fonts = styles.fonts?.items,
-          fonts.indices.contains(fontID)
+      let fonts = styles.fonts?.items,
+      fonts.indices.contains(fontID)
     else { return nil }
     return fonts[fontID]
   }
@@ -975,7 +1021,7 @@ public nonisolated enum XLSXCodec {
     case "medium": return .medium
     case "thick": return .thick
     case "dashed", "mediumDashed", "dashDot", "mediumDashDot",
-         "dashDotDot", "mediumDashDotDot", "slantDashDot":
+      "dashDotDot", "mediumDashDotDot", "slantDashDot":
       return .dashed
     case "dotted", "hair": return .dotted
     case "double": return .double
@@ -1041,7 +1087,9 @@ public nonisolated enum XLSXCodec {
 
   private static func builtinNumberFormatID(matching code: String) -> Int? {
     let target = code.trimmingCharacters(in: .whitespacesAndNewlines)
-    return builtinNumberFormatCodes.first { $0.value.caseInsensitiveCompare(target) == .orderedSame }?.key
+    return builtinNumberFormatCodes.first {
+      $0.value.caseInsensitiveCompare(target) == .orderedSame
+    }?.key
   }
 
   private static func importedNumberFormat(for id: Int, styles: Styles) -> ImportedNumberFormat? {
@@ -1120,7 +1168,9 @@ public nonisolated enum XLSXCodec {
 
   // MARK: - Export
 
-  public static func exportWorkbook(_ workbook: Model.Workbook, includeFormulaCaches: Bool = true) throws -> Data {
+  public static func exportWorkbook(_ workbook: Model.Workbook, includeFormulaCaches: Bool = true)
+    throws -> Data
+  {
     var sharedStrings: [String] = []
     var sharedIndex: [String: Int] = [:]
 
@@ -1221,40 +1271,41 @@ public nonisolated enum XLSXCodec {
     includeTheme: Bool = false
   ) -> Data {
     var overrides = """
-    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-    <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
-    """
+      <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+      <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+      <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+      """
     if includeTheme {
       overrides += """
-      <Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
-      """
+        <Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+        """
     }
     for i in 1...sheetCount {
       overrides += """
-      <Override PartName="/xl/worksheets/sheet\(i).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-      """
+        <Override PartName="/xl/worksheets/sheet\(i).xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+        """
     }
     overrides += drawingOverrides
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-    \(imageDefaults)
-    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-    <Default Extension="xml" ContentType="application/xml"/>
-    <Default Extension="json" ContentType="application/json"/>
-    \(overrides)
-    </Types>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+      \(imageDefaults)
+      <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+      <Default Extension="xml" ContentType="application/xml"/>
+      <Default Extension="json" ContentType="application/json"/>
+      \(overrides)
+      </Types>
+      """
     return Data(xml.utf8)
   }
 
-  private static let rootRelsXML = Data("""
-  <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-  <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-  </Relationships>
-  """.utf8)
+  private static let rootRelsXML = Data(
+    """
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+    </Relationships>
+    """.utf8)
 
   private static func workbookXML(_ workbook: Workbook) -> Data {
     var sheetsXML = ""
@@ -1268,17 +1319,18 @@ public nonisolated enum XLSXCodec {
       let items = workbook.namedRanges.values.sorted { $0.name.uppercased() < $1.name.uppercased() }
       let body = items.map { named -> String in
         let formula = named.referenceText
-        return #"<definedName name="\#(escapeXML(named.name))">\#(escapeXML(formula))</definedName>"#
+        return
+          #"<definedName name="\#(escapeXML(named.name))">\#(escapeXML(formula))</definedName>"#
       }.joined()
       definedNames = "<definedNames>\(body)</definedNames>"
     }
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-    <sheets>\(sheetsXML)</sheets>
-    \(definedNames)
-    </workbook>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <sheets>\(sheetsXML)</sheets>
+      \(definedNames)
+      </workbook>
+      """
     return Data(xml.utf8)
   }
 
@@ -1286,27 +1338,27 @@ public nonisolated enum XLSXCodec {
     var rels = ""
     for i in 1...sheetCount {
       rels += """
-      <Relationship Id="rId\(i)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet\(i).xml"/>
-      """
+        <Relationship Id="rId\(i)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet\(i).xml"/>
+        """
     }
     let stylesId = sheetCount + 1
     let sharedId = sheetCount + 2
     let themeId = sheetCount + 3
     rels += """
-    <Relationship Id="rId\(stylesId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-    <Relationship Id="rId\(sharedId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
-    """
+      <Relationship Id="rId\(stylesId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+      <Relationship Id="rId\(sharedId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+      """
     if includeTheme {
       rels += """
-      <Relationship Id="rId\(themeId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
-      """
+        <Relationship Id="rId\(themeId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
+        """
     }
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    \(rels)
-    </Relationships>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      \(rels)
+      </Relationships>
+      """
     return Data(xml.utf8)
   }
 
@@ -1349,10 +1401,12 @@ public nonisolated enum XLSXCodec {
         let styleAttr = sIndex > 0 ? #" s="\#(sIndex)""# : ""
         if FormulaSyntax.isFormula(cell.raw) {
           let formula = String(cell.raw.drop(while: { $0 == "=" || $0.isWhitespace }))
-          let cache = includeFormulaCaches
+          let cache =
+            includeFormulaCaches
             ? formulaCacheMarkup(cell)
             : (typeAttribute: "", valueElement: "")
-          cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)\#(cache.typeAttribute)><f>\#(escapeXML(formula))</f>\#(cache.valueElement)</c>"#
+          cellsXML +=
+            #"<c r="\#(address.a1)"\#(styleAttr)\#(cache.typeAttribute)><f>\#(escapeXML(formula))</f>\#(cache.valueElement)</c>"#
         } else if Double(cell.raw) != nil, !cell.raw.contains(where: { $0.isLetter }) {
           cellsXML += #"<c r="\#(address.a1)"\#(styleAttr)><v>\#(escapeXML(cell.raw))</v></c>"#
         } else if !cell.raw.isEmpty {
@@ -1378,18 +1432,18 @@ public nonisolated enum XLSXCodec {
     let drawingXML = includeDrawing ? sheetDrawingRelationshipXML(sheetIndex: 0) : ""
 
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-    \(viewsXML)
-    \(colsXML)
-    <sheetData>\(sheetData)</sheetData>
-    \(filterXML)
-    \(mergeXML)
-    \(cfXML)
-    \(drawingXML)
-    \(x14cfXML)
-    </worksheet>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      \(viewsXML)
+      \(colsXML)
+      <sheetData>\(sheetData)</sheetData>
+      \(filterXML)
+      \(mergeXML)
+      \(cfXML)
+      \(drawingXML)
+      \(x14cfXML)
+      </worksheet>
+      """
     return Data(xml.utf8)
   }
 
@@ -1398,7 +1452,9 @@ public nonisolated enum XLSXCodec {
     "#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA",
   ]
 
-  private static func formulaCacheMarkup(_ cell: Cell) -> (typeAttribute: String, valueElement: String) {
+  private static func formulaCacheMarkup(_ cell: Cell) -> (
+    typeAttribute: String, valueElement: String
+  ) {
     guard let raw = cell.importedFormulaResult else { return ("", "") }
     let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if text.isEmpty {
@@ -1445,11 +1501,11 @@ public nonisolated enum XLSXCodec {
   private static func sharedStringsXML(_ strings: [String]) -> Data {
     let items = strings.map { #"<si><t>\#(escapeXML($0))</t></si>"# }.joined()
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="\(strings.count)" uniqueCount="\(strings.count)">
-    \(items)
-    </sst>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="\(strings.count)" uniqueCount="\(strings.count)">
+      \(items)
+      </sst>
+      """
     return Data(xml.utf8)
   }
 
@@ -1457,7 +1513,8 @@ public nonisolated enum XLSXCodec {
     var customFormats: [String: Int] = [:]
     var nextCustomID = 164
     var fonts = ""
-    var fills = #"<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>"#
+    var fills =
+      #"<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>"#
     var bordersXML = #"<border><left/><right/><top/><bottom/><diagonal/></border>"#
     var cellXfs = ""
     var fillCount = 2
@@ -1476,7 +1533,8 @@ public nonisolated enum XLSXCodec {
 
       var fillId = 0
       if let fillRGB = style.fillRGB {
-        fills += #"<fill><patternFill patternType="solid"><fgColor rgb="FF\#(fillRGB)"/><bgColor indexed="64"/></patternFill></fill>"#
+        fills +=
+          #"<fill><patternFill patternType="solid"><fgColor rgb="FF\#(fillRGB)"/><bgColor indexed="64"/></patternFill></fill>"#
         fillId = fillCount
         fillCount += 1
       }
@@ -1491,32 +1549,35 @@ public nonisolated enum XLSXCodec {
         borderCount += 1
       }
 
-      let numFmtId = numberFormatID(for: style, customFormats: &customFormats, nextCustomID: &nextCustomID)
+      let numFmtId = numberFormatID(
+        for: style, customFormats: &customFormats, nextCustomID: &nextCustomID)
 
       let alignmentXML = style.alignmentXML
       let applyBorder = borderId == 0 ? "0" : "1"
       let applyAlignment = alignmentXML.isEmpty ? "0" : "1"
-      cellXfs += #"<xf numFmtId="\#(numFmtId)" fontId="\#(fontId)" fillId="\#(fillId)" borderId="\#(borderId)" xfId="0" applyFont="1" applyFill="1" applyBorder="\#(applyBorder)" applyAlignment="\#(applyAlignment)" applyNumberFormat="1">\#(alignmentXML)</xf>"#
+      cellXfs +=
+        #"<xf numFmtId="\#(numFmtId)" fontId="\#(fontId)" fillId="\#(fillId)" borderId="\#(borderId)" xfId="0" applyFont="1" applyFill="1" applyBorder="\#(applyBorder)" applyAlignment="\#(applyAlignment)" applyNumberFormat="1">\#(alignmentXML)</xf>"#
     }
 
-    let numFmts = customFormats
+    let numFmts =
+      customFormats
       .sorted { $0.value < $1.value }
       .map { #" <numFmt numFmtId="\#($0.value)" formatCode="\#(escapeXML($0.key))"/>"# }
       .joined()
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-    <numFmts count="\(customFormats.count)">\(numFmts)</numFmts>
-    <fonts count="\(styles.count)">\(fonts)</fonts>
-    <fills count="\(fillCount)">\(fills)</fills>
-    <borders count="\(borderCount)">\(bordersXML)</borders>
-    <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-    <cellXfs count="\(styles.count)">\(cellXfs)</cellXfs>
-    <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-    \(dxfsXML(dxfs))
-    <tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleLight16"/>
-    </styleSheet>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <numFmts count="\(customFormats.count)">\(numFmts)</numFmts>
+      <fonts count="\(styles.count)">\(fonts)</fonts>
+      <fills count="\(fillCount)">\(fills)</fills>
+      <borders count="\(borderCount)">\(bordersXML)</borders>
+      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="\(styles.count)">\(cellXfs)</cellXfs>
+      <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+      \(dxfsXML(dxfs))
+      <tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleLight16"/>
+      </styleSheet>
+      """
     return Data(xml.utf8)
   }
 
@@ -1526,8 +1587,8 @@ public nonisolated enum XLSXCodec {
     nextCustomID: inout Int
   ) -> Int {
     if let code = style.formatCode?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !code.isEmpty,
-       code.caseInsensitiveCompare("General") != .orderedSame
+      !code.isEmpty,
+      code.caseInsensitiveCompare("General") != .orderedSame
     {
       if let builtin = builtinNumberFormatID(matching: code) { return builtin }
       if let existing = customFormats[code] { return existing }
@@ -1599,7 +1660,8 @@ private struct StyleBorderKey: Hashable {
       }
       return #"<\#(name) style="\#(edge.style)"/>"#
     }
-    return "<border>\(side("left", left))\(side("right", right))\(side("top", top))\(side("bottom", bottom))<diagonal/></border>"
+    return
+      "<border>\(side("left", left))\(side("right", right))\(side("top", top))\(side("bottom", bottom))<diagonal/></border>"
   }
 }
 
@@ -1689,7 +1751,7 @@ private enum MinimalZip {
       localHeader.appendUInt32(0x0403_4b50)
       localHeader.appendUInt16(20)
       localHeader.appendUInt16(0)
-      localHeader.appendUInt16(0) // stored
+      localHeader.appendUInt16(0)  // stored
       localHeader.appendUInt16(0)
       localHeader.appendUInt16(0)
       localHeader.appendUInt32(crc)
@@ -1758,13 +1820,13 @@ private enum MinimalZip {
   }()
 }
 
-private extension Data {
-  mutating func appendUInt16(_ value: UInt16) {
+extension Data {
+  fileprivate mutating func appendUInt16(_ value: UInt16) {
     var le = value.littleEndian
     Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
   }
 
-  mutating func appendUInt32(_ value: UInt32) {
+  fileprivate mutating func appendUInt32(_ value: UInt32) {
     var le = value.littleEndian
     Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
   }

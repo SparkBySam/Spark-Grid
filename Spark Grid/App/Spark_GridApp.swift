@@ -4,8 +4,8 @@
 //
 
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 @main
 struct Spark_GridApp: App {
@@ -16,11 +16,11 @@ struct Spark_GridApp: App {
     if ProcessInfo.processInfo.environment["SPARK_GRID_BENCHMARK"] == "1" {
       PerformanceBenchmark.run()
     }
-#if DEBUG
-    if ProcessInfo.processInfo.environment["SPARK_GRID_BUG_BASH"] == "1" {
-      _ = BugBashRunner.runIfRequested()
-    }
-#endif
+    #if DEBUG
+      if ProcessInfo.processInfo.environment["SPARK_GRID_BUG_BASH"] == "1" {
+        _ = BugBashRunner.runIfRequested()
+      }
+    #endif
   }
 
   var body: some Scene {
@@ -54,6 +54,7 @@ struct Spark_GridApp: App {
   @MainActor
   private func bindOpenHandling() {
     appDelegate.documentStore = store
+    appDelegate.offerCrashRecoveryIfNeeded()
     appDelegate.onOpenFile = { url in
       Task { @MainActor in
         openFile(url)

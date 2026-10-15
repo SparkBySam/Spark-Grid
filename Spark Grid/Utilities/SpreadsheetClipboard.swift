@@ -1,5 +1,5 @@
-import Foundation
 import AppKit
+import Foundation
 import SparkGridCore
 
 /// Tab-separated grid clipboard encoding (compatible with Excel, Google Sheets, Numbers).
@@ -7,7 +7,8 @@ enum SpreadsheetClipboard {
   /// Custom pasteboard type for formula paste with relative adjustment.
   static let formulaGridType = NSPasteboard.PasteboardType("app.sparkgrid.formula-grid")
   /// Conditional-format rules clipped to the copied bounds.
-  static let conditionalFormatType = NSPasteboard.PasteboardType("app.sparkgrid.conditional-formats")
+  static let conditionalFormatType = NSPasteboard.PasteboardType(
+    "app.sparkgrid.conditional-formats")
 
   struct FormulaGridPayload: Codable, Equatable {
     var originRow: Int
@@ -95,7 +96,8 @@ enum SpreadsheetClipboard {
   /// Parses TSV/CSV-style clipboard text. Quoted fields may contain tabs and newlines
   /// (Excel Alt+Enter / wrap) without splitting into extra rows or columns.
   static func parseGrid(_ text: String) -> [[String]] {
-    let normalized = text
+    let normalized =
+      text
       .replacingOccurrences(of: "\r\n", with: "\n")
       .replacingOccurrences(of: "\r", with: "\n")
 
@@ -199,7 +201,7 @@ enum SpreadsheetClipboard {
     to board: NSPasteboard
   ) {
     guard let payload, !payload.rules.isEmpty,
-          let data = try? JSONEncoder().encode(payload)
+      let data = try? JSONEncoder().encode(payload)
     else { return }
     board.setData(data, forType: conditionalFormatType)
   }

@@ -67,7 +67,8 @@ extension SpreadsheetViewModel {
     var sheet = activeSheet
     let before = sheet.conditionalFormats
     sheet.conditionalFormats.append(rule)
-    applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Add Conditional Format")
+    applyConditionalFormats(
+      sheet.conditionalFormats, undoBefore: before, actionName: "Add Conditional Format")
   }
 
   func removeConditionalFormatRules(ids: Set<UUID>) {
@@ -77,7 +78,8 @@ extension SpreadsheetViewModel {
     let before = sheet.conditionalFormats
     sheet.conditionalFormats.removeAll { ids.contains($0.id) }
     guard sheet.conditionalFormats != before else { return }
-    applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Remove Conditional Format")
+    applyConditionalFormats(
+      sheet.conditionalFormats, undoBefore: before, actionName: "Remove Conditional Format")
   }
 
   func clearConditionalFormats(intersecting range: CellRange) {
@@ -88,7 +90,8 @@ extension SpreadsheetViewModel {
       rangesIntersect(rule.range, range)
     }
     guard sheet.conditionalFormats != before else { return }
-    applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Clear Conditional Formats")
+    applyConditionalFormats(
+      sheet.conditionalFormats, undoBefore: before, actionName: "Clear Conditional Formats")
   }
 
   func replaceConditionalFormatRule(_ rule: ConditionalFormatRule) {
@@ -98,7 +101,9 @@ extension SpreadsheetViewModel {
     replaceConditionalFormats(rules, actionName: "Edit Conditional Format")
   }
 
-  func replaceConditionalFormats(_ rules: [ConditionalFormatRule], actionName: String = "Conditional Format") {
+  func replaceConditionalFormats(
+    _ rules: [ConditionalFormatRule], actionName: String = "Conditional Format"
+  ) {
     commitEditIfNeeded()
     let before = activeSheet.conditionalFormats
     guard before != rules else { return }

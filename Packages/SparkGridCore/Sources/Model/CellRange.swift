@@ -1,7 +1,7 @@
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 public nonisolated struct CellRange: Codable, Equatable, Sendable {
   public var start: CellAddress
@@ -57,11 +57,13 @@ public nonisolated struct CellRange: Codable, Equatable, Sendable {
     guard !trimmed.isEmpty, !trimmed.contains("!") else { return nil }
     if let (start, end) = A1Reference.parseFormulaRange(trimmed) {
       guard start.sheet == nil, end.sheet == nil,
-            !start.isRowOpen, !start.isColOpen, !end.isRowOpen, !end.isColOpen
+        !start.isRowOpen, !start.isColOpen, !end.isRowOpen, !end.isColOpen
       else { return nil }
       return CellRange(start: start.address, end: end.address)
     }
-    if let ref = A1Reference.parseFormulaRef(trimmed), ref.sheet == nil, !ref.isRowOpen, !ref.isColOpen {
+    if let ref = A1Reference.parseFormulaRef(trimmed), ref.sheet == nil, !ref.isRowOpen,
+      !ref.isColOpen
+    {
       return CellRange(start: ref.address, end: ref.address)
     }
     return nil

@@ -23,7 +23,8 @@ public enum FormulaAutocomplete {
     }
 
     var items = FormulaFunctions.suggestions(matching: partial)
-    let names = namedRanges
+    let names =
+      namedRanges
       .filter { $0.uppercased().hasPrefix(upper) }
       .sorted()
     for name in names where !items.contains(name) {
@@ -73,7 +74,9 @@ public enum FormulaAutocomplete {
     return first
   }
 
-  public static func partialWord(in text: String, utf16Cursor: Int) -> (nsRange: NSRange, token: String)? {
+  public static func partialWord(in text: String, utf16Cursor: Int) -> (
+    nsRange: NSRange, token: String
+  )? {
     let ns = text as NSString
     let cursor = max(0, min(utf16Cursor, ns.length))
     guard cursor > 0 else { return nil }
@@ -105,7 +108,7 @@ public enum FormulaAutocomplete {
     var i = tokenRange.location
     while i > 0 {
       let ch = ns.character(at: i - 1)
-      if ch == 32 || ch == 9 { // space / tab
+      if ch == 32 || ch == 9 {  // space / tab
         i -= 1
         continue
       }
@@ -116,7 +119,8 @@ public enum FormulaAutocomplete {
     let prev = ns.character(at: i - 1)
     // After ':' → range endpoint (`A2:A`). After '!' → sheet-qualified ref.
     // After '$' → absolute column/row marker mid-ref.
-    if prev == 58 /* : */ || prev == 33 /* ! */ || prev == 36 /* $ */ {
+    // 58 is ':', 33 is '!', 36 is '$'.
+    if prev == 58 || prev == 33 || prev == 36 {
       return true
     }
     return false
@@ -132,7 +136,9 @@ public enum FormulaAutocomplete {
     guard let partial = partialWord(in: text, utf16Cursor: utf16Cursor) else { return nil }
     guard !isReferenceContext(in: text, tokenRange: partial.nsRange) else { return nil }
     let ns = text as NSString
-    let isNamedRange = namedRanges.contains { $0.caseInsensitiveCompare(suggestion) == .orderedSame }
+    let isNamedRange = namedRanges.contains {
+      $0.caseInsensitiveCompare(suggestion) == .orderedSame
+    }
     let isKnownFunction = FormulaFunctions.all.contains(suggestion.uppercased())
     var insertion = suggestion
     if isKnownFunction && !isNamedRange {
@@ -158,20 +164,21 @@ public enum FormulaAutocomplete {
     }
     // Already complete function name without '(': still add '(' on Tab.
     if suggestion.caseInsensitiveCompare(partial.token) == .orderedSame,
-       FormulaFunctions.all.contains(suggestion.uppercased()),
-       !namedRanges.contains(where: { $0.caseInsensitiveCompare(suggestion) == .orderedSame })
+      FormulaFunctions.all.contains(suggestion.uppercased()),
+      !namedRanges.contains(where: { $0.caseInsensitiveCompare(suggestion) == .orderedSame })
     {
       let ns = text as NSString
       let after = partial.nsRange.location + partial.nsRange.length
       if after < ns.length {
         let next = ns.character(at: after)
-        if next == 40 { // "("
+        if next == 40 {  // "("
           return nil
         }
       }
       let insertion = suggestion + "("
       let updated = ns.replacingCharacters(in: partial.nsRange, with: insertion)
-      return Result(text: updated, cursor: partial.nsRange.location + (insertion as NSString).length)
+      return Result(
+        text: updated, cursor: partial.nsRange.location + (insertion as NSString).length)
     }
     if suggestion.caseInsensitiveCompare(partial.token) == .orderedSame {
       return nil

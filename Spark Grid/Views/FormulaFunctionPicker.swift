@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 /// Escape closes the Insert Function list. Return and other keys do not.
 enum FormulaFunctionListKeys {
@@ -78,7 +78,10 @@ struct FormulaFunctionPicker: View {
   private func installEscapeMonitor() {
     guard escapeMonitor == nil else { return }
     escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-      guard FormulaFunctionListKeys.shouldClose(keyCode: event.keyCode, modifierFlags: event.modifierFlags) else {
+      guard
+        FormulaFunctionListKeys.shouldClose(
+          keyCode: event.keyCode, modifierFlags: event.modifierFlags)
+      else {
         return event
       }
       DispatchQueue.main.async { onClose() }
@@ -115,7 +118,8 @@ private struct FormulaFunctionPickerRow: View {
       .padding(.vertical, 4)
       .background(
         RoundedRectangle(cornerRadius: 4)
-          .fill(hovered ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.28) : Color.clear)
+          .fill(
+            hovered ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.28) : Color.clear)
       )
       .contentShape(Rectangle())
     }

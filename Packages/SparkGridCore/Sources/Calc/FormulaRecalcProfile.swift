@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 /// Phase timings for `recalculateEntireWorkbook` (Bug Bash / diagnostics).
 public nonisolated final class FormulaRecalcProfile {
@@ -74,7 +74,8 @@ public nonisolated final class FormulaRecalcProfile {
   public var ifStripYtdPlanRejectEntries: [IfStripOtherBranchEntry] = []
 
   /// `makeColumnYtdSumproductQuotientPlan` exit for **YTD Summary!S5** only (KPI diagnostic).
-  public var ytdSpQuotientPlanExit: (sheet: String, masterA1: String, exitCode: String, formulaPrefix: String)?
+  public var ytdSpQuotientPlanExit:
+    (sheet: String, masterA1: String, exitCode: String, formulaPrefix: String)?
 
   public func recordYtdSpQuotientPlanExit(
     sheet: String,
@@ -82,7 +83,9 @@ public nonisolated final class FormulaRecalcProfile {
     exitCode: String,
     formulaPrefix: String
   ) {
-    guard sheet.caseInsensitiveCompare("YTD Summary") == .orderedSame, masterA1 == "S5" else { return }
+    guard sheet.caseInsensitiveCompare("YTD Summary") == .orderedSame, masterA1 == "S5" else {
+      return
+    }
     ytdSpQuotientPlanExit = (sheet, masterA1, exitCode, formulaPrefix)
   }
 
@@ -136,7 +139,9 @@ public nonisolated final class FormulaRecalcProfile {
 
   public var sheetPhaseWalls: [SheetPhaseWalls] = []
 
-  public func recordSheetPhaseWalls(name: String, ingestWall: Double, evalWall: Double, aggIdxCPU: Double) {
+  public func recordSheetPhaseWalls(
+    name: String, ingestWall: Double, evalWall: Double, aggIdxCPU: Double
+  ) {
     sheetPhaseWalls.append(
       SheetPhaseWalls(name: name, ingestWall: ingestWall, evalWall: evalWall, aggIdxCPU: aggIdxCPU)
     )
@@ -223,11 +228,13 @@ public nonisolated final class FormulaRecalcProfile {
     if ifStripVlkNA > 0 { parts.append(String(format: "vlkNA %d", ifStripVlkNA)) }
     if ifStripBranchTree > 0 { parts.append(String(format: "branchTree %d", ifStripBranchTree)) }
     if !ifStripPlanMiss.isEmpty {
-      let miss = ifStripPlanMiss.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: " ")
+      let miss = ifStripPlanMiss.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(
+        separator: " ")
       parts.append("planMiss \(miss)")
     }
     guard !parts.isEmpty else { return "" }
-    return " | stripFB " + parts.joined(separator: " ") + ifStripOtherBranchSummary() + ifStripYtdPlanRejectSummary()
+    return " | stripFB " + parts.joined(separator: " ") + ifStripOtherBranchSummary()
+      + ifStripYtdPlanRejectSummary()
   }
 
   private func sheetPhaseWallSummary() -> String {
@@ -249,7 +256,8 @@ public nonisolated final class FormulaRecalcProfile {
       .map { String(format: "%@ %.2fs", $0.key, $0.value) }
       .joined(separator: ", ")
     return String(
-      format: "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d textJoinStrip %d dupStrip %d ytdCntStrip %d ytdSpStrip %d | eval %@",
+      format:
+        "total %.2fs | ingest %.2fs wallPeak %.2fs (parseΣ %.2fs depsΣ %.2fs fillVerifyΣ %.2fs fillAdjustΣ %.2fs shapeKeyΣ %.2fs entryScanΣ %.2fs colWallΣ %.2fs graphΣ %.2fs tmplHit %d) shapePlan %.2fs | aggIdx %.2fs lookupIdx %.2fs eval %.2fs | COUNTIFS hit %d idxHit %d idxBuild %d scanCells %d foreignEval %d | sumProdBool hit %d fallback %d | ifBlank %d | iferrVlk %d | ifStripHit %d cntifsStrip %d textJoinStrip %d dupStrip %d ytdCntStrip %d ytdSpStrip %d | eval %@",
       totalSeconds,
       ingestSeconds,
       ingestBulkSheetWallPeakSeconds,

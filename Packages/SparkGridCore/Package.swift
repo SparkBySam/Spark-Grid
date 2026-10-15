@@ -16,10 +16,10 @@ let testSettings: [SwiftSetting] = [
 let package = Package(
   name: "SparkGridCore",
   platforms: [
-    .macOS(.v14),
+    .macOS(.v14)
   ],
   products: [
-    .library(name: "SparkGridCore", targets: ["SparkGridCore"]),
+    .library(name: "SparkGridCore", targets: ["SparkGridCore"])
   ],
   dependencies: [
     .package(url: "https://github.com/CoreOffice/CoreXLSX.git", .upToNextMinor(from: "0.14.2")),
@@ -99,7 +99,15 @@ let package = Package(
     ),
     .testTarget(
       name: "SparkGridCoreTests",
-      dependencies: ["GridCore"],
+      dependencies: [
+        "GridCore",
+        "NumberFormat",
+        "Formula",
+        "Calc",
+        "Model",
+        "FileFormats",
+        "Engine",
+      ],
       swiftSettings: testSettings
     ),
   ]

@@ -88,7 +88,7 @@ public nonisolated struct FormulaLexer {
   }
 
   private mutating func readString() throws -> FormulaToken {
-    index += 1 // opening quote
+    index += 1  // opening quote
     var value = ""
     while index < chars.count {
       let ch = chars[index]
@@ -107,7 +107,7 @@ public nonisolated struct FormulaLexer {
   }
 
   private mutating func readQuotedSheetReference() throws -> FormulaToken {
-    index += 1 // opening '
+    index += 1  // opening '
     var sheet = ""
     while index < chars.count {
       let ch = chars[index]
@@ -134,8 +134,8 @@ public nonisolated struct FormulaLexer {
     while index < chars.count {
       let ch = chars[index]
       if ch.isWhitespace || ch == "," || ch == ")" || ch == "(" || ch == "+" || ch == "-"
-          || ch == "*" || ch == "/" || ch == "^" || ch == "&" || ch == "=" || ch == "<" || ch == ">"
-          || ch == ":"
+        || ch == "*" || ch == "/" || ch == "^" || ch == "&" || ch == "=" || ch == "<" || ch == ">"
+        || ch == ":"
       {
         break
       }
@@ -157,7 +157,7 @@ public nonisolated struct FormulaLexer {
 
     // Row range like `2:2` / `1:10` (no decimal / exponent).
     if index < chars.count, chars[index] == ":",
-       !chars[start..<index].contains(where: { $0 == "." || $0 == "e" || $0 == "E" })
+      !chars[start..<index].contains(where: { $0 == "." || $0 == "e" || $0 == "E" })
     {
       let left = String(chars[start..<index])
       let afterColon = index + 1

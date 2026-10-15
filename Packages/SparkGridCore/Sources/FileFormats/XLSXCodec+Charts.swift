@@ -1,10 +1,10 @@
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
+import NumberFormat
 
-public extension XLSXCodec {
+extension XLSXCodec {
   /// Writes Excel-readable drawing parts for a sheet's charts and embedded images.
   /// Also keeps the Spark JSON sidecar for faithful round-trip of our chart model.
   public static func appendSheetDrawingParts(
@@ -24,11 +24,12 @@ public extension XLSXCodec {
 
     for (chartIndex, chart) in sheet.charts.enumerated() {
       let chartNum = sheetIndex * 100 + chartIndex + 1
-      files["xl/charts/chart\(chartNum).xml"] = Data(excelChartXML(chart, sheetName: sheet.name).utf8)
+      files["xl/charts/chart\(chartNum).xml"] = Data(
+        excelChartXML(chart, sheetName: sheet.name).utf8)
       drawingBody += twoCellAnchorXML(chart: chart, chartRelId: "rId\(relId)")
       drawingRels += """
-      <Relationship Id="rId\(relId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart\(chartNum).xml"/>
-      """
+        <Relationship Id="rId\(relId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart\(chartNum).xml"/>
+        """
       relId += 1
     }
 
@@ -36,20 +37,22 @@ public extension XLSXCodec {
       globalImageIndex += 1
       let mediaName = mediaFileName(for: image, index: globalImageIndex)
       files["xl/media/\(mediaName)"] = image.imageData
-      drawingBody += oneCellAnchorImageXML(image: image, relId: "rId\(relId)", pictureId: imageIndex + 1)
+      drawingBody += oneCellAnchorImageXML(
+        image: image, relId: "rId\(relId)", pictureId: imageIndex + 1)
       drawingRels += """
-      <Relationship Id="rId\(relId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/\(mediaName)"/>
-      """
+        <Relationship Id="rId\(relId)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/\(mediaName)"/>
+        """
       relId += 1
     }
 
     files["xl/drawings/drawing\(sheetNum).xml"] = Data(drawingXML(body: drawingBody).utf8)
-    files["xl/drawings/_rels/drawing\(sheetNum).xml.rels"] = Data("""
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    \(drawingRels)
-    </Relationships>
-    """.utf8)
+    files["xl/drawings/_rels/drawing\(sheetNum).xml.rels"] = Data(
+      """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      \(drawingRels)
+      </Relationships>
+      """.utf8)
     return true
   }
 
@@ -61,11 +64,11 @@ public extension XLSXCodec {
     guard hasDrawing else { return nil }
     let sheetNum = sheetIndex + 1
     let xml = """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing\(sheetNum).xml"/>
-    </Relationships>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing\(sheetNum).xml"/>
+      </Relationships>
+      """
     return Data(xml.utf8)
   }
 
@@ -75,13 +78,13 @@ public extension XLSXCodec {
       guard !sheet.charts.isEmpty || !sheet.images.isEmpty else { continue }
       let sheetNum = sheetIndex + 1
       overrides += """
-      <Override PartName="/xl/drawings/drawing\(sheetNum).xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
-      """
+        <Override PartName="/xl/drawings/drawing\(sheetNum).xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+        """
       for (chartIndex, _) in sheet.charts.enumerated() {
         let chartNum = sheetIndex * 100 + chartIndex + 1
         overrides += """
-        <Override PartName="/xl/charts/chart\(chartNum).xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
-        """
+          <Override PartName="/xl/charts/chart\(chartNum).xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+          """
       }
     }
     return overrides
@@ -106,24 +109,24 @@ public extension XLSXCodec {
     let toCol = SheetImage.emu(fromPoints: chart.endXOffset)
     let toRow = SheetImage.emu(fromPoints: chart.endYOffset)
     return """
-    <xdr:twoCellAnchor>
-      <xdr:from><xdr:col>\(chart.anchorCol)</xdr:col><xdr:colOff>\(fromCol)</xdr:colOff><xdr:row>\(chart.anchorRow)</xdr:row><xdr:rowOff>\(fromRow)</xdr:rowOff></xdr:from>
-      <xdr:to><xdr:col>\(endCol)</xdr:col><xdr:colOff>\(toCol)</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>\(toRow)</xdr:rowOff></xdr:to>
-      <xdr:graphicFrame macro="">
-        <xdr:nvGraphicFramePr>
-          <xdr:cNvPr id="2" name="\(escapeXML(chart.title))"/>
-          <xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></xdr:cNvGraphicFramePr>
-        </xdr:nvGraphicFramePr>
-        <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm>
-        <a:graphic>
-          <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
-            <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="\(chartRelId)"/>
-          </a:graphicData>
-        </a:graphic>
-      </xdr:graphicFrame>
-      <xdr:clientData/>
-    </xdr:twoCellAnchor>
-    """
+      <xdr:twoCellAnchor>
+        <xdr:from><xdr:col>\(chart.anchorCol)</xdr:col><xdr:colOff>\(fromCol)</xdr:colOff><xdr:row>\(chart.anchorRow)</xdr:row><xdr:rowOff>\(fromRow)</xdr:rowOff></xdr:from>
+        <xdr:to><xdr:col>\(endCol)</xdr:col><xdr:colOff>\(toCol)</xdr:colOff><xdr:row>\(endRow)</xdr:row><xdr:rowOff>\(toRow)</xdr:rowOff></xdr:to>
+        <xdr:graphicFrame macro="">
+          <xdr:nvGraphicFramePr>
+            <xdr:cNvPr id="2" name="\(escapeXML(chart.title))"/>
+            <xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></xdr:cNvGraphicFramePr>
+          </xdr:nvGraphicFramePr>
+          <xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></a:xfrm>
+          <a:graphic>
+            <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+              <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="\(chartRelId)"/>
+            </a:graphicData>
+          </a:graphic>
+        </xdr:graphicFrame>
+        <xdr:clientData/>
+      </xdr:twoCellAnchor>
+      """
   }
 
   private static func excelChartXML(_ chart: SheetChart, sheetName: String) -> String {
@@ -149,46 +152,46 @@ public extension XLSXCodec {
     switch chart.kind {
     case .bar:
       seriesInner = """
-      <c:barChart>
-        <c:barDir val="col"/>
-        <c:grouping val="clustered"/>
-        \(seriesBody)
-        <c:axId val="1"/><c:axId val="2"/>
-      </c:barChart>
-      """
+        <c:barChart>
+          <c:barDir val="col"/>
+          <c:grouping val="clustered"/>
+          \(seriesBody)
+          <c:axId val="1"/><c:axId val="2"/>
+        </c:barChart>
+        """
     case .line:
       seriesInner = """
-      <c:lineChart>
-        <c:grouping val="standard"/>
-        \(seriesBody)
-        <c:axId val="1"/><c:axId val="2"/>
-      </c:lineChart>
-      """
+        <c:lineChart>
+          <c:grouping val="standard"/>
+          \(seriesBody)
+          <c:axId val="1"/><c:axId val="2"/>
+        </c:lineChart>
+        """
     case .area:
       seriesInner = """
-      <c:areaChart>
-        <c:grouping val="standard"/>
-        \(seriesBody)
-        <c:axId val="1"/><c:axId val="2"/>
-      </c:areaChart>
-      """
+        <c:areaChart>
+          <c:grouping val="standard"/>
+          \(seriesBody)
+          <c:axId val="1"/><c:axId val="2"/>
+        </c:areaChart>
+        """
     }
 
     return """
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-      <c:chart>
-        \(titleXML(chart))
-        <c:plotArea>
-          <c:layout/>
-          \(seriesInner)
-          \(axisXML(tag: "c:catAx", id: "1", position: "b", cross: "2", title: chart.categoryAxisTitle, gridlines: chart.showsGridlines))
-          \(axisXML(tag: "c:valAx", id: "2", position: "l", cross: "1", title: chart.valueAxisTitle, gridlines: chart.showsGridlines))
-        </c:plotArea>
-        \(legendXML(chart))
-      </c:chart>
-    </c:chartSpace>
-    """
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <c:chart>
+          \(titleXML(chart))
+          <c:plotArea>
+            <c:layout/>
+            \(seriesInner)
+            \(axisXML(tag: "c:catAx", id: "1", position: "b", cross: "2", title: chart.categoryAxisTitle, gridlines: chart.showsGridlines))
+            \(axisXML(tag: "c:valAx", id: "2", position: "l", cross: "1", title: chart.valueAxisTitle, gridlines: chart.showsGridlines))
+          </c:plotArea>
+          \(legendXML(chart))
+        </c:chart>
+      </c:chartSpace>
+      """
   }
 
   private static func seriesXML(_ chart: SheetChart, catRef: String, valRef: String) -> String {
@@ -200,9 +203,9 @@ public extension XLSXCodec {
     switch chart.kind {
     case .line:
       shape = """
-      <c:spPr><a:ln w="19050">\(fill)</a:ln></c:spPr>
-      <c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>\(fill)</c:spPr></c:marker>
-      """
+        <c:spPr><a:ln w="19050">\(fill)</a:ln></c:spPr>
+        <c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>\(fill)</c:spPr></c:marker>
+        """
     case .bar, .area:
       shape = "<c:spPr>\(fill)</c:spPr>"
     }
@@ -210,25 +213,26 @@ public extension XLSXCodec {
       guard let point = chart.pointColors[index] else { return nil }
       let pointFill = solidFillXML(point)
       return """
-      <c:dPt><c:idx val="\(index)"/>\(pointShapeXML(pointFill, kind: chart.kind))</c:dPt>
-      """
+        <c:dPt><c:idx val="\(index)"/>\(pointShapeXML(pointFill, kind: chart.kind))</c:dPt>
+        """
     }.joined()
     return """
-    <c:ser>
-      <c:idx val="0"/><c:order val="0"/>
-      <c:tx><c:v>\(escapeXML(name))</c:v></c:tx>
-      \(shape)
-      \(points)
-      <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
-      <c:val><c:numRef><c:f>\(escapeXML(valRef))</c:f></c:numRef></c:val>
-    </c:ser>
-    """
+      <c:ser>
+        <c:idx val="0"/><c:order val="0"/>
+        <c:tx><c:v>\(escapeXML(name))</c:v></c:tx>
+        \(shape)
+        \(points)
+        <c:cat><c:strRef><c:f>\(escapeXML(catRef))</c:f></c:strRef></c:cat>
+        <c:val><c:numRef><c:f>\(escapeXML(valRef))</c:f></c:numRef></c:val>
+      </c:ser>
+      """
   }
 
   private static func pointShapeXML(_ fill: String, kind: SheetChart.Kind) -> String {
     switch kind {
     case .line:
-      return "<c:marker><c:symbol val=\"circle\"/><c:spPr>\(fill)</c:spPr></c:marker><c:spPr><a:ln>\(fill)</a:ln></c:spPr>"
+      return
+        "<c:marker><c:symbol val=\"circle\"/><c:spPr>\(fill)</c:spPr></c:marker><c:spPr><a:ln>\(fill)</a:ln></c:spPr>"
     case .bar, .area:
       return "<c:spPr>\(fill)</c:spPr>"
     }
@@ -242,12 +246,12 @@ public extension XLSXCodec {
     let title = chart.title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !title.isEmpty else { return #"<c:autoTitleDeleted val="1"/>"# }
     return """
-    <c:title>
-      <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(title))</a:t></a:r></a:p></c:rich></c:tx>
-      <c:overlay val="0"/>
-    </c:title>
-    <c:autoTitleDeleted val="0"/>
-    """
+      <c:title>
+        <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(title))</a:t></a:r></a:p></c:rich></c:tx>
+        <c:overlay val="0"/>
+      </c:title>
+      <c:autoTitleDeleted val="0"/>
+      """
   }
 
   private static func legendXML(_ chart: SheetChart) -> String {
@@ -267,21 +271,24 @@ public extension XLSXCodec {
   ) -> String {
     let grid = gridlines ? "<c:majorGridlines/>" : ""
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    let titleXML = trimmed.isEmpty ? "" : """
-    <c:title>
-      <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(trimmed))</a:t></a:r></a:p></c:rich></c:tx>
-      <c:overlay val="0"/>
-    </c:title>
-    """
+    let titleXML =
+      trimmed.isEmpty
+      ? ""
+      : """
+      <c:title>
+        <c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>\(escapeXML(trimmed))</a:t></a:r></a:p></c:rich></c:tx>
+        <c:overlay val="0"/>
+      </c:title>
+      """
     return """
-    <\(tag)>
-      <c:axId val="\(id)"/>
-      <c:scaling><c:orientation val="minMax"/></c:scaling>
-      <c:axPos val="\(position)"/>
-      \(grid)
-      \(titleXML)
-      <c:crossAx val="\(cross)"/>
-    </\(tag)>
-    """
+      <\(tag)>
+        <c:axId val="\(id)"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:axPos val="\(position)"/>
+        \(grid)
+        \(titleXML)
+        <c:crossAx val="\(cross)"/>
+      </\(tag)>
+      """
   }
 }

@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct FormattingToolbar: View {
   @Bindable var viewModel: SpreadsheetViewModel
@@ -80,12 +80,16 @@ struct FormattingToolbar: View {
 
   private var historyGroup: some View {
     HStack(spacing: 4) {
-      ToolbarIconButton(systemName: "arrow.uturn.backward", title: "Undo", showLabel: showLabels, active: false) {
+      ToolbarIconButton(
+        systemName: "arrow.uturn.backward", title: "Undo", showLabel: showLabels, active: false
+      ) {
         undoManager?.undo()
       }
       .disabled(!(undoManager?.canUndo ?? false))
 
-      ToolbarIconButton(systemName: "arrow.uturn.forward", title: "Redo", showLabel: showLabels, active: false) {
+      ToolbarIconButton(
+        systemName: "arrow.uturn.forward", title: "Redo", showLabel: showLabels, active: false
+      ) {
         undoManager?.redo()
       }
       .disabled(!(undoManager?.canRedo ?? false))
@@ -144,13 +148,16 @@ struct FormattingToolbar: View {
       .frame(width: 130)
 
       HStack(spacing: 4) {
-        ToolbarIconButton(systemName: "minus", title: "Smaller", showLabel: showLabels, active: false) {
+        ToolbarIconButton(
+          systemName: "minus", title: "Smaller", showLabel: showLabels, active: false
+        ) {
           viewModel.adjustFontSize(by: -1)
           syncFontSizeFromSelection()
         }
         FontSizeTextField(text: $fontSizeText, onSubmit: applyFontSizeFromField)
           .frame(width: 32)
-        ToolbarIconButton(systemName: "plus", title: "Larger", showLabel: showLabels, active: false) {
+        ToolbarIconButton(systemName: "plus", title: "Larger", showLabel: showLabels, active: false)
+        {
           viewModel.adjustFontSize(by: 1)
           syncFontSizeFromSelection()
         }
@@ -160,19 +167,31 @@ struct FormattingToolbar: View {
 
   private var styleGroup: some View {
     HStack(spacing: 4) {
-      ToolbarIconButton(systemName: "bold", title: "Bold", showLabel: showLabels, active: viewModel.selectedFormat.bold) {
+      ToolbarIconButton(
+        systemName: "bold", title: "Bold", showLabel: showLabels,
+        active: viewModel.selectedFormat.bold
+      ) {
         viewModel.toggleBold()
       }
 
-      ToolbarIconButton(systemName: "italic", title: "Italic", showLabel: showLabels, active: viewModel.selectedFormat.italic) {
+      ToolbarIconButton(
+        systemName: "italic", title: "Italic", showLabel: showLabels,
+        active: viewModel.selectedFormat.italic
+      ) {
         viewModel.toggleItalic()
       }
 
-      ToolbarIconButton(systemName: "strikethrough", title: "Strike", showLabel: showLabels, active: viewModel.selectedFormat.strikethrough) {
+      ToolbarIconButton(
+        systemName: "strikethrough", title: "Strike", showLabel: showLabels,
+        active: viewModel.selectedFormat.strikethrough
+      ) {
         viewModel.toggleStrikethrough()
       }
 
-      ToolbarIconButton(systemName: "underline", title: "Underline", showLabel: showLabels, active: viewModel.selectedFormat.underline) {
+      ToolbarIconButton(
+        systemName: "underline", title: "Underline", showLabel: showLabels,
+        active: viewModel.selectedFormat.underline
+      ) {
         viewModel.toggleUnderline()
       }
     }
@@ -312,13 +331,19 @@ struct FormattingToolbar: View {
   private var alignGroup: some View {
     HStack(spacing: 4) {
       ToolbarMenuButton(title: "Align", showLabel: showLabels, width: 32) {
-        Button { viewModel.setHorizontalAlign(.left) } label: {
+        Button {
+          viewModel.setHorizontalAlign(.left)
+        } label: {
           Label("Align left", systemImage: "text.alignleft")
         }
-        Button { viewModel.setHorizontalAlign(.center) } label: {
+        Button {
+          viewModel.setHorizontalAlign(.center)
+        } label: {
           Label("Align center", systemImage: "text.aligncenter")
         }
-        Button { viewModel.setHorizontalAlign(.right) } label: {
+        Button {
+          viewModel.setHorizontalAlign(.right)
+        } label: {
           Label("Align right", systemImage: "text.alignright")
         }
       } label: {
@@ -327,13 +352,19 @@ struct FormattingToolbar: View {
       }
 
       ToolbarMenuButton(title: "Vertical", showLabel: showLabels, width: 32) {
-        Button { viewModel.setVerticalAlign(.top) } label: {
+        Button {
+          viewModel.setVerticalAlign(.top)
+        } label: {
           Label("Align top", systemImage: "arrow.up.to.line")
         }
-        Button { viewModel.setVerticalAlign(.middle) } label: {
+        Button {
+          viewModel.setVerticalAlign(.middle)
+        } label: {
           Label("Align middle", systemImage: "arrow.up.and.down")
         }
-        Button { viewModel.setVerticalAlign(.bottom) } label: {
+        Button {
+          viewModel.setVerticalAlign(.bottom)
+        } label: {
           Label("Align bottom", systemImage: "arrow.down.to.line")
         }
       } label: {
@@ -486,7 +517,9 @@ private struct FontSizeTextField: NSViewRepresentable {
       text = filtered
     }
 
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector)
+      -> Bool
+    {
       if commandSelector == #selector(NSResponder.insertNewline(_:)) {
         onSubmit()
         control.window?.makeFirstResponder(nil)
@@ -682,7 +715,9 @@ private struct ToolbarColorChartButton<Label: View>: View {
   @State private var showChart = false
 
   var body: some View {
-    Button { showChart = true } label: {
+    Button {
+      showChart = true
+    } label: {
       Group {
         if showsChevronLabel {
           Image(systemName: "chevron.down")
@@ -1124,7 +1159,9 @@ private struct ToolbarIconButton: View {
         Image(systemName: systemName)
           .font(.system(size: 13, weight: active ? .semibold : .regular))
           .frame(width: 32, height: showLabel ? 24 : 32)
-          .background(active ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+          .background(
+            active ? Color.accentColor.opacity(0.22) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 4))
 
         if showLabel {
           Text(title)

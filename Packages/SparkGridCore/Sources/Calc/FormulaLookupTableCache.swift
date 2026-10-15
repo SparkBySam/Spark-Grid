@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 public nonisolated struct LookupTableKey: Hashable {
   public var sheet: String
@@ -41,13 +41,15 @@ public nonisolated final class FormulaLookupTableCache {
     build: () -> [AggregateValueKey: CellValue]
   ) -> CellValue? {
     guard let needleKey = AggregateValueKey.from(cellValue: needle) else { return nil }
-    let map = exactMaps[key] ?? {
-      let buildStart = CFAbsoluteTimeGetCurrent()
-      let built = build()
-      profile?.lookupIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
-      exactMaps[key] = built
-      return built
-    }()
+    let map =
+      exactMaps[key]
+      ?? {
+        let buildStart = CFAbsoluteTimeGetCurrent()
+        let built = build()
+        profile?.lookupIndexBuildSeconds += CFAbsoluteTimeGetCurrent() - buildStart
+        exactMaps[key] = built
+        return built
+      }()
     return map[needleKey]
   }
 }

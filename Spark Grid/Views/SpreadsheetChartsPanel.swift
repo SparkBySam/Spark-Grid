@@ -1,7 +1,7 @@
 import AppKit
 import Charts
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct SpreadsheetChartsPanel: View {
   @Bindable var viewModel: SpreadsheetViewModel
@@ -140,9 +140,12 @@ struct SpreadsheetChartsPanel: View {
         ChartFormatFields(
           title: titleBinding(for: chart),
           showsLegend: flagBinding(for: chart, keyPath: \.showsLegend, actionName: "Chart Legend"),
-          showsGridlines: flagBinding(for: chart, keyPath: \.showsGridlines, actionName: "Chart Gridlines"),
-          categoryAxisTitle: textBinding(for: chart, keyPath: \.categoryAxisTitle, actionName: "Axis Title"),
-          valueAxisTitle: textBinding(for: chart, keyPath: \.valueAxisTitle, actionName: "Axis Title"),
+          showsGridlines: flagBinding(
+            for: chart, keyPath: \.showsGridlines, actionName: "Chart Gridlines"),
+          categoryAxisTitle: textBinding(
+            for: chart, keyPath: \.categoryAxisTitle, actionName: "Axis Title"),
+          valueAxisTitle: textBinding(
+            for: chart, keyPath: \.valueAxisTitle, actionName: "Axis Title"),
           seriesColor: ChartColorPaint.color(chart.resolvedSeriesColor),
           onSeriesColor: { color in
             viewModel.updateChartContent(id: chart.id, actionName: "Chart Color") {
@@ -172,7 +175,8 @@ struct SpreadsheetChartsPanel: View {
     .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     .overlay(
       RoundedRectangle(cornerRadius: 8)
-        .strokeBorder(viewModel.selectedChartID == chart.id ? Color.accentColor : Color.clear, lineWidth: 2)
+        .strokeBorder(
+          viewModel.selectedChartID == chart.id ? Color.accentColor : Color.clear, lineWidth: 2)
     )
   }
 
@@ -351,7 +355,8 @@ struct SheetChartView: View {
     if renderPoints.isEmpty {
       let inset: CGFloat = 8
       if let innerWidth = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.width - inset),
-         let innerHeight = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.height - inset) {
+        let innerHeight = OnSheetChartGeometry.placedHeight(top: inset, bottom: size.height - inset)
+      {
         VStack(spacing: 6) {
           Text("Nothing to plot")
             .font(.system(size: 12, weight: .medium))
@@ -364,8 +369,9 @@ struct SheetChartView: View {
         .position(x: size.width / 2, y: size.height / 2)
       }
     } else if let chrome = chartChrome(in: size),
-              let yDomain = Self.plotValueDomain(values: renderPoints.map(\.value)),
-              let xDomain = Self.plotCategoryDomain(count: renderPoints.count) {
+      let yDomain = Self.plotValueDomain(values: renderPoints.map(\.value)),
+      let xDomain = Self.plotCategoryDomain(count: renderPoints.count)
+    {
       VStack(alignment: .leading, spacing: Self.chromeSpacing) {
         HStack(alignment: .center, spacing: Self.chromeSpacing) {
           if chrome.showValueTitle {
@@ -456,8 +462,10 @@ struct SheetChartView: View {
   /// on with its own automatic axis insets.
   private func chartChrome(in size: CGSize) -> ChartChrome? {
     var showLegend = chart.showsLegend
-    var showCategoryTitle = !chart.categoryAxisTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    var showValueTitle = !chart.valueAxisTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var showCategoryTitle = !chart.categoryAxisTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      .isEmpty
+    var showValueTitle = !chart.valueAxisTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      .isEmpty
 
     func reservedHeight(legend: Bool, category: Bool) -> CGFloat {
       var bands: [CGFloat] = []
@@ -481,7 +489,7 @@ struct SheetChartView: View {
       plotHeight = size.height - reserved
     }
     guard let height = OnSheetChartGeometry.placedHeight(top: 0, bottom: plotHeight),
-          height >= Self.minimumPlotHeight
+      height >= Self.minimumPlotHeight
     else {
       return nil
     }
@@ -495,7 +503,8 @@ struct SheetChartView: View {
         showValueTitle = false
       }
     }
-    let bottomPadding = Self.clampedBottomPadding(idealPadding: Self.plotBottomInset, availableHeight: height)
+    let bottomPadding = Self.clampedBottomPadding(
+      idealPadding: Self.plotBottomInset, availableHeight: height)
     return ChartChrome(
       plotWidth: plotWidth,
       plotHeight: height,
@@ -616,7 +625,8 @@ struct SheetChartView: View {
         if let plotAnchor = proxy.plotFrame {
           let plot = geo[plotAnchor].standardized
           if bottomPadding >= Self.minimumCategoryLabelPadding,
-             OnSheetChartGeometry.placedHeight(top: plot.minY, bottom: plot.maxY) != nil {
+            OnSheetChartGeometry.placedHeight(top: plot.minY, bottom: plot.maxY) != nil
+          {
             let placements = categoryPlacements(plot: plot, chartWidth: geo.size.width)
             ForEach(placements, id: \.index) { placement in
               Text(placement.text)
@@ -635,7 +645,9 @@ struct SheetChartView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  private func categoryPlacements(plot: CGRect, chartWidth: CGFloat) -> [ChartCategoryLabelLayout.Placement] {
+  private func categoryPlacements(plot: CGRect, chartWidth: CGFloat) -> [ChartCategoryLabelLayout
+    .Placement]
+  {
     let points = renderPoints
     let indexes = ChartCategoryLabelLayout.labelIndexes(count: points.count)
     let lastIndex = indexes.last
@@ -743,7 +755,9 @@ struct OnSheetChartCard: View {
     .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
     .overlay(
       RoundedRectangle(cornerRadius: 6)
-        .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
+        .strokeBorder(
+          selected ? Color.accentColor : Color(nsColor: .separatorColor),
+          lineWidth: selected ? 2 : 1)
     )
     .overlay {
       if selected {
@@ -763,7 +777,8 @@ struct OnSheetChartCard: View {
     let titleHeight: CGFloat = title.isEmpty ? 0 : 14
     let spacing: CGFloat = title.isEmpty ? 0 : 2
     if let innerWidth = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.width - pad),
-       let innerHeight = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.height - pad) {
+      let innerHeight = OnSheetChartGeometry.placedHeight(top: pad, bottom: size.height - pad)
+    {
       if let chartHeight = OnSheetChartGeometry.placedHeight(
         top: titleHeight + spacing,
         bottom: innerHeight

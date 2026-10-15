@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SparkGridCore
@@ -527,10 +528,11 @@ final class SpreadsheetViewModel {
       if alreadyUsed {
         replaceSelection(with: CellRange(start: .origin, end: wholeEnd))
       } else {
-        replaceSelection(with: CellRange(
-          start: CellAddress(row: usedNorm.minRow, col: usedNorm.minCol),
-          end: CellAddress(row: usedNorm.maxRow, col: usedNorm.maxCol)
-        ))
+        replaceSelection(
+          with: CellRange(
+            start: CellAddress(row: usedNorm.minRow, col: usedNorm.minCol),
+            end: CellAddress(row: usedNorm.maxRow, col: usedNorm.maxCol)
+          ))
       }
     } else {
       replaceSelection(with: CellRange(start: .origin, end: wholeEnd))
@@ -603,10 +605,11 @@ final class SpreadsheetViewModel {
     let sheet = activeSheet
     let a = max(0, min(sheet.effectiveColumnCount - 1, startCol))
     let b = max(0, min(sheet.effectiveColumnCount - 1, endCol))
-    replaceSelection(with: CellRange(
-      start: CellAddress(row: 0, col: a),
-      end: CellAddress(row: sheet.effectiveRowCount - 1, col: b)
-    ))
+    replaceSelection(
+      with: CellRange(
+        start: CellAddress(row: 0, col: a),
+        end: CellAddress(row: sheet.effectiveRowCount - 1, col: b)
+      ))
     syncEditTextFromSelection()
     isEditing = false
   }
@@ -615,9 +618,9 @@ final class SpreadsheetViewModel {
     let clampedCol = max(0, min(activeSheet.effectiveColumnCount - 1, col))
     let range = selectionRange.normalized
     if !hasMultipleSelectionRanges,
-       selectionAxis == .column,
-       range.minCol == clampedCol,
-       range.maxCol == clampedCol
+      selectionAxis == .column,
+      range.minCol == clampedCol,
+      range.maxCol == clampedCol
     {
       select(CellAddress(row: 0, col: clampedCol))
     } else {
@@ -634,10 +637,11 @@ final class SpreadsheetViewModel {
     let sheet = activeSheet
     let a = max(0, min(sheet.effectiveRowCount - 1, startRow))
     let b = max(0, min(sheet.effectiveRowCount - 1, endRow))
-    replaceSelection(with: CellRange(
-      start: CellAddress(row: a, col: 0),
-      end: CellAddress(row: b, col: sheet.effectiveColumnCount - 1)
-    ))
+    replaceSelection(
+      with: CellRange(
+        start: CellAddress(row: a, col: 0),
+        end: CellAddress(row: b, col: sheet.effectiveColumnCount - 1)
+      ))
     syncEditTextFromSelection()
     isEditing = false
   }
@@ -646,9 +650,9 @@ final class SpreadsheetViewModel {
     let clampedRow = max(0, min(activeSheet.effectiveRowCount - 1, row))
     let range = selectionRange.normalized
     if !hasMultipleSelectionRanges,
-       selectionAxis == .row,
-       range.minRow == clampedRow,
-       range.maxRow == clampedRow
+      selectionAxis == .row,
+      range.minRow == clampedRow,
+      range.maxRow == clampedRow
     {
       select(CellAddress(row: clampedRow, col: 0))
     } else {
@@ -725,8 +729,10 @@ final class SpreadsheetViewModel {
   private func applyInferredNumberFormatIfNeeded(to cell: inout Cell, raw: String) {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.hasSuffix("%"),
-          !FormulaSyntax.isFormula(trimmed),
-          Double(String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")) != nil
+      !FormulaSyntax.isFormula(trimmed),
+      Double(
+        String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces).replacingOccurrences(
+          of: ",", with: "")) != nil
     else { return }
     var format = cell.format ?? CellFormat()
     if format.numberFormat == .general {
@@ -767,7 +773,8 @@ final class SpreadsheetViewModel {
     sheet.columnWidths[col] = newWidth
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerColumnWidthUndo(col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Auto Fit Column")
+      registerColumnWidthUndo(
+        col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Auto Fit Column")
     }
   }
 
@@ -798,7 +805,8 @@ final class SpreadsheetViewModel {
     sheet.rowHeights[row] = newHeight
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerRowHeightUndo(row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Auto Fit Row")
+      registerRowHeightUndo(
+        row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Auto Fit Row")
     }
   }
 
@@ -808,7 +816,8 @@ final class SpreadsheetViewModel {
     for col in 0...lastCol {
       autoFitColumn(col, recordUndo: false)
     }
-    registerColumnWidthsUndo(before: before, after: activeSheet.columnWidths, actionName: "Auto Fit Columns")
+    registerColumnWidthsUndo(
+      before: before, after: activeSheet.columnWidths, actionName: "Auto Fit Columns")
   }
 
   func autoFitAllRows() {
@@ -817,7 +826,8 @@ final class SpreadsheetViewModel {
     for row in 0...lastRow where !isRowHiddenByFilter(row) {
       autoFitRow(row, recordUndo: false)
     }
-    registerRowHeightsUndo(before: before, after: activeSheet.rowHeights, actionName: "Auto Fit Rows")
+    registerRowHeightsUndo(
+      before: before, after: activeSheet.rowHeights, actionName: "Auto Fit Rows")
   }
 
   func columnWidth(for col: Int) -> CGFloat {
@@ -836,7 +846,8 @@ final class SpreadsheetViewModel {
     sheet.columnWidths[col] = newWidth
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerColumnWidthUndo(col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Resize Column")
+      registerColumnWidthUndo(
+        col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Resize Column")
     }
   }
 
@@ -848,7 +859,8 @@ final class SpreadsheetViewModel {
     sheet.rowHeights[row] = newHeight
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerRowHeightUndo(row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Resize Row")
+      registerRowHeightUndo(
+        row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Resize Row")
     }
   }
 
@@ -1360,7 +1372,9 @@ final class SpreadsheetViewModel {
     applyFormat(to: CellRange(start: address, end: address), mutate: mutate)
   }
 
-  private func registerFormatUndo(address: CellAddress, oldFormat: CellFormat, newFormat: CellFormat) {
+  private func registerFormatUndo(
+    address: CellAddress, oldFormat: CellFormat, newFormat: CellFormat
+  ) {
     undoManager?.registerUndo(withTarget: self) { target in
       target.applyFormat(oldFormat, at: address, skipUndo: true)
       target.undoManager?.registerUndo(withTarget: target) { inner in
@@ -1409,22 +1423,28 @@ final class SpreadsheetViewModel {
   }
 
   var insertRowAboveTitle: String {
-    Self.structureInsertTitle(count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Above")
+    Self.structureInsertTitle(
+      count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Above")
   }
 
   var insertRowBelowTitle: String {
-    Self.structureInsertTitle(count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Below")
+    Self.structureInsertTitle(
+      count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Below")
   }
 
   var insertColumnLeftTitle: String {
-    Self.structureInsertTitle(count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Left")
+    Self.structureInsertTitle(
+      count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Left")
   }
 
   var insertColumnRightTitle: String {
-    Self.structureInsertTitle(count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Right")
+    Self.structureInsertTitle(
+      count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Right")
   }
 
-  static func structureInsertTitle(count: Int, singular: String, plural: String, placement: String) -> String {
+  static func structureInsertTitle(count: Int, singular: String, plural: String, placement: String)
+    -> String
+  {
     if count <= 1 {
       return "Insert \(singular) \(placement)"
     }
@@ -1476,7 +1496,9 @@ final class SpreadsheetViewModel {
 
   /// Distinct selected indexes on one axis, plus the outer edges of that selection.
   /// A contiguous block's count is its span. Gaps in a multi-range selection are not counted.
-  private func structureSelectionBounds(_ axis: StructureInsertAxis) -> (min: Int, max: Int, count: Int) {
+  private func structureSelectionBounds(_ axis: StructureInsertAxis) -> (
+    min: Int, max: Int, count: Int
+  ) {
     let ranges = selectionRanges.isEmpty ? [selectionRange] : selectionRanges
     var seen = Set<Int>()
     var minIndex = Int.max
@@ -1665,14 +1687,19 @@ final class SpreadsheetViewModel {
       end: clamp(end)
     ).normalized
 
-    let srcRowCount = sourceRange.maxRow - sourceRange.minRow + 1
-    let srcColCount = sourceRange.maxCol - sourceRange.minCol + 1
+    let srcRowCount = InputBounds.span(from: sourceRange.minRow, through: sourceRange.maxRow)
+    let srcColCount = InputBounds.span(from: sourceRange.minCol, through: sourceRange.maxCol)
+    let fillRows = InputBounds.span(from: fillRange.minRow, through: fillRange.maxRow)
+    let fillCols = InputBounds.span(from: fillRange.minCol, through: fillRange.maxCol)
     guard srcRowCount > 0, srcColCount > 0 else { return }
+    guard InputBounds.materializedCount(rows: fillRows, cols: fillCols) != nil else { return }
 
     undoManager?.beginUndoGrouping()
     for row in fillRange.minRow...fillRange.maxRow {
       for col in fillRange.minCol...fillRange.maxCol {
-        if row >= sourceRange.minRow && row <= sourceRange.maxRow && col >= sourceRange.minCol && col <= sourceRange.maxCol {
+        if row >= sourceRange.minRow && row <= sourceRange.maxRow && col >= sourceRange.minCol
+          && col <= sourceRange.maxCol
+        {
           continue
         }
         let srcRow = sourceRange.minRow + positiveMod(row - sourceRange.minRow, srcRowCount)
@@ -1698,6 +1725,8 @@ final class SpreadsheetViewModel {
   }
 
   private func insertRows(at index: Int, count: Int) {
+    let count = InputBounds.cappedCount(count)
+    guard count > 0 else { return }
     commitEditIfNeeded()
     let snapshot = workbook
     var wb = workbook
@@ -1720,6 +1749,8 @@ final class SpreadsheetViewModel {
   }
 
   private func deleteRows(at index: Int, count: Int) {
+    let count = InputBounds.cappedCount(count)
+    guard count > 0 else { return }
     commitEditIfNeeded()
     let snapshot = workbook
     var wb = workbook
@@ -1743,6 +1774,8 @@ final class SpreadsheetViewModel {
   }
 
   private func insertColumns(at index: Int, count: Int) {
+    let count = InputBounds.cappedCount(count)
+    guard count > 0 else { return }
     commitEditIfNeeded()
     let snapshot = workbook
     var wb = workbook
@@ -1765,6 +1798,8 @@ final class SpreadsheetViewModel {
   }
 
   private func deleteColumns(at index: Int, count: Int) {
+    let count = InputBounds.cappedCount(count)
+    guard count > 0 else { return }
     commitEditIfNeeded()
     let snapshot = workbook
     var wb = workbook
@@ -1954,7 +1989,7 @@ final class SpreadsheetViewModel {
     guard !trimmed.isEmpty else { return }
     let upper = trimmed.uppercased()
     guard upper.first?.isLetter == true,
-          upper.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
+      upper.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
     else { return }
 
     let snapshot = workbook
@@ -2002,7 +2037,8 @@ final class SpreadsheetViewModel {
   }
 
   private func makeSelectionCopy() -> SelectionCopy? {
-    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) }) else {
+    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) })
+    else {
       return nil
     }
     if selectionRanges.count == 1 {
@@ -2010,7 +2046,9 @@ final class SpreadsheetViewModel {
       let region: SpreadsheetClipboard.CopyRegion
       if rangeHasContent(range) {
         region = SpreadsheetClipboard.copyRegion(from: activeSheet, range: range)
-      } else if let bounds = ConditionalFormatPaste.coveredBounds(on: activeSheet, intersecting: range) {
+      } else if let bounds = ConditionalFormatPaste.coveredBounds(
+        on: activeSheet, intersecting: range)
+      {
         region = SpreadsheetClipboard.copyRegion(from: activeSheet, range: bounds)
       } else {
         return nil
@@ -2028,7 +2066,8 @@ final class SpreadsheetViewModel {
 
   /// Copies cell raw values (including formulas) and records origin for relative paste.
   func copyFormulas() {
-    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) }) else { return }
+    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) })
+    else { return }
     let range = selectionRange.normalized
     let bounds = CellRange(
       start: CellAddress(row: range.minRow, col: range.minCol),
@@ -2053,7 +2092,8 @@ final class SpreadsheetViewModel {
     for (address, cell) in activeSheet.cells {
       guard !cell.raw.isEmpty else { continue }
       if address.row >= n.minRow, address.row <= n.maxRow,
-         address.col >= n.minCol, address.col <= n.maxCol {
+        address.col >= n.minCol, address.col <= n.maxCol
+      {
         return true
       }
     }
@@ -2139,13 +2179,19 @@ final class SpreadsheetViewModel {
   ) {
     let rowDelta = adjustFormulas ? origin.row - (sourceOrigin?.row ?? origin.row) : 0
     let colDelta = adjustFormulas ? origin.col - (sourceOrigin?.col ?? origin.col) : 0
+    let pasteRows = grid.count
+    let pasteCols = grid.map(\.count).max() ?? 0
+    guard InputBounds.materializedCount(rows: pasteRows, cols: pasteCols) != nil else { return }
 
     undoManager?.beginUndoGrouping()
     for (rowOffset, row) in grid.enumerated() {
       for (colOffset, value) in row.enumerated() {
         let address = CellAddress(row: origin.row + rowOffset, col: origin.col + colOffset)
-        guard address.row < activeSheet.effectiveRowCount, address.col < activeSheet.effectiveColumnCount else { continue }
-        let nextValue = adjustFormulas
+        guard address.row < activeSheet.effectiveRowCount,
+          address.col < activeSheet.effectiveColumnCount
+        else { continue }
+        let nextValue =
+          adjustFormulas
           ? FormulaRewriter.adjust(value, rowDelta: rowDelta, colDelta: colDelta)
           : value
         setCellValue(nextValue, at: address)
@@ -2207,5 +2253,3 @@ final class SpreadsheetViewModel {
     }
   }
 }
-
-import AppKit

@@ -1,7 +1,7 @@
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 /// Display formatting for a cell.
 public nonisolated struct CellFormat: Codable, Equatable, Sendable {
@@ -245,7 +245,7 @@ public nonisolated enum BorderStyle: String, Codable, Sendable, CaseIterable {
   }
 }
 
-public extension BorderEdge {
+extension BorderEdge {
   public static func styled(_ style: BorderStyle, color: CodableColor? = nil) -> BorderEdge {
     BorderEdge(style: style, color: color)
   }
@@ -323,11 +323,11 @@ public nonisolated struct CodableColor: Codable, Equatable, Hashable, Sendable {
   }
 }
 
-public extension CellFormat {
-  var isDefault: Bool { self == CellFormat() }
+extension CellFormat {
+  public var isDefault: Bool { self == CellFormat() }
 
   /// Merges a conditional-format overlay onto a base format.
-  static func merging(_ base: CellFormat?, overlay: ConditionalFormatStyle) -> CellFormat {
+  public static func merging(_ base: CellFormat?, overlay: ConditionalFormatStyle) -> CellFormat {
     overlay.applying(to: base ?? CellFormat())
   }
 }

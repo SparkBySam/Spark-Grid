@@ -50,7 +50,9 @@ public nonisolated enum A1Reference {
       colLetters.append(upper[index])
       index = upper.index(after: index)
     }
-    guard !colLetters.isEmpty, let col = A1Notation.columnIndex(from: colLetters) else { return nil }
+    guard !colLetters.isEmpty, let col = A1Notation.columnIndex(from: colLetters) else {
+      return nil
+    }
 
     if index < upper.endIndex, upper[index] == "$" {
       absRow = true
@@ -63,7 +65,9 @@ public nonisolated enum A1Reference {
       rowDigits.append(upper[index])
       index = upper.index(after: index)
     }
-    guard index == upper.endIndex, let rowNumber = Int(rowDigits), rowNumber >= 1 else { return nil }
+    guard index == upper.endIndex, let rowNumber = Int(rowDigits), rowNumber >= 1 else {
+      return nil
+    }
 
     return ParsedAddress(row: rowNumber - 1, col: col, absRow: absRow, absCol: absCol)
   }
@@ -88,7 +92,9 @@ public nonisolated enum A1Reference {
         letters.append(upper[index])
         index = upper.index(after: index)
       }
-      guard index == upper.endIndex, let col = A1Notation.columnIndex(from: letters) else { return nil }
+      guard index == upper.endIndex, let col = A1Notation.columnIndex(from: letters) else {
+        return nil
+      }
       return .column(col: col, absCol: abs)
     }
 
@@ -115,7 +121,7 @@ public nonisolated enum A1Reference {
       let sheetPart = String(trimmed[..<bang])
       let addressPart = String(trimmed[trimmed.index(after: bang)...])
       guard let sheet = decodeSheetName(sheetPart),
-            let parsed = parseAddress(addressPart)
+        let parsed = parseAddress(addressPart)
       else { return nil }
       var ref = parsed.asRef
       ref.sheet = sheet
@@ -136,7 +142,7 @@ public nonisolated enum A1Reference {
     let sheetPart = String(trimmed[..<bang])
     let rangePart = String(trimmed[trimmed.index(after: bang)...])
     guard let sheet = decodeSheetName(sheetPart),
-          let (start, end) = parseLocalRange(rangePart)
+      let (start, end) = parseLocalRange(rangePart)
     else { return nil }
     var s = start
     var e = end
@@ -216,8 +222,8 @@ public nonisolated enum A1Reference {
   private static func parseLocalRange(_ text: String) -> (FormulaRef, FormulaRef)? {
     let parts = text.split(separator: ":", omittingEmptySubsequences: false)
     guard parts.count == 2,
-          let start = parseRangeEndpoint(String(parts[0])),
-          let end = parseRangeEndpoint(String(parts[1]))
+      let start = parseRangeEndpoint(String(parts[0])),
+      let end = parseRangeEndpoint(String(parts[1]))
     else { return nil }
     return (start.asRef, end.asRef)
   }
@@ -234,7 +240,8 @@ public nonisolated enum A1Reference {
   }
 
   private static func encodeSheetName(_ name: String) -> String {
-    let needsQuotes = name.contains(" ")
+    let needsQuotes =
+      name.contains(" ")
       || name.contains("'")
       || name.contains("!")
       || name.first?.isNumber == true

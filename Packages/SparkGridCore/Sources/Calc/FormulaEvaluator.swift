@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 private nonisolated enum XLookupMatchMode {
   case exact
@@ -43,6 +43,15 @@ public nonisolated struct FormulaEvaluator {
 
   public var evaluationOriginCell = EvaluationOriginCell()
 
+  /// Shared across copies of this struct so nested `evaluate` calls see one depth.
+  public nonisolated final class EvaluationBudget: @unchecked Sendable {
+    public var depth = 0
+    public var names: Set<String> = []
+    public var maxDepth = InputBounds.maxFormulaNesting
+  }
+
+  public var budget = EvaluationBudget()
+
   public var evaluationOrigin: CellAddress? {
     get { evaluationOriginCell.address }
     set { evaluationOriginCell.address = newValue }
@@ -71,6 +80,11 @@ public nonisolated struct FormulaEvaluator {
   }
 
   public func evaluate(_ expr: FormulaExpr) -> CellValue {
+    if budget.depth >= budget.maxDepth {
+      return .error(.value)
+    }
+    budget.depth += 1
+    defer { budget.depth -= 1 }
     switch expr {
     case .number(let n):
       return .number(n)
@@ -81,8 +95,13 @@ public nonisolated struct FormulaEvaluator {
     case .error(let e):
       return .error(e)
     case .namedRange(let name):
+      let key = name.lowercased()
+      if budget.names.contains(key) { return .error(.cycle) }
       guard let resolved = namedRangeLookup(name) else { return .error(.name) }
-      return evaluate(resolved)
+      budget.names.insert(key)
+      let resolvedValue = evaluate(resolved)
+      budget.names.remove(key)
+      return resolvedValue
     case .cellRef(let ref):
       return lookup(ref)
     case .range:
@@ -106,7 +125,9 @@ public nonisolated struct FormulaEvaluator {
     return .error(.arrayResult)
   }
 
-  private func evalBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr) -> CellValue {
+  private func evalBinary(_ op: BinaryOp, _ lhsExpr: FormulaExpr, _ rhsExpr: FormulaExpr)
+    -> CellValue
+  {
     let values = arrayBinary(op, lhsExpr, rhsExpr, cache: nil)
     if values.count == 1 { return values[0] }
     if values.isEmpty { return .blank }
@@ -202,9 +223,11 @@ public nonisolated struct FormulaEvaluator {
 
   public func rangeCellValues(start: FormulaRef, end: FormulaRef) -> [CellValue] {
     let n = normalizedBounds(start: start, end: end)
-    let rows = n.maxRow - n.minRow + 1
-    let cols = n.maxCol - n.minCol + 1
-    let count = rows * cols
+    let rows = InputBounds.span(from: n.minRow, through: n.maxRow)
+    let cols = InputBounds.span(from: n.minCol, through: n.maxCol)
+    guard let count = InputBounds.materializedCount(rows: rows, cols: cols) else {
+      return [.error(.value)]
+    }
     guard count > 0 else { return [] }
     if let cache = aggregateRangeCache {
       let key = AggregateRangeKey(
@@ -217,7 +240,8 @@ public nonisolated struct FormulaEvaluator {
       return cache.rowMajorValues(key: key, count: count) { index in
         let row = n.minRow + index / cols
         let col = n.minCol + index % cols
-        var ref = FormulaRef(sheet: start.sheet ?? end.sheet, row: row, col: col, absRow: false, absCol: false)
+        var ref = FormulaRef(
+          sheet: start.sheet ?? end.sheet, row: row, col: col, absRow: false, absCol: false)
         return lookup(ref)
       }
     }
@@ -283,8 +307,8 @@ public nonisolated struct FormulaEvaluator {
   /// `IFERROR(VLOOKUP(needle, Config!…, col, FALSE), fallback)` — KPI config columns.
   private func fastIFERRORVLOOKUP(_ args: [FormulaExpr]) -> CellValue? {
     guard case .call(let name, let vargs) = unwrapFormulaExpr(args[0]),
-          name.uppercased() == "VLOOKUP",
-          vargs.count >= 3, vargs.count <= 4
+      name.uppercased() == "VLOOKUP",
+      vargs.count >= 3, vargs.count <= 4
     else { return nil }
     let value = tableLookup(vargs, horizontal: false)
     recalcProfile?.iferrorVlookupFastHits += 1
@@ -332,7 +356,8 @@ public nonisolated struct FormulaEvaluator {
     let profileStart = recalcProfile != nil ? CFAbsoluteTimeGetCurrent() : 0
     let result = evalCallBody(name, args)
     if let profile = recalcProfile {
-      profile.recordEval(function: name.uppercased(), seconds: CFAbsoluteTimeGetCurrent() - profileStart)
+      profile.recordEval(
+        function: name.uppercased(), seconds: CFAbsoluteTimeGetCurrent() - profileStart)
     }
     return result
   }
@@ -513,12 +538,59 @@ public nonisolated struct FormulaEvaluator {
       return evalCOLUMN(args)
     case "CHAR":
       return evalCHAR(args)
+    case "REPT":
+      return evalREPT(args)
+    case "SEQUENCE":
+      return evalSEQUENCE(args)
     case "TRUE":
       guard args.isEmpty else { return .error(.value) }
       return .bool(true)
     default:
       return .error(.name)
     }
+  }
+
+  private func evalREPT(_ args: [FormulaExpr]) -> CellValue {
+    guard args.count == 2 else { return .error(.value) }
+    let text = evaluate(args[0])
+    let times = evaluate(args[1])
+    if case .error = text { return text }
+    if case .error = times { return times }
+    guard let count = times.asNumber, count >= 0, count < Double(Int.max) else {
+      return .error(.value)
+    }
+    let repeats = Int(count)
+    let piece = text.asString
+    if repeats == 0 || piece.isEmpty { return .string("") }
+    let (total, overflow) = piece.count.multipliedReportingOverflow(by: repeats)
+    if overflow || total > InputBounds.maxRepeatCharacters { return .error(.value) }
+    return .string(String(repeating: piece, count: repeats))
+  }
+
+  private func evalSEQUENCE(_ args: [FormulaExpr]) -> CellValue {
+    guard (1...4).contains(args.count) else { return .error(.value) }
+    let rowsValue = evaluate(args[0])
+    if case .error = rowsValue { return rowsValue }
+    guard let rowsNumber = rowsValue.asNumber else { return .error(.value) }
+    let colsValue = args.count > 1 ? evaluate(args[1]) : .number(1)
+    if case .error = colsValue { return colsValue }
+    let startValue = args.count > 2 ? evaluate(args[2]) : .number(1)
+    if case .error = startValue { return startValue }
+    let stepValue = args.count > 3 ? evaluate(args[3]) : .number(1)
+    if case .error = stepValue { return stepValue }
+    guard let colsNumber = colsValue.asNumber,
+      let start = startValue.asNumber,
+      let step = stepValue.asNumber
+    else { return .error(.value) }
+    let rows = Int(rowsNumber)
+    let cols = Int(colsNumber)
+    if rows < 1 || cols < 1 { return .error(.value) }
+    guard InputBounds.materializedCount(rows: rows, cols: cols) != nil else {
+      return .error(.value)
+    }
+    if rows != 1 || cols != 1 { return .error(.arrayResult) }
+    _ = step
+    return .number(start)
   }
 
   private func evalCOLUMN(_ args: [FormulaExpr]) -> CellValue {
@@ -671,10 +743,10 @@ public nonisolated struct FormulaEvaluator {
       if case .error = value { return value }
       guard let key = value.asNumber else { continue }
       if matchType > 0 {
-        if key <= needleNum, best == nil || key >= best!.key {
+        if key <= needleNum, best == nil || key >= (best?.key ?? key) {
           best = (index, key)
         }
-      } else if key >= needleNum, best == nil || key <= best!.key {
+      } else if key >= needleNum, best == nil || key <= (best?.key ?? key) {
         best = (index, key)
       }
     }
@@ -804,7 +876,9 @@ public nonisolated struct FormulaEvaluator {
     }
   }
 
-  private func xLookupIndex(needle: CellValue, in values: [CellValue], mode: XLookupMatchMode) -> XLookupHit {
+  private func xLookupIndex(needle: CellValue, in values: [CellValue], mode: XLookupMatchMode)
+    -> XLookupHit
+  {
     switch mode {
     case .exact:
       for (index, value) in values.enumerated() {
@@ -826,13 +900,15 @@ public nonisolated struct FormulaEvaluator {
         if case .error = value { return .failed(value) }
         if valuesEqual(needle, value) { return .found(index) }
         guard let order = lookupCompare(value, needle) else { continue }
-        let isCandidate = mode == .nextSmaller
+        let isCandidate =
+          mode == .nextSmaller
           ? order == .orderedAscending
           : order == .orderedDescending
         guard isCandidate else { continue }
         if let current = best {
           guard let against = lookupCompare(value, current.key) else { continue }
-          let closer = mode == .nextSmaller
+          let closer =
+            mode == .nextSmaller
             ? against == .orderedDescending
             : against == .orderedAscending
           if closer { best = (index, value) }
@@ -894,7 +970,7 @@ public nonisolated struct FormulaEvaluator {
     guard let indexNumber = indexValue.asNumber else { return .error(.value) }
     let index = Int(indexNumber.rounded(.down))
 
-    var exact = false // Excel default: approximate match
+    var exact = false  // Excel default: approximate match
     if args.count == 4 {
       let flag = evaluate(args[3])
       if case .error = flag { return flag }
@@ -917,14 +993,17 @@ public nonisolated struct FormulaEvaluator {
         resultIndex: index,
         horizontal: horizontal
       )
-      if let hit = cache.exactLookup(key: tableKey, needle: needle, build: {
-        buildExactLookupMap(
-          horizontal: horizontal,
-          bounds: n,
-          start: start,
-          resultOffset: resultOffset
-        )
-      }) {
+      if let hit = cache.exactLookup(
+        key: tableKey, needle: needle,
+        build: {
+          buildExactLookupMap(
+            horizontal: horizontal,
+            bounds: n,
+            start: start,
+            resultOffset: resultOffset
+          )
+        })
+      {
         return hit
       }
       return .error(.na)
@@ -945,20 +1024,21 @@ public nonisolated struct FormulaEvaluator {
       let key = lookup(keyRef)
       if case .error = key { return key }
 
-      let result = lookup(FormulaRef(
-        sheet: start.sheet,
-        row: horizontal ? resultOffset : position,
-        col: horizontal ? position : resultOffset,
-        absRow: false,
-        absCol: false
-      ))
+      let result = lookup(
+        FormulaRef(
+          sheet: start.sheet,
+          row: horizontal ? resultOffset : position,
+          col: horizontal ? position : resultOffset,
+          absRow: false,
+          absCol: false
+        ))
 
       if exact {
         if valuesEqual(needle, key) { return result }
       } else {
         guard let needleNum = needle.asNumber, let keyNum = key.asNumber else { continue }
         if keyNum <= needleNum {
-          if approximate == nil || keyNum >= approximate!.key {
+          if approximate == nil || keyNum >= (approximate?.key ?? keyNum) {
             approximate = (keyNum, result)
           }
         }
@@ -990,13 +1070,14 @@ public nonisolated struct FormulaEvaluator {
       if case .error = key { continue }
       guard let keyIndex = AggregateValueKey.from(cellValue: key) else { continue }
       if map[keyIndex] != nil { continue }
-      let result = lookup(FormulaRef(
-        sheet: start.sheet,
-        row: horizontal ? resultOffset : position,
-        col: horizontal ? position : resultOffset,
-        absRow: false,
-        absCol: false
-      ))
+      let result = lookup(
+        FormulaRef(
+          sheet: start.sheet,
+          row: horizontal ? resultOffset : position,
+          col: horizontal ? position : resultOffset,
+          absRow: false,
+          absCol: false
+        ))
       map[keyIndex] = result
     }
     return map
@@ -1186,9 +1267,9 @@ public enum FormulaDependencies {
           maxRow: maxRow,
           maxCol: maxCol
         )
-        let rows = n.maxRow - n.minRow + 1
-        let cols = n.maxCol - n.minCol + 1
-        if rows * cols == 1 {
+        let rows = InputBounds.span(from: n.minRow, through: n.maxRow)
+        let cols = InputBounds.span(from: n.minCol, through: n.maxCol)
+        if InputBounds.materializedCount(rows: rows, cols: cols) == 1 {
           intoDeps.insert(CellAddress(row: n.minRow, col: n.minCol))
         } else if collectWatchedRanges {
           intoRanges.append(

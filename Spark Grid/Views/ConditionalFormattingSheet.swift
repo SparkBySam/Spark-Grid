@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct ConditionalFormattingSheet: View {
   @Bindable var viewModel: SpreadsheetViewModel
@@ -16,7 +16,8 @@ struct ConditionalFormattingSheet: View {
   @State private var value2Text = "200"
 
   // Format (highlight / formula)
-  @State private var fillColor = Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.78, blue: 0.78, alpha: 1))
+  @State private var fillColor = Color(
+    nsColor: NSColor(calibratedRed: 0.96, green: 0.78, blue: 0.78, alpha: 1))
   @State private var textColor = Color(nsColor: .labelColor)
   @State private var useCustomTextColor = false
   @State private var formatBold = false
@@ -32,13 +33,17 @@ struct ConditionalFormattingSheet: View {
   @State private var formulaText = "=A1>100"
 
   // Color scale
-  @State private var scaleMinColor = Color(nsColor: NSColor(calibratedRed: 0.99, green: 0.72, blue: 0.72, alpha: 1))
-  @State private var scaleMidColor = Color(nsColor: NSColor(calibratedRed: 1.0, green: 0.95, blue: 0.7, alpha: 1))
-  @State private var scaleMaxColor = Color(nsColor: NSColor(calibratedRed: 0.72, green: 0.9, blue: 0.72, alpha: 1))
+  @State private var scaleMinColor = Color(
+    nsColor: NSColor(calibratedRed: 0.99, green: 0.72, blue: 0.72, alpha: 1))
+  @State private var scaleMidColor = Color(
+    nsColor: NSColor(calibratedRed: 1.0, green: 0.95, blue: 0.7, alpha: 1))
+  @State private var scaleMaxColor = Color(
+    nsColor: NSColor(calibratedRed: 0.72, green: 0.9, blue: 0.72, alpha: 1))
   @State private var useMidStop = true
 
   // Data Bars
-  @State private var dataBarColor = Color(nsColor: NSColor(calibratedRed: 0.39, green: 0.58, blue: 0.93, alpha: 1))
+  @State private var dataBarColor = Color(
+    nsColor: NSColor(calibratedRed: 0.39, green: 0.58, blue: 0.93, alpha: 1))
   @State private var dataBarShowValue = true
 
   // Icon Sets
@@ -104,7 +109,8 @@ struct ConditionalFormattingSheet: View {
   ]
 
   private var selectionRangeLabel: String {
-    let ranges = viewModel.selectionRanges.isEmpty
+    let ranges =
+      viewModel.selectionRanges.isEmpty
       ? [viewModel.selectionRange]
       : viewModel.selectionRanges
     return ranges.map(Self.rangeLabel).joined(separator: ", ")
@@ -255,13 +261,15 @@ struct ConditionalFormattingSheet: View {
         ColorPicker("Text", selection: $textColor, supportsOpacity: false)
       }
 
-      Toggle("Bold", isOn: Binding(
-        get: { formatBold },
-        set: { newValue in
-          formatBold = newValue
-          boldTouched = true
-        }
-      ))
+      Toggle(
+        "Bold",
+        isOn: Binding(
+          get: { formatBold },
+          set: { newValue in
+            formatBold = newValue
+            boldTouched = true
+          }
+        ))
       Toggle("Italic", isOn: $formatItalic)
     }
   }
@@ -415,9 +423,10 @@ struct ConditionalFormattingSheet: View {
         .keyboardShortcut(.defaultAction)
         .buttonStyle(.borderedProminent)
         .disabled(!canApply)
-        .help(editingRuleID == nil
-          ? "Add this rule to the selection, then review in Manage Rules"
-          : "Replace the selected rule with these settings")
+        .help(
+          editingRuleID == nil
+            ? "Add this rule to the selection, then review in Manage Rules"
+            : "Replace the selected rule with these settings")
       }
     }
     .padding(16)
@@ -433,18 +442,24 @@ struct ConditionalFormattingSheet: View {
         }
       }
       .clipShape(RoundedRectangle(cornerRadius: 3))
-      .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+      .overlay(
+        RoundedRectangle(cornerRadius: 3).strokeBorder(
+          Color(nsColor: .separatorColor), lineWidth: 0.5))
     case .dataBar(let style):
       RoundedRectangle(cornerRadius: 3)
         .fill(colorFromCodable(style.color))
-        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .overlay(
+          RoundedRectangle(cornerRadius: 3).strokeBorder(
+            Color(nsColor: .separatorColor), lineWidth: 0.5))
     case .iconSet:
       Image(systemName: "circle.grid.3x3.fill")
         .foregroundStyle(.secondary)
     default:
       RoundedRectangle(cornerRadius: 3)
         .fill(rule.style.fillColor.map(colorFromCodable) ?? Color(nsColor: .controlBackgroundColor))
-        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .overlay(
+          RoundedRectangle(cornerRadius: 3).strokeBorder(
+            Color(nsColor: .separatorColor), lineWidth: 0.5))
     }
   }
 
@@ -484,7 +499,8 @@ struct ConditionalFormattingSheet: View {
       return
     }
 
-    let ranges = viewModel.selectionRanges.isEmpty
+    let ranges =
+      viewModel.selectionRanges.isEmpty
       ? [viewModel.selectionRange]
       : viewModel.selectionRanges
     var applied = false
@@ -514,7 +530,8 @@ struct ConditionalFormattingSheet: View {
     case .formula:
       let formula = normalizedFormula()
       guard !formula.isEmpty else { return nil }
-      return ConditionalFormatRule(range: range, predicate: .formula(formula), style: buildFormatStyle())
+      return ConditionalFormatRule(
+        range: range, predicate: .formula(formula), style: buildFormatStyle())
 
     case .colorScale:
       return ConditionalFormatRule(
@@ -551,7 +568,8 @@ struct ConditionalFormattingSheet: View {
     let previousItalic = editingRuleID == nil ? nil : loadedItalic
     let style = ConditionalFormatStyle(
       bold: nil,
-      italic: ConditionalFormatStyle.preservedCheckbox(isOn: formatItalic, previous: previousItalic),
+      italic: ConditionalFormatStyle.preservedCheckbox(
+        isOn: formatItalic, previous: previousItalic),
       textColor: useCustomTextColor
         ? CellFormatRenderer.codableColor(from: NSColor(textColor))
         : nil,
@@ -566,7 +584,7 @@ struct ConditionalFormattingSheet: View {
         type: .min,
         value: nil,
         color: CellFormatRenderer.codableColor(from: NSColor(scaleMinColor))
-      ),
+      )
     ]
     if useMidStop {
       stops.append(
@@ -608,10 +626,14 @@ struct ConditionalFormattingSheet: View {
       guard let v = Self.parseNumber(valueText) else { return nil }
       return .notEqual(v)
     case .between:
-      guard let a = Self.parseNumber(valueText), let b = Self.parseNumber(value2Text) else { return nil }
+      guard let a = Self.parseNumber(valueText), let b = Self.parseNumber(value2Text) else {
+        return nil
+      }
       return .between(a, b)
     case .notBetween:
-      guard let a = Self.parseNumber(valueText), let b = Self.parseNumber(value2Text) else { return nil }
+      guard let a = Self.parseNumber(valueText), let b = Self.parseNumber(value2Text) else {
+        return nil
+      }
       return .notBetween(a, b)
     case .textContains:
       let text = valueText

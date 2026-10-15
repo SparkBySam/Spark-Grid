@@ -233,7 +233,8 @@ extension SpreadsheetViewModel {
     var searchStart = text.startIndex
     var replaced = false
     while searchStart < text.endIndex,
-          let match = text.range(of: query, options: .caseInsensitive, range: searchStart..<text.endIndex)
+      let match = text.range(
+        of: query, options: .caseInsensitive, range: searchStart..<text.endIndex)
     {
       result.append(contentsOf: text[searchStart..<match.lowerBound])
       result.append(replacement)
@@ -282,18 +283,21 @@ extension SpreadsheetViewModel {
       }
       let address = CellAddress(row: row, col: column)
       let key = displayString(at: address)
-      let number = displayValue(at: address).asNumber
-        ?? Double(key.replacingOccurrences(of: ",", with: "")
-          .replacingOccurrences(of: "%", with: "")
-          .replacingOccurrences(of: "$", with: "")
-          .trimmingCharacters(in: .whitespacesAndNewlines))
-      packs.append(RowPack(
-        rowIndex: row,
-        cells: cells,
-        height: activeSheet.rowHeights[row],
-        sortKey: key,
-        sortNumber: number
-      ))
+      let number =
+        displayValue(at: address).asNumber
+        ?? Double(
+          key.replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "%", with: "")
+            .replacingOccurrences(of: "$", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+      packs.append(
+        RowPack(
+          rowIndex: row,
+          cells: cells,
+          height: activeSheet.rowHeights[row],
+          sortKey: key,
+          sortNumber: number
+        ))
     }
 
     packs.sort { lhs, rhs in
@@ -346,7 +350,7 @@ extension SpreadsheetViewModel {
     func remapFullyContained(_ range: CellRange) -> CellRange? {
       let rn = range.normalized
       guard rn.minCol >= n.minCol, rn.maxCol <= n.maxCol,
-            rn.minRow >= firstDataRow, rn.maxRow <= n.maxRow
+        rn.minRow >= firstDataRow, rn.maxRow <= n.maxRow
       else { return nil }
       var mappedRows: [Int] = []
       mappedRows.reserveCapacity(rn.maxRow - rn.minRow + 1)
@@ -444,7 +448,9 @@ extension SpreadsheetViewModel {
         && n.maxRow >= sheet.effectiveRowCount - 1
         && n.maxCol >= sheet.effectiveColumnCount - 1)
 
-    if isWholeSheet, let used = sheet.populatedBounds, used.normalized.maxRow > used.normalized.minRow {
+    if isWholeSheet, let used = sheet.populatedBounds,
+      used.normalized.maxRow > used.normalized.minRow
+    {
       return used
     }
 
@@ -468,9 +474,9 @@ extension SpreadsheetViewModel {
     guard let minRow, let maxRow, let minCol, let maxCol, maxRow > minRow else {
       // Selection has no multi-row content — fall back to used range when it fits.
       if let used = sheet.populatedBounds,
-         used.normalized.maxRow > used.normalized.minRow,
-         n.minRow <= used.normalized.minRow,
-         n.maxRow >= used.normalized.maxRow
+        used.normalized.maxRow > used.normalized.minRow,
+        n.minRow <= used.normalized.minRow,
+        n.maxRow >= used.normalized.maxRow
       {
         return used
       }
@@ -484,7 +490,9 @@ extension SpreadsheetViewModel {
 
   /// Range used when Create Filter is invoked from a single selected cell.
   private func filterRangeForSingleCell(_ seed: CellAddress) -> CellRange {
-    if let region = contiguousRegion(around: seed), region.normalized.maxRow > region.normalized.minRow {
+    if let region = contiguousRegion(around: seed),
+      region.normalized.maxRow > region.normalized.minRow
+    {
       return region
     }
     // Only fall back to the used range when the selection sits inside it.
@@ -611,9 +619,12 @@ extension SpreadsheetViewModel {
     guard n.maxRow > n.minRow else { return [] }
     var hidden = Set<Int>()
     for row in (n.minRow + 1)...n.maxRow {
-      if filterState.isRowHidden(row, sheet: activeSheet, displayString: { [weak self] address in
-        self?.displayString(at: address) ?? ""
-      }) {
+      if filterState.isRowHidden(
+        row, sheet: activeSheet,
+        displayString: { [weak self] address in
+          self?.displayString(at: address) ?? ""
+        })
+      {
         hidden.insert(row)
       }
     }
@@ -655,8 +666,8 @@ extension SpreadsheetViewModel {
   }
 }
 
-private extension CellRange {
-  var normalizedRange: CellRange {
+extension CellRange {
+  fileprivate var normalizedRange: CellRange {
     let n = normalized
     return CellRange(
       start: CellAddress(row: n.minRow, col: n.minCol),

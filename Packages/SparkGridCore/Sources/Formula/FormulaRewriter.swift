@@ -10,7 +10,8 @@ public enum FormulaFunctions {
     "IF", "IFERROR", "IFNA", "IFS", "AND", "OR", "NOT",
     "ABS", "ROUND", "ROUNDUP", "ROUNDDOWN",
     "LEN", "LEFT", "RIGHT", "MID", "TRIM", "UPPER", "LOWER",
-    "SUBSTITUTE", "TEXTJOIN", "CONCAT", "CONCATENATE", "TEXT", "CHAR",
+    "SUBSTITUTE", "TEXTJOIN", "CONCAT", "CONCATENATE", "TEXT", "CHAR", "REPT",
+    "SEQUENCE",
     "COLUMN", "TRUE",
     "XLOOKUP", "XMATCH", "VLOOKUP", "HLOOKUP", "INDEX", "MATCH",
     "TODAY", "NOW", "DATE", "YEAR", "MONTH", "DAY",
@@ -60,12 +61,15 @@ public nonisolated enum FormulaRewriter {
   }
 
   /// Expected stored formula text after shifting `expr` by row/column delta.
-  public static func adjustedFormulaText(expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> String {
+  public static func adjustedFormulaText(expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> String
+  {
     "=" + serialize(adjustExpression(expr, rowDelta: rowDelta, colDelta: colDelta))
   }
 
   /// Shift a parsed expression by relative row/column delta (fill / batch eval only).
-  public static func adjustExpression(_ expr: FormulaExpr, rowDelta: Int, colDelta: Int) -> FormulaExpr {
+  public static func adjustExpression(_ expr: FormulaExpr, rowDelta: Int, colDelta: Int)
+    -> FormulaExpr
+  {
     adjustExpr(expr, rowDelta: rowDelta, colDelta: colDelta)
   }
 
@@ -107,7 +111,9 @@ public nonisolated enum FormulaRewriter {
     }
   }
 
-  private static func renameExpr(_ expr: FormulaExpr, from old: String, to new: String) -> FormulaExpr {
+  private static func renameExpr(_ expr: FormulaExpr, from old: String, to new: String)
+    -> FormulaExpr
+  {
     switch expr {
     case .namedRange(let name):
       if name.caseInsensitiveCompare(old) == .orderedSame { return .namedRange(new) }
@@ -136,7 +142,7 @@ public nonisolated enum FormulaRewriter {
       return .error(.ref)
     case .range(let start, let end):
       guard let s = start.adjusted(rowDelta: rowDelta, colDelta: colDelta),
-            let e = end.adjusted(rowDelta: rowDelta, colDelta: colDelta)
+        let e = end.adjusted(rowDelta: rowDelta, colDelta: colDelta)
       else { return .error(.ref) }
       return .range(s, e)
     case .unary(let op, let inner):
@@ -173,20 +179,21 @@ public nonisolated enum FormulaRewriter {
         change: change
       ).map { .cellRef($0) } ?? .error(.ref)
     case .range(let start, let end):
-      guard let s = shiftRef(
-        start,
-        formulaSheetName: formulaSheetName,
-        mutatedSheetName: mutatedSheetName,
-        axis: axis,
-        change: change
-      ),
-      let e = shiftRef(
-        end,
-        formulaSheetName: formulaSheetName,
-        mutatedSheetName: mutatedSheetName,
-        axis: axis,
-        change: change
-      )
+      guard
+        let s = shiftRef(
+          start,
+          formulaSheetName: formulaSheetName,
+          mutatedSheetName: mutatedSheetName,
+          axis: axis,
+          change: change
+        ),
+        let e = shiftRef(
+          end,
+          formulaSheetName: formulaSheetName,
+          mutatedSheetName: mutatedSheetName,
+          axis: axis,
+          change: change
+        )
       else { return .error(.ref) }
       return .range(s, e)
     case .unary(let op, let inner):
@@ -307,7 +314,9 @@ public nonisolated enum FormulaRewriter {
     }
   }
 
-  private static func serializeBinary(_ op: BinaryOp, _ lhs: FormulaExpr, _ rhs: FormulaExpr) -> String {
+  private static func serializeBinary(_ op: BinaryOp, _ lhs: FormulaExpr, _ rhs: FormulaExpr)
+    -> String
+  {
     let symbol: String
     switch op {
     case .add: symbol = "+"

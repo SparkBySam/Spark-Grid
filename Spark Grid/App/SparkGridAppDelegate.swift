@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 /// Intercepts `print:` in the responder chain for SwiftUI apps that don't adopt NSDocument printing.
 private final class PrintingResponder: NSResponder {
@@ -105,7 +105,37 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     configurePrintMenu()
   }
 
+  func offerCrashRecoveryIfNeeded() {
+    if ProcessInfo.processInfo.environment["SPARK_GRID_BENCHMARK"] == "1" { return }
+    if CrashRecoveryStore.needsRestore() {
+      let alert = NSAlert()
+      alert.messageText = "Restore unsaved work?"
+      alert.informativeText =
+        "Spark Grid did not shut down cleanly. A recovery copy of the last edited workbook is available."
+      alert.alertStyle = .warning
+      alert.addButton(withTitle: "Restore")
+      alert.addButton(withTitle: "Don't Restore")
+      if alert.runModal() == .alertFirstButtonReturn {
+        do {
+          try documentStore?.restoreCrashRecovery()
+          CrashRecoveryStore.clear()
+        } catch {
+          let failed = NSAlert()
+          failed.messageText = "Couldn't Restore"
+          failed.informativeText = error.localizedDescription
+          failed.alertStyle = .warning
+          failed.addButton(withTitle: "OK")
+          failed.runModal()
+        }
+      } else {
+        CrashRecoveryStore.clear()
+      }
+    }
+    try? CrashRecoveryStore.beginSession()
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
+    CrashRecoveryStore.noteCleanExit()
     if let printKeyMonitor {
       NSEvent.removeMonitor(printKeyMonitor)
       self.printKeyMonitor = nil
@@ -133,9 +163,10 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     printKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self else { return event }
       guard event.modifierFlags.contains(.command),
-            !event.modifierFlags.contains(.shift),
-            !event.modifierFlags.contains(.option),
-            event.charactersIgnoringModifiers?.lowercased() == "p" else {
+        !event.modifierFlags.contains(.shift),
+        !event.modifierFlags.contains(.option),
+        event.charactersIgnoringModifiers?.lowercased() == "p"
+      else {
         return event
       }
       self.printDocument(nil)
@@ -160,13 +191,17 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     return SpreadsheetViewModel(workbook: documentStore.document.workbook)
   }
 
-  func registerSpreadsheetViewModel(_ viewModel: SpreadsheetViewModel, store: SpreadsheetDocumentStore) {
+  func registerSpreadsheetViewModel(
+    _ viewModel: SpreadsheetViewModel, store: SpreadsheetDocumentStore
+  ) {
     spreadsheetViewModel = viewModel
     documentStore = store
     store.activeViewModel = viewModel
   }
 
-  func unregisterSpreadsheetViewModel(_ viewModel: SpreadsheetViewModel, store: SpreadsheetDocumentStore) {
+  func unregisterSpreadsheetViewModel(
+    _ viewModel: SpreadsheetViewModel, store: SpreadsheetDocumentStore
+  ) {
     if spreadsheetViewModel === viewModel {
       spreadsheetViewModel = nil
     }
@@ -220,12 +255,14 @@ final class SparkGridAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     for menuItem in mainMenu.items {
       guard let submenu = menuItem.submenu else { continue }
       for item in submenu.items {
-        let isPrintKey = item.keyEquivalent == "p"
+        let isPrintKey =
+          item.keyEquivalent == "p"
           && item.keyEquivalentModifierMask.contains(.command)
           && !item.keyEquivalentModifierMask.contains(.shift)
           && !item.keyEquivalentModifierMask.contains(.option)
           && !item.keyEquivalentModifierMask.contains(.control)
-        let isPrintAction = item.action == Selector("print:")
+        let isPrintAction =
+          item.action == Selector("print:")
           || item.action == #selector(printDocument(_:))
           || item.action == #selector(print(_:))
           || item.title == "Print…"

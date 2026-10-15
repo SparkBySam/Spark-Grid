@@ -1,8 +1,8 @@
 import CoreGraphics
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 /// A workbook-scoped defined name. Static ranges resolve to cells. Formulas such as
 /// `OFFSET(...)` stay as `refersTo` and are not treated as a cell range.
@@ -98,13 +98,16 @@ public nonisolated struct NamedRange: Codable, Equatable, Sendable {
 
 /// Parses a defined-name formula into a static range, or keeps the text when it is not one.
 public nonisolated enum DefinedNameFormula {
-  public static func make(name: String, formula: String, sheets: [Sheet], localSheet: String?) -> NamedRange {
+  public static func make(name: String, formula: String, sheets: [Sheet], localSheet: String?)
+    -> NamedRange
+  {
     var text = formula.trimmingCharacters(in: .whitespacesAndNewlines)
     if text.hasPrefix("=") {
       text = String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
     }
     if text.hasPrefix("["), let close = text.firstIndex(of: "]") {
-      text = String(text[text.index(after: close)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+      text = String(text[text.index(after: close)...]).trimmingCharacters(
+        in: .whitespacesAndNewlines)
     }
     let fallback = localSheet ?? sheets.first?.name ?? "Sheet1"
     guard isStaticReference(text) else {
@@ -132,7 +135,7 @@ public nonisolated enum DefinedNameFormula {
       resolvedEnd.sheet = resolvedStart.sheet
     }
     guard let sheetName = resolvedStart.sheet ?? resolvedEnd.sheet,
-          let sheet = sheets.first(where: { $0.name.caseInsensitiveCompare(sheetName) == .orderedSame })
+      let sheet = sheets.first(where: { $0.name.caseInsensitiveCompare(sheetName) == .orderedSame })
     else {
       return NamedRange(formulaName: name, refersTo: text, sheetName: fallback)
     }

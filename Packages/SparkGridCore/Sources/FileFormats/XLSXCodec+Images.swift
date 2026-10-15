@@ -1,10 +1,10 @@
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
+import NumberFormat
 
-public extension XLSXCodec {
+extension XLSXCodec {
   // MARK: - Import
 
   public static func importSheetImages(
@@ -16,14 +16,16 @@ public extension XLSXCodec {
     let worksheetDir = (worksheetPath as NSString).deletingLastPathComponent
     let relsPath = "\(worksheetDir)/_rels/\(worksheetFile).rels"
     guard let relsXML = zipEntryString(archiveData: archiveData, entryPath: relsPath),
-          let drawingTarget = relationshipTarget(
-            in: relsXML,
-            relationshipType: "officeDocument/2006/relationships/drawing"
-          )
+      let drawingTarget = relationshipTarget(
+        in: relsXML,
+        relationshipType: "officeDocument/2006/relationships/drawing"
+      )
     else { return }
 
     let drawingPath = resolveZipPath(basePath: worksheetPath, relativeTarget: drawingTarget)
-    guard let drawingXML = zipEntryString(archiveData: archiveData, entryPath: drawingPath) else { return }
+    guard let drawingXML = zipEntryString(archiveData: archiveData, entryPath: drawingPath) else {
+      return
+    }
 
     let drawingName = (drawingPath as NSString).lastPathComponent
     let drawingRelsPath = "xl/drawings/_rels/\(drawingName).rels"
@@ -44,32 +46,48 @@ public extension XLSXCodec {
     archiveData: Data
   ) -> [SheetImage] {
     let anchorPattern = #"<xdr:(?:oneCell|twoCell)Anchor[\s\S]*?</xdr:(?:oneCell|twoCell)Anchor>"#
-    guard let regex = try? NSRegularExpression(pattern: anchorPattern, options: []) else { return [] }
+    guard let regex = try? NSRegularExpression(pattern: anchorPattern, options: []) else {
+      return []
+    }
     let ns = drawingXML as NSString
     var images: [SheetImage] = []
 
-    for match in regex.matches(in: drawingXML, options: [], range: NSRange(location: 0, length: ns.length)) {
+    for match in regex.matches(
+      in: drawingXML, options: [], range: NSRange(location: 0, length: ns.length))
+    {
       let anchor = ns.substring(with: match.range)
       guard anchor.contains("<xdr:pic") || anchor.contains(":pic>") else { continue }
-      guard let embedId = firstXMLAttribute(in: anchor, names: ["r:embed", "embed"]) else { continue }
-      guard let mediaTarget = relationshipTarget(in: drawingRelsXML, relationshipId: embedId) else { continue }
+      guard let embedId = firstXMLAttribute(in: anchor, names: ["r:embed", "embed"]) else {
+        continue
+      }
+      guard let mediaTarget = relationshipTarget(in: drawingRelsXML, relationshipId: embedId) else {
+        continue
+      }
       let mediaPath = resolveZipPath(basePath: drawingPath, relativeTarget: mediaTarget)
-      guard let imageData = zipEntryData(archiveData: archiveData, entryPath: mediaPath) else { continue }
+      guard let imageData = zipEntryData(archiveData: archiveData, entryPath: mediaPath) else {
+        continue
+      }
 
-      let row = intXMLTagValue(in: anchor, tag: "xdr:row") ?? intXMLTagValue(in: anchor, tag: "row") ?? 0
-      let col = intXMLTagValue(in: anchor, tag: "xdr:col") ?? intXMLTagValue(in: anchor, tag: "col") ?? 0
-      let rowOff = intXMLTagValue(in: anchor, tag: "xdr:rowOff") ?? intXMLTagValue(in: anchor, tag: "rowOff") ?? 0
-      let colOff = intXMLTagValue(in: anchor, tag: "xdr:colOff") ?? intXMLTagValue(in: anchor, tag: "colOff") ?? 0
+      let row =
+        intXMLTagValue(in: anchor, tag: "xdr:row") ?? intXMLTagValue(in: anchor, tag: "row") ?? 0
+      let col =
+        intXMLTagValue(in: anchor, tag: "xdr:col") ?? intXMLTagValue(in: anchor, tag: "col") ?? 0
+      let rowOff =
+        intXMLTagValue(in: anchor, tag: "xdr:rowOff") ?? intXMLTagValue(in: anchor, tag: "rowOff")
+        ?? 0
+      let colOff =
+        intXMLTagValue(in: anchor, tag: "xdr:colOff") ?? intXMLTagValue(in: anchor, tag: "colOff")
+        ?? 0
 
       let (widthEMU, heightEMU): (Int, Int)
       if let cx = intXMLAttribute(in: anchor, name: "cx"),
-         let cy = intXMLAttribute(in: anchor, name: "cy"),
-         anchor.contains("<xdr:ext")
+        let cy = intXMLAttribute(in: anchor, name: "cy"),
+        anchor.contains("<xdr:ext")
       {
         widthEMU = cx
         heightEMU = cy
       } else if let toRow = intXMLTagValue(in: anchor, tag: "xdr:row", occurrence: 2),
-                let toCol = intXMLTagValue(in: anchor, tag: "xdr:col", occurrence: 2)
+        let toCol = intXMLTagValue(in: anchor, tag: "xdr:col", occurrence: 2)
       {
         // twoCellAnchor without ext — approximate size from default cell dimensions.
         let colSpan = max(1, toCol - col)
@@ -107,7 +125,9 @@ public extension XLSXCodec {
 
   // MARK: - Export helpers (used by XLSXCodec+Charts)
 
-  public static func oneCellAnchorImageXML(image: SheetImage, relId: String, pictureId: Int) -> String {
+  public static func oneCellAnchorImageXML(image: SheetImage, relId: String, pictureId: Int)
+    -> String
+  {
     """
     <xdr:oneCellAnchor editAs="oneCell">
       <xdr:from>
@@ -176,10 +196,13 @@ public extension XLSXCodec {
     in relsXML: String,
     relationshipType: String
   ) -> String? {
-    let pattern = #"<Relationship\b[^>]*Type="[^"]*/\#(NSRegularExpression.escapedPattern(for: relationshipType))"[^>]*Target="([^"]+)""#
+    let pattern =
+      #"<Relationship\b[^>]*Type="[^"]*/\#(NSRegularExpression.escapedPattern(for: relationshipType))"[^>]*Target="([^"]+)""#
     guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
     let ns = relsXML as NSString
-    guard let match = regex.firstMatch(in: relsXML, options: [], range: NSRange(location: 0, length: ns.length))
+    guard
+      let match = regex.firstMatch(
+        in: relsXML, options: [], range: NSRange(location: 0, length: ns.length))
     else { return nil }
     return ns.substring(with: match.range(at: 1))
   }
@@ -189,7 +212,9 @@ public extension XLSXCodec {
     let pattern = #"<Relationship\b[^>]*Id="\#(escaped)"[^>]*Target="([^"]+)""#
     guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
     let ns = relsXML as NSString
-    guard let match = regex.firstMatch(in: relsXML, options: [], range: NSRange(location: 0, length: ns.length))
+    guard
+      let match = regex.firstMatch(
+        in: relsXML, options: [], range: NSRange(location: 0, length: ns.length))
     else { return nil }
     return ns.substring(with: match.range(at: 1))
   }
@@ -198,7 +223,8 @@ public extension XLSXCodec {
     let pattern = "<\(tag)>([0-9]+)</\(tag)>"
     guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
     let ns = xml as NSString
-    let matches = regex.matches(in: xml, options: [], range: NSRange(location: 0, length: ns.length))
+    let matches = regex.matches(
+      in: xml, options: [], range: NSRange(location: 0, length: ns.length))
     guard occurrence > 0, occurrence <= matches.count else { return nil }
     return Int(ns.substring(with: matches[occurrence - 1].range(at: 1)))
   }
@@ -208,7 +234,9 @@ public extension XLSXCodec {
     let pattern = #"\#(escaped)="([0-9]+)""#
     guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
     let ns = xml as NSString
-    guard let match = regex.firstMatch(in: xml, options: [], range: NSRange(location: 0, length: ns.length))
+    guard
+      let match = regex.firstMatch(
+        in: xml, options: [], range: NSRange(location: 0, length: ns.length))
     else { return nil }
     return Int(ns.substring(with: match.range(at: 1)))
   }
@@ -219,7 +247,9 @@ public extension XLSXCodec {
       let pattern = #"\#(escaped)="([^"]+)""#
       guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
       let ns = xml as NSString
-      if let match = regex.firstMatch(in: xml, options: [], range: NSRange(location: 0, length: ns.length)) {
+      if let match = regex.firstMatch(
+        in: xml, options: [], range: NSRange(location: 0, length: ns.length))
+      {
         return ns.substring(with: match.range(at: 1))
       }
     }

@@ -1,10 +1,10 @@
 import AppKit
+import Calc
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
-import Calc
+import NumberFormat
 
 public enum CellFormatRenderer {
   public static let defaultFontSize: CGFloat = 12
@@ -53,7 +53,9 @@ public enum CellFormatRenderer {
   }
 
   /// Format an evaluated formula/literal value for display.
-  public static func displayText(for value: CellValue, format: CellFormat?, fallbackRaw: String) -> String {
+  public static func displayText(for value: CellValue, format: CellFormat?, fallbackRaw: String)
+    -> String
+  {
     switch value {
     case .error:
       return value.displayString
@@ -116,7 +118,9 @@ public enum CellFormatRenderer {
     (format ?? CellFormat()).textDisplay == .clip
   }
 
-  public static func attributes(for format: CellFormat?, onLightBackground: Bool = false) -> [NSAttributedString.Key: Any] {
+  public static func attributes(for format: CellFormat?, onLightBackground: Bool = false)
+    -> [NSAttributedString.Key: Any]
+  {
     let resolved = format ?? CellFormat()
     let defaultTextColor = onLightBackground ? NSColor.black : NSColor.labelColor
     let textColor = nsColor(resolved.textColor) ?? defaultTextColor
@@ -157,8 +161,9 @@ public enum CellFormatRenderer {
       return
     }
     var attrs = attributes(for: format, onLightBackground: onLightBackground)
-    let paragraph = ((attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
-      as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+    let paragraph =
+      ((attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
+        as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
     attrs[.paragraphStyle] = paragraph
 
@@ -238,7 +243,7 @@ public enum CellFormatRenderer {
 
     // Fast path: left-aligned, no rotation — skip size measurement.
     if resolved.textRotation == 0,
-       resolved.horizontalAlign == .general || resolved.horizontalAlign == .left
+      resolved.horizontalAlign == .general || resolved.horizontalAlign == .left
     {
       let font = attrs[.font] as? NSFont ?? Self.font(for: resolved)
       let height = font.ascender - font.descender
@@ -253,7 +258,8 @@ public enum CellFormatRenderer {
     }
 
     let size = (text as NSString).size(withAttributes: attrs)
-    let point = alignedOrigin(for: size, in: inset, horizontalAlign: resolved.horizontalAlign, verticalAlign: alignment)
+    let point = alignedOrigin(
+      for: size, in: inset, horizontalAlign: resolved.horizontalAlign, verticalAlign: alignment)
 
     if resolved.textRotation != 0 {
       NSGraphicsContext.saveGraphicsState()
@@ -431,7 +437,8 @@ public enum CellFormatRenderer {
   }
 
   private static func parseNumber(_ text: String) -> Double? {
-    let stripped = text
+    let stripped =
+      text
       .replacingOccurrences(of: "$", with: "")
       .replacingOccurrences(of: "%", with: "")
       .replacingOccurrences(of: ",", with: "")
@@ -496,7 +503,7 @@ public enum CellFormatRenderer {
   }
 }
 
-public extension CellFormatRenderer {
+extension CellFormatRenderer {
   public static func borderColor(for edge: BorderEdge) -> NSColor {
     if let color = edge.color, let ns = nsColor(color) {
       return ns
@@ -680,4 +687,3 @@ public extension CellFormatRenderer {
     cg.restoreGState()
   }
 }
-

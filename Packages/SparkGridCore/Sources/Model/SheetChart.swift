@@ -1,8 +1,8 @@
 import CoreGraphics
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 /// Chart embedded on a sheet (Spark-native; also stored in xlsx as a custom part).
 public nonisolated struct SheetChart: Identifiable, Codable, Equatable, Sendable {
@@ -158,10 +158,14 @@ public nonisolated struct SheetChart: Identifiable, Codable, Equatable, Sendable
     anchorCol = try c.decodeIfPresent(Int.self, forKey: .anchorCol) ?? 0
     rowSpan = try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 12
     colSpan = try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 8
-    originXOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .originXOffset) ?? 0)
-    originYOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .originYOffset) ?? 0)
-    endXOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .endXOffset) ?? 0)
-    endYOffset = Self.clampedPlacementOffset(try c.decodeIfPresent(CGFloat.self, forKey: .endYOffset) ?? 0)
+    originXOffset = Self.clampedPlacementOffset(
+      try c.decodeIfPresent(CGFloat.self, forKey: .originXOffset) ?? 0)
+    originYOffset = Self.clampedPlacementOffset(
+      try c.decodeIfPresent(CGFloat.self, forKey: .originYOffset) ?? 0)
+    endXOffset = Self.clampedPlacementOffset(
+      try c.decodeIfPresent(CGFloat.self, forKey: .endXOffset) ?? 0)
+    endYOffset = Self.clampedPlacementOffset(
+      try c.decodeIfPresent(CGFloat.self, forKey: .endYOffset) ?? 0)
     seriesColor = try c.decodeIfPresent(CodableColor.self, forKey: .seriesColor)
     pointColors = try c.decodeIfPresent([Int: CodableColor].self, forKey: .pointColors) ?? [:]
     showsLegend = try c.decodeIfPresent(Bool.self, forKey: .showsLegend) ?? false

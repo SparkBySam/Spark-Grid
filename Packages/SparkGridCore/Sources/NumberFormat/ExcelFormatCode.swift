@@ -10,14 +10,17 @@ public enum ExcelFormatCode {
     if custom.isEmpty || custom == "general" || custom == "@" { return .general }
     if custom.contains("%") { return .percent }
     if custom.contains("$") || custom.contains("¥") || custom.contains("€") || custom.contains("£")
-      || custom.contains("₩") || custom.contains("₹") || custom.contains("₽") || custom.contains("[$")
+      || custom.contains("₩") || custom.contains("₹") || custom.contains("₽")
+      || custom.contains("[$")
     {
       return .currency
     }
     if custom.contains("e+") || custom.contains("e-") { return .scientific }
     let looksLikeDate = (custom.contains("y") || custom.contains("d")) && custom.contains("m")
     if looksLikeDate { return .date }
-    if custom.contains("h") && (custom.contains(":") || custom.contains("m") || custom.contains("s")) {
+    if custom.contains("h")
+      && (custom.contains(":") || custom.contains("m") || custom.contains("s"))
+    {
       return .time
     }
     if custom.contains("0") || custom.contains("#") { return .number }
@@ -78,8 +81,12 @@ public enum ExcelFormatCode {
   /// Fraction digits in the positive section, when the code is a number format.
   public static func fractionDigits(in code: String) -> Int? {
     let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, trimmed.caseInsensitiveCompare("General") != .orderedSame else { return nil }
-    guard let section = splitSections(trimmed).first, !isDateSection(section), !isTextPlaceholder(section) else {
+    guard !trimmed.isEmpty, trimmed.caseInsensitiveCompare("General") != .orderedSame else {
+      return nil
+    }
+    guard let section = splitSections(trimmed).first, !isDateSection(section),
+      !isTextPlaceholder(section)
+    else {
       return nil
     }
     let parsed = parseNumber(section)
@@ -241,7 +248,9 @@ public enum ExcelFormatCode {
     return result.lowercased()
   }
 
-  private static func readQuotedLiteral(in chars: [Character], opening index: Int) -> (text: String, next: Int) {
+  private static func readQuotedLiteral(in chars: [Character], opening index: Int) -> (
+    text: String, next: Int
+  ) {
     var text = ""
     var cursor = index + 1
     while cursor < chars.count {
@@ -303,7 +312,9 @@ public enum ExcelFormatCode {
       .replacingOccurrences(of: "am/pm", with: "")
       .replacingOccurrences(of: "a/p", with: "")
     if lower.contains("0") || lower.contains("#") || lower.contains("?") { return false }
-    if lower.contains("y") || lower.contains("d") || lower.contains("h") || lower.contains("s") { return true }
+    if lower.contains("y") || lower.contains("d") || lower.contains("h") || lower.contains("s") {
+      return true
+    }
     return lower.contains("m")
   }
 
@@ -368,7 +379,9 @@ public enum ExcelFormatCode {
         if index < chars.count { index += 1 }
         if inner.hasPrefix("$") {
           let symbolSource = inner.dropFirst()
-          let symbol = symbolSource.split(separator: "-", maxSplits: 1).first.map(String.init) ?? String(symbolSource)
+          let symbol =
+            symbolSource.split(separator: "-", maxSplits: 1).first.map(String.init)
+            ?? String(symbolSource)
           appendLiteral(symbol)
         }
         continue
@@ -379,7 +392,9 @@ public enum ExcelFormatCode {
         index += 1
         continue
       }
-      if character == "0" || character == "#" || character == "?" || character == "." || character == "," {
+      if character == "0" || character == "#" || character == "?" || character == "."
+        || character == ","
+      {
         if stage == 0 { stage = 1 }
         if stage == 1 {
           parsed.body.append(character)
@@ -389,10 +404,10 @@ public enum ExcelFormatCode {
         index += 1
         continue
       }
-      if (character == "E" || character == "e"),
-         stage == 1,
-         index + 1 < chars.count,
-         chars[index + 1] == "+" || chars[index + 1] == "-"
+      if character == "E" || character == "e",
+        stage == 1,
+        index + 1 < chars.count,
+        chars[index + 1] == "+" || chars[index + 1] == "-"
       {
         parsed.body.append(character)
         parsed.body.append(chars[index + 1])
@@ -415,7 +430,9 @@ public enum ExcelFormatCode {
 
   private static func analyze(_ parsed: inout ParsedNumber) {
     var body = parsed.body
-    if let range = body.range(of: "E+", options: .caseInsensitive) ?? body.range(of: "E-", options: .caseInsensitive) {
+    if let range = body.range(of: "E+", options: .caseInsensitive)
+      ?? body.range(of: "E-", options: .caseInsensitive)
+    {
       let marker = body[range].uppercased()
       parsed.scientificPlus = marker.hasSuffix("+")
       let exponent = body[range.upperBound...].filter { $0 == "0" }
@@ -440,7 +457,9 @@ public enum ExcelFormatCode {
     parsed.maxFraction = fraction.filter { $0 == "0" || $0 == "#" || $0 == "?" }.count
   }
 
-  private static func formatDigits(_ value: Double, parsed: ParsedNumber, fractionDigits: Int?) -> String {
+  private static func formatDigits(_ value: Double, parsed: ParsedNumber, fractionDigits: Int?)
+    -> String
+  {
     var number = value
     if parsed.percent > 0 {
       number *= pow(100, Double(parsed.percent))
@@ -449,11 +468,15 @@ public enum ExcelFormatCode {
       number /= pow(1000, Double(parsed.scale))
     }
     if parsed.scientificPlus != nil {
-      return formatScientific(number, fraction: fractionDigits ?? parsed.maxFraction, digits: parsed.scientificDigits, showPlus: parsed.scientificPlus == true)
+      return formatScientific(
+        number, fraction: fractionDigits ?? parsed.maxFraction, digits: parsed.scientificDigits,
+        showPlus: parsed.scientificPlus == true)
     }
     let minFraction = fractionDigits ?? parsed.minFraction
     let maxFraction = fractionDigits ?? max(parsed.maxFraction, parsed.minFraction)
-    return formatFixed(number, minInteger: max(parsed.minInteger, 1), minFraction: minFraction, maxFraction: maxFraction, grouping: parsed.grouping)
+    return formatFixed(
+      number, minInteger: max(parsed.minInteger, 1), minFraction: minFraction,
+      maxFraction: maxFraction, grouping: parsed.grouping)
   }
 
   private static func formatFixed(
@@ -500,7 +523,9 @@ public enum ExcelFormatCode {
     return String(groupedDigits.reversed())
   }
 
-  private static func formatScientific(_ value: Double, fraction: Int, digits: Int, showPlus: Bool) -> String {
+  private static func formatScientific(_ value: Double, fraction: Int, digits: Int, showPlus: Bool)
+    -> String
+  {
     let places = max(0, fraction)
     if value == 0 {
       let zeros = String(repeating: "0", count: places)
@@ -510,7 +535,8 @@ public enum ExcelFormatCode {
     }
     let exponent = Int(floor(log10(abs(value))))
     let mantissa = abs(value) / pow(10, Double(exponent))
-    let body = formatFixed(mantissa, minInteger: 1, minFraction: places, maxFraction: places, grouping: false)
+    let body = formatFixed(
+      mantissa, minInteger: 1, minFraction: places, maxFraction: places, grouping: false)
     let sign = exponent < 0 ? "-" : (showPlus ? "+" : "+")
     let width = max(2, digits)
     return body + "E" + sign + String(format: "%0\(width)d", abs(exponent))
@@ -604,7 +630,8 @@ public enum ExcelFormatCode {
   }
 
   private static func elapsedString(serial: Double, pattern: String) -> String? {
-    guard pattern.range(of: #"\[h+\]"#, options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+    guard pattern.range(of: #"\[h+\]"#, options: [.regularExpression, .caseInsensitive]) != nil
+    else { return nil }
     let total = Int((abs(serial) * 86_400).rounded())
     let hours = total / 3600
     let minutes = (total % 3600) / 60
@@ -628,7 +655,8 @@ public enum ExcelFormatCode {
 
     func starts(with token: String) -> Bool {
       guard index + token.count <= chars.count else { return false }
-      return String(chars[index..<(index + token.count)]).caseInsensitiveCompare(token) == .orderedSame
+      return String(chars[index..<(index + token.count)]).caseInsensitiveCompare(token)
+        == .orderedSame
     }
 
     while index < chars.count {
@@ -670,8 +698,10 @@ public enum ExcelFormatCode {
         }
         if index < chars.count { index += 1 }
         let lower = inner.lowercased()
-        if !lower.isEmpty, lower.allSatisfy({ $0 == "h" || $0 == "m" || $0 == "s" }) {
-          let token = lower.first == "h" ? (hasPeriod ? "h" : "H") : String(lower.first!)
+        if !lower.isEmpty, lower.allSatisfy({ $0 == "h" || $0 == "m" || $0 == "s" }),
+          let first = lower.first
+        {
+          let token = first == "h" ? (hasPeriod ? "h" : "H") : String(first)
           output += String(repeating: token, count: min(lower.count, 2))
         }
         continue
@@ -761,7 +791,9 @@ public enum ExcelFormatCode {
         }
         if index < chars.count { index += 1 }
         let lower = inner.lowercased()
-        if let first = lower.first, !lower.isEmpty, lower.allSatisfy({ $0 == "h" || $0 == "m" || $0 == "s" }) {
+        if let first = lower.first, !lower.isEmpty,
+          lower.allSatisfy({ $0 == "h" || $0 == "m" || $0 == "s" })
+        {
           letters.append(TimeLetter(index: start, letter: first))
         }
         continue

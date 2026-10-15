@@ -1,10 +1,10 @@
 import AppKit
+import Calc
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
-import Calc
+import NumberFormat
 
 /// A cell/range reference found inside a formula, with a stable color index and text span.
 public struct FormulaRefHighlight: Equatable, Sendable {
@@ -48,11 +48,12 @@ public enum FormulaReferenceScanner {
     let trimOffset = nsRaw.range(of: trimmed).location
     guard trimOffset != NSNotFound else { return [] }
 
-    let expr = String(trimmed.dropFirst()) // drop '='
+    let expr = String(trimmed.dropFirst())  // drop '='
     let exprOffset = trimOffset + 1
 
     // Cells, open columns (`A`), open rows (`2`), and ranges (`A2:A`, `A:A`, `2:2`).
-    let pattern = #"(?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)?!?(?:\$?[A-Za-z]+\$?\d*|\$?\d+)(?::(?:\$?[A-Za-z]+\$?\d*|\$?\d+))?"#
+    let pattern =
+      #"(?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)?!?(?:\$?[A-Za-z]+\$?\d*|\$?\d+)(?::(?:\$?[A-Za-z]+\$?\d*|\$?\d+))?"#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
 
     let nsExpr = expr as NSString
@@ -67,10 +68,10 @@ public enum FormulaReferenceScanner {
       let afterLoc = match.range.location + match.range.length
       if afterLoc < nsExpr.length {
         let next = nsExpr.character(at: afterLoc)
-        if next == 40 { // '(' → function call, not a sheet ref alone without A1
+        if next == 40 {  // '(' → function call, not a sheet ref alone without A1
           // Still allow Sheet1!A1; function names have no digits/address.
           if A1Reference.parseFormulaRef(token) == nil,
-             A1Reference.parseFormulaRange(token) == nil
+            A1Reference.parseFormulaRange(token) == nil
           {
             return
           }
@@ -136,7 +137,9 @@ public enum FormulaReferenceScanner {
       guard NSMaxRange(highlight.utf16Range) <= result.length else { continue }
       let isFocused = focusedIndex == index
       var attrs: [NSAttributedString.Key: Any] = [
-        .foregroundColor: isFocused ? highlight.color.blended(withFraction: 0.15, of: .black) ?? highlight.color : highlight.color,
+        .foregroundColor: isFocused
+          ? highlight.color.blended(withFraction: 0.15, of: .black) ?? highlight.color
+          : highlight.color,
         .font: baseFont,
       ]
       // Sheets-style: active ref gets a tinted background chip in the formula text.
@@ -151,7 +154,9 @@ public enum FormulaReferenceScanner {
   }
 
   /// Prefer the token containing the caret; if between tokens, pick the nearest touching one.
-  public static func highlightIndex(atUTF16 location: Int, in highlights: [FormulaRefHighlight]) -> Int? {
+  public static func highlightIndex(atUTF16 location: Int, in highlights: [FormulaRefHighlight])
+    -> Int?
+  {
     if let exact = highlights.firstIndex(where: { NSLocationInRange(location, $0.utf16Range) }) {
       return exact
     }

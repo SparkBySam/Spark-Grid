@@ -1,5 +1,5 @@
-import Foundation
 import Formula
+import Foundation
 
 /// Insert Function list. Names come from `FormulaFunctions.all`, which is the
 /// set the evaluator already calculates. This catalog does not add functions.
@@ -55,30 +55,39 @@ public struct FormulaFunctionInsertion: Equatable {
 public enum FormulaFunctionCatalog {
   private static let defined: [FormulaFunctionEntry] = [
     FormulaFunctionEntry(name: "ABS", kind: .math, arguments: "number"),
+    FormulaFunctionEntry(
+      name: "SEQUENCE", kind: .math, arguments: "rows, [columns], [start], [step]"),
     FormulaFunctionEntry(name: "ROUND", kind: .math, arguments: "number, [num_digits]"),
     FormulaFunctionEntry(name: "ROUNDDOWN", kind: .math, arguments: "number, [num_digits]"),
     FormulaFunctionEntry(name: "ROUNDUP", kind: .math, arguments: "number, [num_digits]"),
     FormulaFunctionEntry(name: "SUM", kind: .math, arguments: "number1, [number2], ..."),
     FormulaFunctionEntry(name: "SUMIF", kind: .math, arguments: "range, criteria, [sum_range]"),
-    FormulaFunctionEntry(name: "SUMIFS", kind: .math, arguments: "sum_range, criteria_range1, criteria1, ..."),
+    FormulaFunctionEntry(
+      name: "SUMIFS", kind: .math, arguments: "sum_range, criteria_range1, criteria1, ..."),
     FormulaFunctionEntry(name: "SUMPRODUCT", kind: .math, arguments: "array1, [array2], ..."),
 
     FormulaFunctionEntry(name: "AVERAGE", kind: .statistical, arguments: "number1, [number2], ..."),
-    FormulaFunctionEntry(name: "AVERAGEIF", kind: .statistical, arguments: "range, criteria, [average_range]"),
-    FormulaFunctionEntry(name: "AVERAGEIFS", kind: .statistical, arguments: "average_range, criteria_range1, criteria1, ..."),
+    FormulaFunctionEntry(
+      name: "AVERAGEIF", kind: .statistical, arguments: "range, criteria, [average_range]"),
+    FormulaFunctionEntry(
+      name: "AVERAGEIFS", kind: .statistical,
+      arguments: "average_range, criteria_range1, criteria1, ..."),
     FormulaFunctionEntry(name: "COUNT", kind: .statistical, arguments: "value1, [value2], ..."),
     FormulaFunctionEntry(name: "COUNTA", kind: .statistical, arguments: "value1, [value2], ..."),
     FormulaFunctionEntry(name: "COUNTBLANK", kind: .statistical, arguments: "range"),
     FormulaFunctionEntry(name: "COUNTIF", kind: .statistical, arguments: "range, criteria"),
-    FormulaFunctionEntry(name: "COUNTIFS", kind: .statistical, arguments: "criteria_range1, criteria1, ..."),
+    FormulaFunctionEntry(
+      name: "COUNTIFS", kind: .statistical, arguments: "criteria_range1, criteria1, ..."),
     FormulaFunctionEntry(name: "MAX", kind: .statistical, arguments: "number1, [number2], ..."),
     FormulaFunctionEntry(name: "MIN", kind: .statistical, arguments: "number1, [number2], ..."),
 
     FormulaFunctionEntry(name: "AND", kind: .logical, arguments: "logical1, [logical2], ..."),
-    FormulaFunctionEntry(name: "IF", kind: .logical, arguments: "logical_test, value_if_true, [value_if_false]"),
+    FormulaFunctionEntry(
+      name: "IF", kind: .logical, arguments: "logical_test, value_if_true, [value_if_false]"),
     FormulaFunctionEntry(name: "IFERROR", kind: .logical, arguments: "value, value_if_error"),
     FormulaFunctionEntry(name: "IFNA", kind: .logical, arguments: "value, value_if_na"),
-    FormulaFunctionEntry(name: "IFS", kind: .logical, arguments: "logical_test1, value_if_true1, ..."),
+    FormulaFunctionEntry(
+      name: "IFS", kind: .logical, arguments: "logical_test1, value_if_true1, ..."),
     FormulaFunctionEntry(name: "NOT", kind: .logical, arguments: "logical"),
     FormulaFunctionEntry(name: "OR", kind: .logical, arguments: "logical1, [logical2], ..."),
 
@@ -89,22 +98,33 @@ public enum FormulaFunctionCatalog {
     FormulaFunctionEntry(name: "LOWER", kind: .text, arguments: "text"),
     FormulaFunctionEntry(name: "MID", kind: .text, arguments: "text, start_num, num_chars"),
     FormulaFunctionEntry(name: "RIGHT", kind: .text, arguments: "text, [num_chars]"),
-    FormulaFunctionEntry(name: "SUBSTITUTE", kind: .text, arguments: "text, old_text, new_text, [instance_num]"),
+    FormulaFunctionEntry(
+      name: "SUBSTITUTE", kind: .text, arguments: "text, old_text, new_text, [instance_num]"),
     FormulaFunctionEntry(name: "TEXT", kind: .text, arguments: "value, format_text"),
-    FormulaFunctionEntry(name: "TEXTJOIN", kind: .text, arguments: "delimiter, ignore_empty, text1, ..."),
+    FormulaFunctionEntry(
+      name: "TEXTJOIN", kind: .text, arguments: "delimiter, ignore_empty, text1, ..."),
     FormulaFunctionEntry(name: "CHAR", kind: .text, arguments: "number"),
+    FormulaFunctionEntry(name: "REPT", kind: .text, arguments: "text, number_times"),
     FormulaFunctionEntry(name: "TRIM", kind: .text, arguments: "text"),
     FormulaFunctionEntry(name: "UPPER", kind: .text, arguments: "text"),
 
     FormulaFunctionEntry(name: "COLUMN", kind: .lookup, arguments: "[reference]"),
     FormulaFunctionEntry(name: "TRUE", kind: .logical, arguments: ""),
 
-    FormulaFunctionEntry(name: "HLOOKUP", kind: .lookup, arguments: "lookup_value, table_array, row_index_num, [range_lookup]"),
+    FormulaFunctionEntry(
+      name: "HLOOKUP", kind: .lookup,
+      arguments: "lookup_value, table_array, row_index_num, [range_lookup]"),
     FormulaFunctionEntry(name: "INDEX", kind: .lookup, arguments: "array, row_num, [column_num]"),
-    FormulaFunctionEntry(name: "MATCH", kind: .lookup, arguments: "lookup_value, lookup_array, [match_type]"),
-    FormulaFunctionEntry(name: "VLOOKUP", kind: .lookup, arguments: "lookup_value, table_array, col_index_num, [range_lookup]"),
-    FormulaFunctionEntry(name: "XLOOKUP", kind: .lookup, arguments: "lookup_value, lookup_array, return_array, [if_not_found], [match_mode]"),
-    FormulaFunctionEntry(name: "XMATCH", kind: .lookup, arguments: "lookup_value, lookup_array, [match_mode]"),
+    FormulaFunctionEntry(
+      name: "MATCH", kind: .lookup, arguments: "lookup_value, lookup_array, [match_type]"),
+    FormulaFunctionEntry(
+      name: "VLOOKUP", kind: .lookup,
+      arguments: "lookup_value, table_array, col_index_num, [range_lookup]"),
+    FormulaFunctionEntry(
+      name: "XLOOKUP", kind: .lookup,
+      arguments: "lookup_value, lookup_array, return_array, [if_not_found], [match_mode]"),
+    FormulaFunctionEntry(
+      name: "XMATCH", kind: .lookup, arguments: "lookup_value, lookup_array, [match_mode]"),
 
     FormulaFunctionEntry(name: "DATE", kind: .dateTime, arguments: "year, month, day"),
     FormulaFunctionEntry(name: "DAY", kind: .dateTime, arguments: "serial_number"),
@@ -117,7 +137,8 @@ public enum FormulaFunctionCatalog {
   public static func groups(matching query: String) -> [FormulaFunctionGroup] {
     let implemented = Set(FormulaFunctions.all)
     return FormulaFunctionKind.allCases.compactMap { kind in
-      let entries = defined
+      let entries =
+        defined
         .filter { $0.kind == kind && implemented.contains($0.name) && $0.matches(query) }
         .sorted { $0.name < $1.name }
       guard !entries.isEmpty else { return nil }

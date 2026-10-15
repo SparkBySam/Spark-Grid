@@ -1,11 +1,11 @@
 import CoreXLSX
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
+import NumberFormat
 
-public extension XLSXCodec {
+extension XLSXCodec {
   // MARK: - Sheet extras (freeze, autofilter, CF, merges, theme) from / into worksheet XML
 
   public static func importFreezePanes(from worksheet: Worksheet, into sheet: inout Sheet) {
@@ -42,25 +42,35 @@ public extension XLSXCodec {
     return ThemeColorLookup.parseStyleColors(stylesXML: xml, scheme: scheme)
   }
 
-  public static func importAutoFilter(into sheet: inout Sheet, archiveData: Data, worksheetPath: String) {
-    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
-    guard let blockRange = xml.range(
-      of: #"<autoFilter\b[^>]*(?:/>|>[\s\S]*?</autoFilter>)"#,
-      options: .regularExpression
-    ) else { return }
+  public static func importAutoFilter(
+    into sheet: inout Sheet, archiveData: Data, worksheetPath: String
+  ) {
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else {
+      return
+    }
+    guard
+      let blockRange = xml.range(
+        of: #"<autoFilter\b[^>]*(?:/>|>[\s\S]*?</autoFilter>)"#,
+        options: .regularExpression
+      )
+    else { return }
     let block = String(xml[blockRange])
-    guard let refRange = block.range(of: #"ref="[^"]+""#, options: .regularExpression) else { return }
+    guard let refRange = block.range(of: #"ref="[^"]+""#, options: .regularExpression) else {
+      return
+    }
     let quoted = String(block[refRange])
     guard let q1 = quoted.firstIndex(of: "\""),
-          let q2 = quoted.lastIndex(of: "\""),
-          q1 < q2
+      let q2 = quoted.lastIndex(of: "\""),
+      q1 < q2
     else { return }
     let ref = String(quoted[quoted.index(after: q1)..<q2])
     guard let range = parseCellRange(ref) else { return }
 
     var selected: [Int: Set<String>] = [:]
     let colPattern = #"<filterColumn\b([^>]*)>(.*?)</filterColumn>"#
-    if let colRegex = try? NSRegularExpression(pattern: colPattern, options: [.dotMatchesLineSeparators]) {
+    if let colRegex = try? NSRegularExpression(
+      pattern: colPattern, options: [.dotMatchesLineSeparators])
+    {
       let ns = block as NSString
       for match in colRegex.matches(in: block, range: NSRange(location: 0, length: ns.length)) {
         let attrs = ns.substring(with: match.range(at: 1))
@@ -71,7 +81,9 @@ public extension XLSXCodec {
         let filterPattern = #"<filter\b([^>]*)/?\s*>"#
         if let filterRegex = try? NSRegularExpression(pattern: filterPattern) {
           let bodyNS = body as NSString
-          for fMatch in filterRegex.matches(in: body, range: NSRange(location: 0, length: bodyNS.length)) {
+          for fMatch in filterRegex.matches(
+            in: body, range: NSRange(location: 0, length: bodyNS.length))
+          {
             let fAttrs = bodyNS.substring(with: fMatch.range(at: 1))
             if let val = attributeValue(fAttrs, name: "val") {
               values.insert(decodeXMLEntities(val))
@@ -93,8 +105,11 @@ public extension XLSXCodec {
     dxfs: [ConditionalFormatStyle],
     themeScheme: ThemeColorScheme
   ) {
-    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else { return }
-    importConditionalFormatting(into: &sheet, worksheetXML: xml, dxfs: dxfs, themeScheme: themeScheme)
+    guard let xml = zipEntryString(archiveData: archiveData, entryPath: worksheetPath) else {
+      return
+    }
+    importConditionalFormatting(
+      into: &sheet, worksheetXML: xml, dxfs: dxfs, themeScheme: themeScheme)
   }
 
   public static func importConditionalFormatting(
@@ -122,10 +137,12 @@ public extension XLSXCodec {
     }
 
     let blockPattern = #"<conditionalFormatting\b([^>]*)>(.*?)</conditionalFormatting>"#
-    guard let blockRegex = try? NSRegularExpression(
-      pattern: blockPattern,
-      options: [.dotMatchesLineSeparators]
-    ) else { return }
+    guard
+      let blockRegex = try? NSRegularExpression(
+        pattern: blockPattern,
+        options: [.dotMatchesLineSeparators]
+      )
+    else { return }
     let nsxml = xml as NSString
     let full = NSRange(location: 0, length: nsxml.length)
 
@@ -149,12 +166,16 @@ public extension XLSXCodec {
     public var body: String
   }
 
-  private static func extractX14ConditionalFormattingBlocks(from xml: String) -> [ConditionalFormattingBlock] {
+  private static func extractX14ConditionalFormattingBlocks(from xml: String)
+    -> [ConditionalFormattingBlock]
+  {
     let blockPattern = #"<x14:conditionalFormatting\b[^>]*>(.*?)</x14:conditionalFormatting>"#
-    guard let blockRegex = try? NSRegularExpression(
-      pattern: blockPattern,
-      options: [.dotMatchesLineSeparators]
-    ) else { return [] }
+    guard
+      let blockRegex = try? NSRegularExpression(
+        pattern: blockPattern,
+        options: [.dotMatchesLineSeparators]
+      )
+    else { return [] }
     let nsxml = xml as NSString
     let full = NSRange(location: 0, length: nsxml.length)
     var blocks: [ConditionalFormattingBlock] = []
@@ -168,13 +189,18 @@ public extension XLSXCodec {
   }
 
   private static func xmSqref(in body: String) -> String? {
-    guard let range = body.range(
-      of: #"<xm:sqref>([\s\S]*?)</xm:sqref>"#,
-      options: .regularExpression
-    ) else { return nil }
+    guard
+      let range = body.range(
+        of: #"<xm:sqref>([\s\S]*?)</xm:sqref>"#,
+        options: .regularExpression
+      )
+    else { return nil }
     let token = String(body[range])
-    guard let open = token.range(of: ">"), let close = token.range(of: "</xm:sqref>") else { return nil }
-    return String(token[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let open = token.range(of: ">"), let close = token.range(of: "</xm:sqref>") else {
+      return nil
+    }
+    return String(token[open.upperBound..<close.lowerBound]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
   }
 
   private static func importConditionalFormattingBlock(
@@ -185,18 +211,22 @@ public extension XLSXCodec {
     themeScheme: ThemeColorScheme,
     x14Formulas: Bool
   ) {
-    let ranges = sqref
+    let ranges =
+      sqref
       .split(whereSeparator: \.isWhitespace)
       .compactMap { parseCellRange(String($0)) }
     guard !ranges.isEmpty else { return }
 
-    let rulePattern = x14Formulas
+    let rulePattern =
+      x14Formulas
       ? #"<x14:cfRule\b([^>]*)>(.*?)</x14:cfRule>|<x14:cfRule\b([^>]*)/>"#
       : #"<cfRule\b([^>]*)>(.*?)</cfRule>|<cfRule\b([^>]*)/>"#
-    guard let ruleRegex = try? NSRegularExpression(
-      pattern: rulePattern,
-      options: [.dotMatchesLineSeparators]
-    ) else { return }
+    guard
+      let ruleRegex = try? NSRegularExpression(
+        pattern: rulePattern,
+        options: [.dotMatchesLineSeparators]
+      )
+    else { return }
     let bodyNS = body as NSString
     let bodyFull = NSRange(location: 0, length: bodyNS.length)
 
@@ -257,7 +287,8 @@ public extension XLSXCodec {
       }
       for range in ranges {
         sheet.conditionalFormats.append(
-          ConditionalFormatRule(range: range, stopIfTrue: stop, predicate: predicate, style: ruleStyle)
+          ConditionalFormatRule(
+            range: range, stopIfTrue: stop, predicate: predicate, style: ruleStyle)
         )
       }
     }
@@ -270,24 +301,31 @@ public extension XLSXCodec {
     guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else {
       return []
     }
-    guard let dxfsRange = xml.range(of: #"<dxfs\b[^>]*>[\s\S]*?</dxfs>"#, options: .regularExpression)
+    guard
+      let dxfsRange = xml.range(of: #"<dxfs\b[^>]*>[\s\S]*?</dxfs>"#, options: .regularExpression)
     else { return [] }
     let dxfsXML = String(xml[dxfsRange])
     let dxfPattern = #"<dxf>(.*?)</dxf>"#
-    guard let regex = try? NSRegularExpression(
-      pattern: dxfPattern,
-      options: [.dotMatchesLineSeparators]
-    ) else { return [] }
+    guard
+      let regex = try? NSRegularExpression(
+        pattern: dxfPattern,
+        options: [.dotMatchesLineSeparators]
+      )
+    else { return [] }
     let ns = dxfsXML as NSString
     var styles: [ConditionalFormatStyle] = []
-    for match in regex.matches(in: dxfsXML, options: [], range: NSRange(location: 0, length: ns.length)) {
+    for match in regex.matches(
+      in: dxfsXML, options: [], range: NSRange(location: 0, length: ns.length))
+    {
       let body = ns.substring(with: match.range(at: 1))
       styles.append(parseDxfBody(body, themeScheme: themeScheme))
     }
     return styles
   }
 
-  public static func parseDxfBody(_ body: String, themeScheme: ThemeColorScheme) -> ConditionalFormatStyle {
+  public static func parseDxfBody(_ body: String, themeScheme: ThemeColorScheme)
+    -> ConditionalFormatStyle
+  {
     var style = ConditionalFormatStyle()
     // `<b/>` is on. `<b val="0"/>` is off. A tag's presence is not "on" —
     // Excel writes val="0" for an unchecked Bold box, next to the fill and text color.
@@ -303,7 +341,8 @@ public extension XLSXCodec {
       of: #"<(?:x14:)?font\b[^>]*>[\s\S]*?</(?:x14:)?font>"#,
       options: .regularExpression
     ) {
-      if let text = firstColor(in: String(body[fontBlock]), near: "color", themeScheme: themeScheme) {
+      if let text = firstColor(in: String(body[fontBlock]), near: "color", themeScheme: themeScheme)
+      {
         style.textColor = text
       }
     }
@@ -314,14 +353,18 @@ public extension XLSXCodec {
     guard let xml = zipEntryString(archiveData: archiveData, entryPath: "xl/styles.xml") else {
       return []
     }
-    guard let fontsRange = xml.range(of: #"<fonts\b[^>]*>[\s\S]*?</fonts>"#, options: .regularExpression)
+    guard
+      let fontsRange = xml.range(
+        of: #"<fonts\b[^>]*>[\s\S]*?</fonts>"#, options: .regularExpression)
     else { return [] }
     let fontsXML = String(xml[fontsRange])
     let fontPattern = #"<font>(.*?)</font>"#
-    guard let regex = try? NSRegularExpression(
-      pattern: fontPattern,
-      options: [.dotMatchesLineSeparators]
-    ) else { return [] }
+    guard
+      let regex = try? NSRegularExpression(
+        pattern: fontPattern,
+        options: [.dotMatchesLineSeparators]
+      )
+    else { return [] }
     let ns = fontsXML as NSString
     var underlined = Set<Int>()
     for (index, match) in regex.matches(
@@ -337,11 +380,12 @@ public extension XLSXCodec {
     return underlined
   }
 
-  public static func importSparkCharts(into sheet: inout Sheet, archiveData: Data, sheetIndex: Int) {
+  public static func importSparkCharts(into sheet: inout Sheet, archiveData: Data, sheetIndex: Int)
+  {
     let path = "xl/sparkGrid/charts\(sheetIndex + 1).json"
     guard let xml = zipEntryString(archiveData: archiveData, entryPath: path),
-          let data = xml.data(using: .utf8),
-          let charts = try? JSONDecoder().decode([SheetChart].self, from: data)
+      let data = xml.data(using: .utf8),
+      let charts = try? JSONDecoder().decode([SheetChart].self, from: data)
     else { return }
     sheet.charts = charts.map { $0.positionedUnderData() }
   }
@@ -350,8 +394,8 @@ public extension XLSXCodec {
     guard frozenRows > 0 || frozenColumns > 0 else { return "" }
     let topLeft = CellAddress(row: frozenRows, col: frozenColumns).a1
     return """
-    <sheetViews><sheetView workbookViewId="0"><pane xSplit="\(frozenColumns)" ySplit="\(frozenRows)" topLeftCell="\(topLeft)" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>
-    """
+      <sheetViews><sheetView workbookViewId="0"><pane xSplit="\(frozenColumns)" ySplit="\(frozenRows)" topLeftCell="\(topLeft)" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>
+      """
   }
 
   public static func mergeCellsXML(_ ranges: [CellRange]) -> String {
@@ -380,7 +424,8 @@ public extension XLSXCodec {
       guard let values = filter.selectedValuesByColumn[col], !values.isEmpty else { continue }
       let colId = col - n.minCol
       let filters = values.sorted().map { #"<filter val="\#(escapeXML($0))"/>"# }.joined()
-      columnsXML += #"<filterColumn colId="\#(colId)"><filters>\#(filters)</filters></filterColumn>"#
+      columnsXML +=
+        #"<filterColumn colId="\#(colId)"><filters>\#(filters)</filters></filterColumn>"#
     }
     if columnsXML.isEmpty {
       return #"<autoFilter ref="\#(ref)"/>"#
@@ -410,41 +455,53 @@ public extension XLSXCodec {
         switch rule.predicate {
         case .greaterThan(let v):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="greaterThan"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="greaterThan"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .lessThan(let v):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="lessThan"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="lessThan"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .greaterOrEqual(let v):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="greaterThanOrEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="greaterThanOrEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .lessOrEqual(let v):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="lessThanOrEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="lessThanOrEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .equal(let v):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="equal"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="equal"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .notEqual(let v):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="notEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="notEqual"><formula>\#(escapeXML(stringFromNumber(v)))</formula></cfRule>"#
         case .between(let a, let b):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="between"><formula>\#(escapeXML(stringFromNumber(a)))</formula><formula>\#(escapeXML(stringFromNumber(b)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="between"><formula>\#(escapeXML(stringFromNumber(a)))</formula><formula>\#(escapeXML(stringFromNumber(b)))</formula></cfRule>"#
         case .notBetween(let a, let b):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="notBetween"><formula>\#(escapeXML(stringFromNumber(a)))</formula><formula>\#(escapeXML(stringFromNumber(b)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="cellIs" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="notBetween"><formula>\#(escapeXML(stringFromNumber(a)))</formula><formula>\#(escapeXML(stringFromNumber(b)))</formula></cfRule>"#
         case .textContains(let text):
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="containsText" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="containsText" text="\#(escapeXML(text))"><formula>NOT(ISERROR(SEARCH("\#(escapeXML(text))",A1)))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="containsText" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop) operator="containsText" text="\#(escapeXML(text))"><formula>NOT(ISERROR(SEARCH("\#(escapeXML(text))",A1)))</formula></cfRule>"#
         case .blanks:
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="containsBlanks" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop)/>"#
+          xml +=
+            #"<cfRule type="containsBlanks" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop)/>"#
         case .nonBlanks:
           let dxfId = dxfIndex(rule.style)
-          xml += #"<cfRule type="notContainsBlanks" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop)/>"#
+          xml +=
+            #"<cfRule type="notContainsBlanks" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop)/>"#
         case .formula(let raw):
           let dxfId = dxfIndex(rule.style)
           let formula = raw.hasPrefix("=") ? String(raw.dropFirst()) : raw
-          xml += #"<cfRule type="expression" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop)><formula>\#(escapeXML(formula))</formula></cfRule>"#
+          xml +=
+            #"<cfRule type="expression" dxfId="\#(dxfId)" priority="\#(priority)"\#(stop)><formula>\#(escapeXML(formula))</formula></cfRule>"#
         case .colorScale(let stops):
           xml += #"<cfRule type="colorScale" priority="\#(priority)"\#(stop)><colorScale>"#
           for stop in stops {
@@ -456,9 +513,11 @@ public extension XLSXCodec {
             case .number:
               xml += #"<cfvo type="num" val="\#(escapeXML(stringFromNumber(stop.value ?? 0)))"/>"#
             case .percent:
-              xml += #"<cfvo type="percent" val="\#(escapeXML(stringFromNumber(stop.value ?? 0)))"/>"#
+              xml +=
+                #"<cfvo type="percent" val="\#(escapeXML(stringFromNumber(stop.value ?? 0)))"/>"#
             case .percentile:
-              xml += #"<cfvo type="percentile" val="\#(escapeXML(stringFromNumber(stop.value ?? 50)))"/>"#
+              xml +=
+                #"<cfvo type="percentile" val="\#(escapeXML(stringFromNumber(stop.value ?? 50)))"/>"#
             }
           }
           for stop in stops {
@@ -467,9 +526,11 @@ public extension XLSXCodec {
           xml += "</colorScale></cfRule>"
         case .dataBar(let style):
           let show = style.showValue ? "" : #" showValue="0""#
-          xml += #"<cfRule type="dataBar" priority="\#(priority)"\#(stop)><dataBar\#(show)><cfvo type="min"/><cfvo type="max"/><color rgb="FF\#(rgbHex(style.color))"/></dataBar></cfRule>"#
+          xml +=
+            #"<cfRule type="dataBar" priority="\#(priority)"\#(stop)><dataBar\#(show)><cfvo type="min"/><cfvo type="max"/><color rgb="FF\#(rgbHex(style.color))"/></dataBar></cfRule>"#
         case .iconSet(let style):
-          xml += #"<cfRule type="iconSet" priority="\#(priority)"\#(stop)><iconSet iconSet="\#(style.excelName)"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>"#
+          xml +=
+            #"<cfRule type="iconSet" priority="\#(priority)"\#(stop)><iconSet iconSet="\#(style.excelName)"><cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/></iconSet></cfRule>"#
         }
       }
       xml += "</conditionalFormatting>"
@@ -491,7 +552,8 @@ public extension XLSXCodec {
 
     var blocks = ""
     for (sqref, items) in grouped.sorted(by: { $0.key < $1.key }) {
-      blocks += #"<x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">"#
+      blocks +=
+        #"<x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">"#
       blocks += #"<xm:sqref>\#(sqref)</xm:sqref>"#
       for (rule, priority) in items {
         blocks += x14CfRuleXML(rule, priority: priority)
@@ -500,12 +562,12 @@ public extension XLSXCodec {
     }
 
     return """
-    <extLst>
-      <ext uri="{78C0FAFA-122D-4D67-B399-A730565E8757}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">
-        <x14:conditionalFormattings>\(blocks)</x14:conditionalFormattings>
-      </ext>
-    </extLst>
-    """
+      <extLst>
+        <ext uri="{78C0FAFA-122D-4D67-B399-A730565E8757}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">
+          <x14:conditionalFormattings>\(blocks)</x14:conditionalFormattings>
+        </ext>
+      </extLst>
+      """
   }
 
   private static func x14CfRuleXML(_ rule: ConditionalFormatRule, priority: Int) -> String {
@@ -585,12 +647,15 @@ public extension XLSXCodec {
         text: text
       )
     case .blanks:
-      return #"<x14:cfRule type="containsBlanks" priority="\#(priority)"\#(stop)>\#(x14DxfXML(rule.style))</x14:cfRule>"#
+      return
+        #"<x14:cfRule type="containsBlanks" priority="\#(priority)"\#(stop)>\#(x14DxfXML(rule.style))</x14:cfRule>"#
     case .nonBlanks:
-      return #"<x14:cfRule type="notContainsBlanks" priority="\#(priority)"\#(stop)>\#(x14DxfXML(rule.style))</x14:cfRule>"#
+      return
+        #"<x14:cfRule type="notContainsBlanks" priority="\#(priority)"\#(stop)>\#(x14DxfXML(rule.style))</x14:cfRule>"#
     case .formula(let raw):
       let formula = raw.hasPrefix("=") ? String(raw.dropFirst()) : raw
-      return #"<x14:cfRule type="expression" priority="\#(priority)"\#(stop)>\#(x14DxfXML(rule.style))<xm:f>\#(escapeXML(formula))</xm:f></x14:cfRule>"#
+      return
+        #"<x14:cfRule type="expression" priority="\#(priority)"\#(stop)>\#(x14DxfXML(rule.style))<xm:f>\#(escapeXML(formula))</xm:f></x14:cfRule>"#
     case .colorScale(let stops):
       var xml = #"<x14:cfRule type="colorScale" priority="\#(priority)"\#(stop)><x14:colorScale>"#
       for stop in stops {
@@ -600,9 +665,11 @@ public extension XLSXCodec {
         case .number:
           xml += #"<x14:cfvo type="num" val="\#(escapeXML(stringFromNumber(stop.value ?? 0)))"/>"#
         case .percent:
-          xml += #"<x14:cfvo type="percent" val="\#(escapeXML(stringFromNumber(stop.value ?? 0)))"/>"#
+          xml +=
+            #"<x14:cfvo type="percent" val="\#(escapeXML(stringFromNumber(stop.value ?? 0)))"/>"#
         case .percentile:
-          xml += #"<x14:cfvo type="percentile" val="\#(escapeXML(stringFromNumber(stop.value ?? 50)))"/>"#
+          xml +=
+            #"<x14:cfvo type="percentile" val="\#(escapeXML(stringFromNumber(stop.value ?? 50)))"/>"#
         }
       }
       for stop in stops {
@@ -612,9 +679,11 @@ public extension XLSXCodec {
       return xml
     case .dataBar(let style):
       let show = style.showValue ? "" : #" showValue="0""#
-      return #"<x14:cfRule type="dataBar" priority="\#(priority)"\#(stop)><x14:dataBar\#(show)><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FF\#(rgbHex(style.color))"/></x14:dataBar></x14:cfRule>"#
+      return
+        #"<x14:cfRule type="dataBar" priority="\#(priority)"\#(stop)><x14:dataBar\#(show)><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FF\#(rgbHex(style.color))"/></x14:dataBar></x14:cfRule>"#
     case .iconSet(let style):
-      return #"<x14:cfRule type="iconSet" priority="\#(priority)"\#(stop)><x14:iconSet iconSet="\#(style.excelName)"><x14:cfvo type="percent" val="0"/><x14:cfvo type="percent" val="33"/><x14:cfvo type="percent" val="67"/></x14:iconSet></x14:cfRule>"#
+      return
+        #"<x14:cfRule type="iconSet" priority="\#(priority)"\#(stop)><x14:iconSet iconSet="\#(style.excelName)"><x14:cfvo type="percent" val="0"/><x14:cfvo type="percent" val="33"/><x14:cfvo type="percent" val="67"/></x14:iconSet></x14:cfRule>"#
     }
   }
 
@@ -628,7 +697,8 @@ public extension XLSXCodec {
   ) -> String {
     let textAttr = text.map { #" text="\#(escapeXML($0))""# } ?? ""
     let formulaXML = formulas.map { #"<xm:f>\#(escapeXML($0))</xm:f>"# }.joined()
-    return #"<x14:cfRule type="cellIs" priority="\#(priority)"\#(stop) operator="\#(op)"\#(textAttr)>\#(x14DxfXML(style))\#(formulaXML)</x14:cfRule>"#
+    return
+      #"<x14:cfRule type="cellIs" priority="\#(priority)"\#(stop) operator="\#(op)"\#(textAttr)>\#(x14DxfXML(style))\#(formulaXML)</x14:cfRule>"#
   }
 
   private static func x14DxfXML(_ style: ConditionalFormatStyle) -> String {
@@ -642,7 +712,8 @@ public extension XLSXCodec {
     let fontXML = font.isEmpty ? "" : "<x14:font>\(font)</x14:font>"
     var fillXML = ""
     if let rgb = style.fillColor.map(rgbHex) {
-      fillXML = #"<x14:fill><x14:patternFill patternType="solid"><x14:bgColor rgb="FF\#(rgb)"/></x14:patternFill></x14:fill>"#
+      fillXML =
+        #"<x14:fill><x14:patternFill patternType="solid"><x14:bgColor rgb="FF\#(rgb)"/></x14:patternFill></x14:fill>"#
     }
     return "<x14:dxf>\(fontXML)\(fillXML)</x14:dxf>"
   }
@@ -660,7 +731,8 @@ public extension XLSXCodec {
       let fontXML = font.isEmpty ? "" : "<font>\(font)</font>"
       var fillXML = ""
       if let rgb = style.fillColor.map(rgbHex) {
-        fillXML = #"<fill><patternFill patternType="solid"><bgColor rgb="FF\#(rgb)"/></patternFill></fill>"#
+        fillXML =
+          #"<fill><patternFill patternType="solid"><bgColor rgb="FF\#(rgb)"/></patternFill></fill>"#
       }
       body += "<dxf>\(fontXML)\(fillXML)</dxf>"
     }
@@ -701,7 +773,8 @@ public extension XLSXCodec {
     let ns = scope as NSString
     let full = NSRange(location: 0, length: ns.length)
     guard let match = regex.firstMatch(in: scope, options: [], range: full) else { return nil }
-    let attrs = match.range(at: 1).location == NSNotFound ? "" : ns.substring(with: match.range(at: 1))
+    let attrs =
+      match.range(at: 1).location == NSNotFound ? "" : ns.substring(with: match.range(at: 1))
     guard let raw = attributeValue(attrs, name: "val") else { return true }
     switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "0", "false", "off":
@@ -724,21 +797,26 @@ public extension XLSXCodec {
     in body: String,
     themeScheme: ThemeColorScheme
   ) -> ConditionalFormatPredicate? {
-    guard let scaleRange = body.range(
-      of: #"<(?:x14:)?colorScale>[\s\S]*?</(?:x14:)?colorScale>"#,
-      options: .regularExpression
-    )
+    guard
+      let scaleRange = body.range(
+        of: #"<(?:x14:)?colorScale>[\s\S]*?</(?:x14:)?colorScale>"#,
+        options: .regularExpression
+      )
     else { return nil }
     let scale = String(body[scaleRange])
     let cfvoPattern = #"<(?:x14:)?cfvo\b([^>]*)/?\s*>"#
     let colorPattern = #"<(?:x14:)?color\b([^>]*)/?\s*>"#
     guard let cfvoRegex = try? NSRegularExpression(pattern: cfvoPattern),
-          let colorRegex = try? NSRegularExpression(pattern: colorPattern)
+      let colorRegex = try? NSRegularExpression(pattern: colorPattern)
     else { return nil }
     let ns = scale as NSString
     let full = NSRange(location: 0, length: ns.length)
-    let cfvos = cfvoRegex.matches(in: scale, range: full).map { ns.substring(with: $0.range(at: 1)) }
-    let colors = colorRegex.matches(in: scale, range: full).map { ns.substring(with: $0.range(at: 1)) }
+    let cfvos = cfvoRegex.matches(in: scale, range: full).map {
+      ns.substring(with: $0.range(at: 1))
+    }
+    let colors = colorRegex.matches(in: scale, range: full).map {
+      ns.substring(with: $0.range(at: 1))
+    }
     guard cfvos.count >= 2, colors.count == cfvos.count else { return nil }
 
     var stops: [ColorScaleStop] = []
@@ -755,7 +833,8 @@ public extension XLSXCodec {
       }
       let value = attributeValue(attrs, name: "val").flatMap(Double.init)
       let colorAttrs = colors[index]
-      let color = ThemeColorLookup.resolve(fromAttributes: colorAttrs, scheme: themeScheme)
+      let color =
+        ThemeColorLookup.resolve(fromAttributes: colorAttrs, scheme: themeScheme)
         ?? colorFromRGBHex(attributeValue(colorAttrs, name: "rgb") ?? "")
         ?? CodableColor(red: 0.99, green: 0.8, blue: 0.8, alpha: 1)
       stops.append(ColorScaleStop(type: type, value: value, color: color))
@@ -767,15 +846,18 @@ public extension XLSXCodec {
     in body: String,
     themeScheme: ThemeColorScheme
   ) -> ConditionalFormatPredicate? {
-    guard let barRange = body.range(
-      of: #"<(?:x14:)?dataBar\b[^>]*>[\s\S]*?</(?:x14:)?dataBar>"#,
-      options: .regularExpression
-    ) ?? body.range(of: #"<(?:x14:)?dataBar\b[^>]*/>"#, options: .regularExpression)
+    guard
+      let barRange = body.range(
+        of: #"<(?:x14:)?dataBar\b[^>]*>[\s\S]*?</(?:x14:)?dataBar>"#,
+        options: .regularExpression
+      ) ?? body.range(of: #"<(?:x14:)?dataBar\b[^>]*/>"#, options: .regularExpression)
     else { return nil }
     let bar = String(body[barRange])
     let showValue = !(bar.contains(#"showValue="0""#) || bar.contains("showValue='0'"))
     var color = DataBarStyle.blue.color
-    if let colorRange = bar.range(of: #"<(?:x14:)?color\b([^>]*)/?\s*>"#, options: .regularExpression) {
+    if let colorRange = bar.range(
+      of: #"<(?:x14:)?color\b([^>]*)/?\s*>"#, options: .regularExpression)
+    {
       let token = String(bar[colorRange])
       if let themed = ThemeColorLookup.resolve(fromAttributes: token, scheme: themeScheme) {
         color = themed
@@ -786,15 +868,17 @@ public extension XLSXCodec {
     return .dataBar(DataBarStyle(color: color, showValue: showValue))
   }
 
-  private static func iconSetPredicate(in body: String, ruleAttrs: String) -> ConditionalFormatPredicate? {
+  private static func iconSetPredicate(in body: String, ruleAttrs: String)
+    -> ConditionalFormatPredicate?
+  {
     var name = attributeValue(ruleAttrs, name: "iconSet")
     if name == nil,
-       let range = body.range(of: #"(?:iconSet|x14:iconSet)="[^"]+""#, options: .regularExpression)
+      let range = body.range(of: #"(?:iconSet|x14:iconSet)="[^"]+""#, options: .regularExpression)
     {
       let token = String(body[range])
       if let q1 = token.firstIndex(of: "\""),
-         let q2 = token.lastIndex(of: "\""),
-         q1 < q2
+        let q2 = token.lastIndex(of: "\""),
+        q1 < q2
       {
         name = String(token[token.index(after: q1)..<q2])
       }
@@ -805,7 +889,9 @@ public extension XLSXCodec {
     return .iconSet(style)
   }
 
-  private static func cellIsPredicate(operator op: String, formulas: [String]) -> ConditionalFormatPredicate? {
+  private static func cellIsPredicate(operator op: String, formulas: [String])
+    -> ConditionalFormatPredicate?
+  {
     let numericValues = formulas.compactMap { parseNumericFormulaValue($0) }
     switch op {
     case "greaterThan":
@@ -849,8 +935,11 @@ public extension XLSXCodec {
   }
 
   /// Excel text comparisons in cellIs rules are relative to the rule's top-left cell.
-  private static func textCellIsFormulaPredicate(operator op: String, text: String) -> ConditionalFormatPredicate {
-    let escaped = text
+  private static func textCellIsFormulaPredicate(operator op: String, text: String)
+    -> ConditionalFormatPredicate
+  {
+    let escaped =
+      text
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "\"", with: "\"\"")
     return .formula("=A1\(op)\"\(escaped)\"")
@@ -861,7 +950,8 @@ public extension XLSXCodec {
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = body as NSString
     return regex.matches(in: body, range: NSRange(location: 0, length: ns.length)).map { match in
-      decodeXMLEntities(ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines))
+      decodeXMLEntities(
+        ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines))
     }
   }
 
@@ -870,7 +960,8 @@ public extension XLSXCodec {
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = body as NSString
     return regex.matches(in: body, range: NSRange(location: 0, length: ns.length)).map { match in
-      decodeXMLEntities(ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines))
+      decodeXMLEntities(
+        ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines))
     }
   }
 
@@ -880,8 +971,8 @@ public extension XLSXCodec {
     }
     let token = String(attrs[range])
     guard let q1 = token.firstIndex(of: "\""),
-          let q2 = token.lastIndex(of: "\""),
-          q1 < q2
+      let q2 = token.lastIndex(of: "\""),
+      q1 < q2
     else { return nil }
     return String(token[token.index(after: q1)..<q2])
   }
@@ -915,8 +1006,8 @@ public extension XLSXCodec {
     else { return nil }
     let token = String(window[rgbRange])
     guard let q1 = token.firstIndex(of: "\""),
-          let q2 = token.lastIndex(of: "\""),
-          q1 < q2
+      let q2 = token.lastIndex(of: "\""),
+      q1 < q2
     else { return nil }
     return colorFromRGBHex(String(token[token.index(after: q1)..<q2]))
   }

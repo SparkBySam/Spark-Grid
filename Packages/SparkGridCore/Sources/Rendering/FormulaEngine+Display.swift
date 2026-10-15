@@ -3,7 +3,7 @@ import Foundation
 import GridCore
 import Model
 
-public extension FormulaEngine {
+extension FormulaEngine {
   public func displayString(at address: CellAddress, sheet: Sheet, format: CellFormat?) -> String {
     let cell = sheet.cell(at: address)
     let value = sheetDisplayValue(at: address, sheet: sheet, cell: cell)

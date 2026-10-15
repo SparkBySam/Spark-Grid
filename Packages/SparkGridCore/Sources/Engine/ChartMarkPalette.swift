@@ -1,11 +1,11 @@
-import Foundation
-import GridCore
-import NumberFormat
-import Formula
-import Functions
-import Model
 import Calc
 import FileFormats
+import Formula
+import Foundation
+import Functions
+import GridCore
+import Model
+import NumberFormat
 
 /// Preset series colors. A chart paints one series color (its own, or the first
 /// swatch) and optional per-point overrides. The swatches stay distinct so the

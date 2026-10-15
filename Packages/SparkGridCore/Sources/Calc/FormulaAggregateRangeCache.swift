@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 /// Stable identity for a rectangular range used by conditional aggregates (COUNTIFS, SUMIFS, …).
 public nonisolated struct AggregateRangeKey: Hashable {
@@ -85,7 +85,8 @@ public nonisolated final class FormulaAggregateRangeCache {
   public var workbookBulkLoader: ((AggregateRangeKey) -> [CellValue])?
   private var snapshots: [AggregateRangeKey: [CellValue]] = [:]
   private var countIndexes: [CompositeCountIndexKey: [AggregateCriteriaTupleKey: Int]] = [:]
-  private var sumIndexes: [CompositeSumIndexKey: [AggregateCriteriaTupleKey: AggregateSumBucket]] = [:]
+  private var sumIndexes: [CompositeSumIndexKey: [AggregateCriteriaTupleKey: AggregateSumBucket]] =
+    [:]
   private var booleanStaticMasks: [UInt64: [Bool]] = [:]
   private var maskedCountIndexes: [MaskedCountIndexKey: [AggregateValueKey: Int]] = [:]
 
@@ -110,7 +111,8 @@ public nonisolated final class FormulaAggregateRangeCache {
     guard !removedKeys.isEmpty else { return }
     countIndexes = countIndexes.filter { !usesAnyRange($0.key.rangeKeys, in: removedKeys) }
     sumIndexes = sumIndexes.filter {
-      !usesAnyRange($0.key.criteriaRangeKeys, in: removedKeys) && !removedKeys.contains($0.key.sumRangeKey)
+      !usesAnyRange($0.key.criteriaRangeKeys, in: removedKeys)
+        && !removedKeys.contains($0.key.sumRangeKey)
     }
     maskedCountIndexes = maskedCountIndexes.filter { !removedKeys.contains($0.key.rangeKey) }
     booleanStaticMasks.removeAll(keepingCapacity: true)
@@ -124,11 +126,13 @@ public nonisolated final class FormulaAggregateRangeCache {
     criteriaKey: AggregateValueKey
   ) -> Int {
     let indexKey = MaskedCountIndexKey(rangeKey: rangeKey, staticMaskKey: staticMaskKey)
-    let map = maskedCountIndexes[indexKey] ?? buildMaskedCountIndex(
-      indexKey: indexKey,
-      column: column,
-      mask: mask
-    )
+    let map =
+      maskedCountIndexes[indexKey]
+      ?? buildMaskedCountIndex(
+        indexKey: indexKey,
+        column: column,
+        mask: mask
+      )
     return map[criteriaKey, default: 0]
   }
 
@@ -207,7 +211,8 @@ public nonisolated final class FormulaAggregateRangeCache {
     criteriaKeys: [AggregateValueKey],
     supplyColumns: () -> (criteriaColumns: [[CellValue]], sumColumn: [CellValue])
   ) -> AggregateSumBucket {
-    let indexKey = CompositeSumIndexKey(criteriaRangeKeys: criteriaRangeKeys, sumRangeKey: sumRangeKey)
+    let indexKey = CompositeSumIndexKey(
+      criteriaRangeKeys: criteriaRangeKeys, sumRangeKey: sumRangeKey)
     let tuple = AggregateCriteriaTupleKey(parts: criteriaKeys)
     if let map = sumIndexes[indexKey] {
       return map[tuple, default: AggregateSumBucket()]
@@ -221,7 +226,8 @@ public nonisolated final class FormulaAggregateRangeCache {
     return map[tuple, default: AggregateSumBucket()]
   }
 
-  private func usesAnyRange(_ keys: [AggregateRangeKey], in removed: Set<AggregateRangeKey>) -> Bool {
+  private func usesAnyRange(_ keys: [AggregateRangeKey], in removed: Set<AggregateRangeKey>) -> Bool
+  {
     keys.contains(where: { removed.contains($0) })
   }
 

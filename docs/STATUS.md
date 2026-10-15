@@ -4,15 +4,15 @@ Updated: 2026-10-15. Commit this file in the same commit as the work it describe
 
 ## Phase
 
-Workflow gates, W3. The commit gate is in the tree and does not pass. W4 through W8 are not started. Phase A (correct answers) is paused and has no commits.
+Workflow gates, W4. Crash rules are clean and the recovery copy exists. W5 through W8 are not started. Phase A (correct answers) is paused and has no commits.
 
 ## Next task
 
-W4. Clear the SwiftLint crash-rule violations. The gate stops there. Do not disable a rule.
+W5. Private corpus, saved-result answer check, ledger ground truth, fuzz smoke, and unit tests for every function marked present.
 
 ## Last gate result
 
-2026-10-15. `scripts/ci.sh` printed `FAIL (0.6s)`. It stopped at lint. SwiftLint 0.65.1 strict, 100 Swift files, 13 violations: 8 `force_unwrapping`, 2 `fatalError`, 1 `implicitly_unwrapped_optional`, 1 subscript `]!`, 1 `precondition(`. No `force_try`, `force_cast`, `assert(`, `unowned`, or `preconditionFailure(` in that run. Later stages did not run.
+2026-10-15, after W4. SwiftLint 0.65.1 strict passed. `swift-format lint -s` passed. `swift test` passed. The full `scripts/ci.sh` run still stops later: privacy and assets fail until W8, and the ledger and fuzz targets are not built until W5. KPI skips when `SPARK_GRID_CORPUS` is unset. Do not weaken those stages.
 
 Independent checks, not part of the 0.6s: `swift-format lint -s` failed with 9266 findings. `scripts/check-layers.sh` passed. Privacy failed on the tracked spreadsheets outside `Fixtures/`, on `scripts/answers/reference-answers.txt`, and on `web/images/hero.png` (over 1 MB, allowlist empty). Assets failed because `ATTRIBUTION.md` is missing. Ledger failed because `AnswerCheck` is not built. KPI skipped because `SPARK_GRID_CORPUS` is unset. Fuzz failed because `CommandFuzz` is not built. There is no full PASS.
 
@@ -20,7 +20,7 @@ Answer check on 2026-10-15, scalar evaluator against displayed values, KPI workb
 
 ## Latest Release numbers
 
-Date: 2026-10-15. Binary: Release build of `2958120`. Machine: this Mac. W3 did not change engine or UI code, so these numbers are still the baseline.
+Date: 2026-10-15. Binary: Release build of `2958120`. Machine: this Mac. W4 changes crash paths, not the timed open/save/scroll paths. These numbers stay the baseline until a new Release run.
 
 KPI reference file:
 

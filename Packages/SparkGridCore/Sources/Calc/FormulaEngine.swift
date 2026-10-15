@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 /// Evaluates formulas on the active sheet, with cross-sheet lookups into the workbook.
 public final class FormulaEngine {
@@ -15,9 +15,9 @@ public final class FormulaEngine {
   /// throw away results that were already calculated.
   private var valuesBySheet: [String: [CellAddress: CellValue]] = [:]
   private var formulaAST: [CellAddress: FormulaExpr] = [:]
-  private var dependencies: [CellAddress: Set<CellAddress>] = [:] // formula -> local refs
-  private var dependencyRanges: [CellAddress: [CellRange]] = [:] // formula -> ranges read at eval
-  private var dependents: [CellAddress: Set<CellAddress>] = [:] // cell -> formulas that use it
+  private var dependencies: [CellAddress: Set<CellAddress>] = [:]  // formula -> local refs
+  private var dependencyRanges: [CellAddress: [CellRange]] = [:]  // formula -> ranges read at eval
+  private var dependents: [CellAddress: Set<CellAddress>] = [:]  // cell -> formulas that use it
   private var revision: Int = 0
   private let aggregateRangeCache = FormulaAggregateRangeCache()
   private let lookupTableCache = FormulaLookupTableCache()
@@ -69,7 +69,9 @@ public final class FormulaEngine {
       return cached
     }
     let raw = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    if FormulaSyntax.isFormula(raw), let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
+    if FormulaSyntax.isFormula(raw),
+      let stored = storedRecalculatedValue(sheetName: sheet.name, at: address)
+    {
       return stored
     }
     if FormulaSyntax.isFormula(raw), let value = sheet.cell(at: address).cachedFormulaValue {
@@ -95,7 +97,9 @@ public final class FormulaEngine {
   /// A reference can also surface another cell's formula source when that
   /// precedent has not been calculated yet. The sheet calculates it.
   /// `displayValue` is left as the answer-check path.
-  public func sheetDisplayValue(at address: CellAddress, sheet: Sheet, cell: Cell? = nil) -> CellValue {
+  public func sheetDisplayValue(at address: CellAddress, sheet: Sheet, cell: Cell? = nil)
+    -> CellValue
+  {
     let value = displayValue(at: address, sheet: sheet)
     guard case .string(let text) = value else { return value }
     let resolved = cell ?? sheet.cell(at: address)
@@ -134,11 +138,15 @@ public final class FormulaEngine {
 
   /// Parse uncalculated formula precedents, then evaluate this cell again.
   /// This stays off `recalculate`'s eval loop so cached sheets paint as before.
-  private func valueAfterIngestingPrecedents(at address: CellAddress, sheet: Sheet, cell: Cell) -> CellValue {
+  private func valueAfterIngestingPrecedents(at address: CellAddress, sheet: Sheet, cell: Cell)
+    -> CellValue
+  {
     // The first pass stored the precedent's formula text. Drop it and calculate.
     valueCache.removeValue(forKey: address)
     let value = calculateWithPrecedents(at: address, sheet: sheet)
-    if Self.isFormulaText(value), formulaTextMatchesStoredFormula(value, sheet: sheet, address: address) {
+    if Self.isFormulaText(value),
+      formulaTextMatchesStoredFormula(value, sheet: sheet, address: address)
+    {
       if let imported = cell.cachedFormulaValue {
         valueCache[address] = imported
         return imported
@@ -153,6 +161,13 @@ public final class FormulaEngine {
   /// Range arguments are not cell dependencies, so formula cells inside those
   /// ranges are calculated before the formula itself runs.
   private func calculateWithPrecedents(at address: CellAddress, sheet: Sheet) -> CellValue {
+    if dependencyDepth >= InputBounds.maxDependencyDepth {
+      let value = CellValue.error(.value)
+      valueCache[address] = value
+      return value
+    }
+    dependencyDepth += 1
+    defer { dependencyDepth -= 1 }
     if let literal = literalOnSheet(at: address, sheet: sheet) {
       return literal
     }
@@ -209,18 +224,19 @@ public final class FormulaEngine {
   }
 
   private var precedentVisiting: Set<CellAddress> = []
+  private var dependencyDepth = 0
 
   private func calculateFormulaCells(in ranges: [CellRange], sheet: Sheet) {
     for range in ranges {
       let bounds = range.normalized
-      let rows = bounds.maxRow - bounds.minRow + 1
-      let cols = bounds.maxCol - bounds.minCol + 1
-      guard rows > 0, cols > 0 else { continue }
+      let rows = InputBounds.span(from: bounds.minRow, through: bounds.maxRow)
+      let cols = InputBounds.span(from: bounds.minCol, through: bounds.maxCol)
+      guard InputBounds.materializedCount(rows: rows, cols: cols) != nil else { continue }
       if rows * cols > 512 {
         for (dep, cell) in sheet.cells {
           guard dep.row >= bounds.minRow, dep.row <= bounds.maxRow,
-                dep.col >= bounds.minCol, dep.col <= bounds.maxCol,
-                FormulaSyntax.isFormula(cell.raw)
+            dep.col >= bounds.minCol, dep.col <= bounds.maxCol,
+            FormulaSyntax.isFormula(cell.raw)
           else { continue }
           _ = calculateWithPrecedents(at: dep, sheet: sheet)
         }
@@ -281,9 +297,11 @@ public final class FormulaEngine {
 
     var evaluator = FormulaEvaluator { [weak self] ref in
       guard let self else { return .blank }
-      return self.resolve(ref, activeSheet: sheet, localEval: { addr in
-        _ = self.displayValue(at: addr, sheet: sheet)
-      })
+      return self.resolve(
+        ref, activeSheet: sheet,
+        localEval: { addr in
+          _ = self.displayValue(at: addr, sheet: sheet)
+        })
     }
     evaluator.evaluationOrigin = address
     evaluator.namedRangeLookup = { [weak self] name in
@@ -300,7 +318,8 @@ public final class FormulaEngine {
 
   /// Re-evaluates every formula on every sheet (does not block open; call explicitly after import).
   @discardableResult
-  public func recalculateEntireWorkbook(_ workbook: Workbook, profile: Bool = true) -> TimeInterval {
+  public func recalculateEntireWorkbook(_ workbook: Workbook, profile: Bool = true) -> TimeInterval
+  {
     let start = CFAbsoluteTimeGetCurrent()
     self.workbook = workbook
     let prof = profile ? FormulaRecalcProfile() : nil
@@ -582,7 +601,9 @@ public final class FormulaEngine {
     crossSheetReadySheets.removeAll(keepingCapacity: true)
   }
 
-  private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String) -> String {
+  private func ingestTemplateKey(sheetName: String, maxRow: Int, maxCol: Int, formula: String)
+    -> String
+  {
     "\(sheetName.lowercased())\u{1e}\(maxRow)\u{1e}\(maxCol)\u{1e}\(formula)"
   }
 
@@ -726,14 +747,22 @@ public final class FormulaEngine {
   }
 
   private func workbookRangeValues(for key: AggregateRangeKey) -> [CellValue] {
-    guard let sheet = workbook.sheets.first(where: {
-      $0.name.lowercased() == key.sheet
-    }) else {
+    guard
+      let sheet = workbook.sheets.first(where: {
+        $0.name.lowercased() == key.sheet
+      })
+    else {
       return []
     }
     let recalculated = recalculatedSheetValues[sheetKey(sheet.name)]
     var values: [CellValue] = []
-    values.reserveCapacity((key.maxRow - key.minRow + 1) * (key.maxCol - key.minCol + 1))
+    let rowSpan = InputBounds.span(from: key.minRow, through: key.maxRow)
+    let colSpan = InputBounds.span(from: key.minCol, through: key.maxCol)
+    guard let count = InputBounds.materializedCount(rows: rowSpan, cols: colSpan) else {
+      return [.error(.value)]
+    }
+    guard count > 0 else { return [] }
+    values.reserveCapacity(count)
     for row in key.minRow...key.maxRow {
       for col in key.minCol...key.maxCol {
         let address = CellAddress(row: row, col: col)
@@ -789,7 +818,8 @@ public final class FormulaEngine {
     let ingestWall = CFAbsoluteTimeGetCurrent() - ingestStart
     profile?.ingestSeconds += ingestWall
     if let profile {
-      profile.ingestBulkSheetWallPeakSeconds = max(profile.ingestBulkSheetWallPeakSeconds, ingestWall)
+      profile.ingestBulkSheetWallPeakSeconds = max(
+        profile.ingestBulkSheetWallPeakSeconds, ingestWall)
     }
     let aggIdxBefore = profile?.aggregateIndexBuildSeconds ?? 0
     let evalStart = CFAbsoluteTimeGetCurrent()
@@ -820,7 +850,8 @@ public final class FormulaEngine {
     let ingestWall = CFAbsoluteTimeGetCurrent() - ingestStart
     profile?.ingestSeconds += ingestWall
     if let profile {
-      profile.ingestBulkSheetWallPeakSeconds = max(profile.ingestBulkSheetWallPeakSeconds, ingestWall)
+      profile.ingestBulkSheetWallPeakSeconds = max(
+        profile.ingestBulkSheetWallPeakSeconds, ingestWall)
     }
     let aggIdxBefore = profile?.aggregateIndexBuildSeconds ?? 0
     let evalStart = CFAbsoluteTimeGetCurrent()
@@ -845,7 +876,9 @@ public final class FormulaEngine {
   /// KPI YTD `IFERROR(Σ SUMPRODUCT…)` row ribbon (R–Y); must not steal column strips from S onward.
   private static let ytdSumproductRibbonFirstCol = 18
 
-  private func buildShapeStripPlans(sheet: Sheet, profile: FormulaRecalcProfile?) -> [ShapeStripPlan] {
+  private func buildShapeStripPlans(sheet: Sheet, profile: FormulaRecalcProfile?)
+    -> [ShapeStripPlan]
+  {
     let planStart = CFAbsoluteTimeGetCurrent()
     defer {
       profile?.shapeStripPlanSeconds += CFAbsoluteTimeGetCurrent() - planStart
@@ -859,7 +892,8 @@ public final class FormulaEngine {
   private func groupedShapeStripPlans(excludingMembers: Set<CellAddress>) -> [ShapeStripPlan] {
     var grouped: [String: [CellAddress]] = [:]
     for address in formulaAST.keys {
-      let key = sheetShapeAnchorKeys[address]
+      let key =
+        sheetShapeAnchorKeys[address]
         ?? {
           guard let expr = formulaAST[address] else { return "" }
           return FormulaRewriter.shapeAnchorKey(expr: expr, anchor: address)
@@ -873,16 +907,19 @@ public final class FormulaEngine {
       guard membersFormFillStrip(members) else { continue }
       // Column strips own S–Y; horizontal R5 ribbon only hijacks memberToMaster (see stripByMaster[S5] miss).
       if isYtdSumproductRowRibbon(members) { continue }
-      guard let master = members.min(by: {
-        if $0.row != $1.row { return $0.row < $1.row }
-        return $0.col < $1.col
-      }) else { continue }
+      guard
+        let master = members.min(by: {
+          if $0.row != $1.row { return $0.row < $1.row }
+          return $0.col < $1.col
+        })
+      else { continue }
       guard formulaAST[master] != nil else { continue }
       let sorted = members.sorted {
         if $0.row != $1.row { return $0.row < $1.row }
         return $0.col < $1.col
       }
-      let columnStrip = Set(sorted.map(\.col)).count == 1 && sorted.allSatisfy { $0.col == master.col }
+      let columnStrip =
+        Set(sorted.map(\.col)).count == 1 && sorted.allSatisfy { $0.col == master.col }
       plans.append(ShapeStripPlan(master: master, members: sorted, isColumnStrip: columnStrip))
     }
     return plans
@@ -957,8 +994,10 @@ public final class FormulaEngine {
             if $0.row != $1.row { return $0.row < $1.row }
             return $0.col < $1.col
           }
-          let columnStrip = Set(sorted.map(\.col)).count == 1 && sorted.allSatisfy { $0.col == master.col }
-          localStripPlans.append(ShapeStripPlan(master: master, members: sorted, isColumnStrip: columnStrip))
+          let columnStrip =
+            Set(sorted.map(\.col)).count == 1 && sorted.allSatisfy { $0.col == master.col }
+          localStripPlans.append(
+            ShapeStripPlan(master: master, members: sorted, isColumnStrip: columnStrip))
         }
         runMaster = nil
         runMasterExpr = nil
@@ -971,10 +1010,11 @@ public final class FormulaEngine {
         var resolved: BulkIngestMasterParse?
 
         if let master = runMaster,
-           let masterExpr = runMasterExpr,
-           let masterDeps = runMasterDeps,
-           let previousRow = lastRow,
-           address.row == previousRow + 1 {
+          let masterExpr = runMasterExpr,
+          let masterDeps = runMasterDeps,
+          let previousRow = lastRow,
+          address.row == previousRow + 1
+        {
           let rowDelta = address.row - master.row
           let colDelta = address.col - master.col
           let verifyStart = CFAbsoluteTimeGetCurrent()
@@ -986,7 +1026,8 @@ public final class FormulaEngine {
           columnMetrics.fillVerifySeconds += CFAbsoluteTimeGetCurrent() - verifyStart
           if expected == trimmed {
             let adjustStart = CFAbsoluteTimeGetCurrent()
-            let expr = FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
+            let expr = FormulaRewriter.adjustExpression(
+              masterExpr, rowDelta: rowDelta, colDelta: colDelta)
             columnMetrics.fillAdjustSeconds += CFAbsoluteTimeGetCurrent() - adjustStart
             let deps = self.shiftDependencies(masterDeps, rowDelta: rowDelta, colDelta: colDelta)
             let shapeKey: String
@@ -1195,7 +1236,9 @@ public final class FormulaEngine {
     profile: FormulaRecalcProfile? = nil,
     useShapeStrips: Bool = false
   ) {
-    recalculate(addresses: Set(formulaAST.keys), sheet: sheet, profile: profile, useShapeStrips: useShapeStrips)
+    recalculate(
+      addresses: Set(formulaAST.keys), sheet: sheet, profile: profile,
+      useShapeStrips: useShapeStrips)
   }
 
   private func recalculate(
@@ -1211,7 +1254,7 @@ public final class FormulaEngine {
     let order = topologicalOrder(of: addresses)
     var visiting: Set<CellAddress> = []
     var visited: Set<CellAddress> = []
-    var evaluator: FormulaEvaluator!
+    var evaluator = FormulaEvaluator { _ in .blank }
     var stripByMaster: [CellAddress: ShapeStripPlan] = [:]
     var memberToMaster: [CellAddress: CellAddress] = [:]
     var stripExecuted: Set<CellAddress> = []
@@ -1269,49 +1312,54 @@ public final class FormulaEngine {
 
       guard let masterExpr = formulaAST[plan.master] else { return }
       #if DEBUG
-      if evaluator.recalcProfile != nil {
-        let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let masterFormulaText = masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
-        evaluator.stripPlanDiagnosticContext = FormulaEvaluator.StripPlanDiagnosticContext(
-          sheetName: sheet.name,
-          masterFormulaText: masterFormulaText
-        )
-      }
-      defer { evaluator.stripPlanDiagnosticContext = nil }
+        if evaluator.recalcProfile != nil {
+          let masterRaw = sheet.cell(at: plan.master).raw.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+          let masterFormulaText =
+            masterRaw.hasPrefix("=") ? String(masterRaw.dropFirst()) : masterRaw
+          evaluator.stripPlanDiagnosticContext = FormulaEvaluator.StripPlanDiagnosticContext(
+            sheetName: sheet.name,
+            masterFormulaText: masterFormulaText
+          )
+        }
+        defer { evaluator.stripPlanDiagnosticContext = nil }
       #endif
 
       if plan.isColumnStrip,
-         sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
-         plan.master.col >= Self.ytdSumproductRibbonFirstCol,
-         let ytdStrip = ytdSumproductColumnStripAnchor(
-           plan: plan,
-           masterExpr: masterExpr,
-           formulaAST: formulaAST,
-           evaluator: evaluator
-         ),
-         evaluator.evaluateColumnYtdSumproductQuotientStrip(
-           master: ytdStrip.master,
-           members: ytdStrip.members,
-           expr: ytdStrip.expr,
-           sink: stripSink
-         ) {
+        sheet.name.caseInsensitiveCompare("YTD Summary") == .orderedSame,
+        plan.master.col >= Self.ytdSumproductRibbonFirstCol,
+        let ytdStrip = ytdSumproductColumnStripAnchor(
+          plan: plan,
+          masterExpr: masterExpr,
+          formulaAST: formulaAST,
+          evaluator: evaluator
+        ),
+        evaluator.evaluateColumnYtdSumproductQuotientStrip(
+          master: ytdStrip.master,
+          members: ytdStrip.members,
+          expr: ytdStrip.expr,
+          sink: stripSink
+        )
+      {
         return
       }
 
       if plan.isColumnStrip,
-         evaluator.evaluateColumnShapeStrip(
-           master: plan.master,
-           members: orderedMembers,
-           masterExpr: masterExpr,
-           sink: stripSink
-         ) {
+        evaluator.evaluateColumnShapeStrip(
+          master: plan.master,
+          members: orderedMembers,
+          masterExpr: masterExpr,
+          sink: stripSink
+        )
+      {
         return
       }
       for address in orderedMembers {
         if visited.contains(address) { continue }
         let rowDelta = address.row - plan.master.row
         let colDelta = address.col - plan.master.col
-        let expr = formulaAST[address]
+        let expr =
+          formulaAST[address]
           ?? FormulaRewriter.adjustExpression(masterExpr, rowDelta: rowDelta, colDelta: colDelta)
         evaluator.prepareForCellEvaluation(origin: address)
         valueCache[address] = evaluator.evaluate(expr)
@@ -1334,12 +1382,16 @@ public final class FormulaEngine {
       while master.row > 0 {
         let above = CellAddress(row: master.row - 1, col: master.col)
         guard let aboveExpr = formulaAST[above], !members.contains(above) else { break }
-        guard evaluator.canPlanColumnYtdSumproductQuotient(expr: aboveExpr, master: above) else { break }
+        guard evaluator.canPlanColumnYtdSumproductQuotient(expr: aboveExpr, master: above) else {
+          break
+        }
         members.insert(above, at: 0)
         master = above
         expr = aboveExpr
       }
-      guard evaluator.canPlanColumnYtdSumproductQuotient(expr: expr, master: master) else { return nil }
+      guard evaluator.canPlanColumnYtdSumproductQuotient(expr: expr, master: master) else {
+        return nil
+      }
       return (master, members, expr)
     }
 
@@ -1445,9 +1497,11 @@ public final class FormulaEngine {
   }
 
   private func resolveForeign(sheetName: String, address: CellAddress) -> CellValue {
-    guard let sheetIndex = workbook.sheets.firstIndex(where: {
-      $0.name.caseInsensitiveCompare(sheetName) == .orderedSame
-    }) else {
+    guard
+      let sheetIndex = workbook.sheets.firstIndex(where: {
+        $0.name.caseInsensitiveCompare(sheetName) == .orderedSame
+      })
+    else {
       return .error(.ref)
     }
     let sheet = workbook.sheets[sheetIndex]
@@ -1466,12 +1520,16 @@ public final class FormulaEngine {
     }
     let rawForStored = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if FormulaSyntax.isFormula(rawForStored),
-       let value = sheet.cell(at: address).cachedFormulaValue {
+      let value = sheet.cell(at: address).cachedFormulaValue
+    {
       foreignCache[key] = value
       return value
     }
     if foreignVisiting.contains(key) {
       return .error(.cycle)
+    }
+    if dependencyDepth >= InputBounds.maxDependencyDepth {
+      return .error(.value)
     }
 
     let trimmed = sheet.cell(at: address).raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1482,7 +1540,11 @@ public final class FormulaEngine {
     }
 
     foreignVisiting.insert(key)
-    defer { foreignVisiting.remove(key) }
+    dependencyDepth += 1
+    defer {
+      dependencyDepth -= 1
+      foreignVisiting.remove(key)
+    }
 
     lastWorkbookRecalcProfile?.foreignFormulaEvaluations += 1
     do {

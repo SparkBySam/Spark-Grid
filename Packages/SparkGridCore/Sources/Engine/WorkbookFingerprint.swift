@@ -1,12 +1,12 @@
-import CryptoKit
-import Foundation
-import GridCore
-import NumberFormat
-import Formula
-import Functions
-import Model
 import Calc
+import CryptoKit
 import FileFormats
+import Formula
+import Foundation
+import Functions
+import GridCore
+import Model
+import NumberFormat
 
 /// Stable dirty-state fingerprint without JSON-encoding every cell (large KPI workbooks
 /// can hold hundreds of thousands of cells and spike memory on open).
@@ -63,14 +63,14 @@ public enum WorkbookFingerprint {
     if let format = cell.format {
       hashCellFormat(hasher: &hasher, format: format)
     } else {
-      hasher.update(data:Data([0]))
+      hasher.update(data: Data([0]))
     }
   }
 
   private static func hashCellFormat(hasher: inout SHA256, format: CellFormat) {
     // Reuse JSON for format blobs — small compared to full-workbook encoding.
     if let encoded = try? JSONEncoder().encode(format) {
-      hasher.update(data:encoded)
+      hasher.update(data: encoded)
     }
   }
 
@@ -78,7 +78,7 @@ public enum WorkbookFingerprint {
     for key in ranges.keys.sorted() {
       hashString(hasher: &hasher, value: key)
       if let encoded = try? JSONEncoder().encode(ranges[key]) {
-        hasher.update(data:encoded)
+        hasher.update(data: encoded)
       }
     }
   }
@@ -86,26 +86,26 @@ public enum WorkbookFingerprint {
   private static func hashConditionalFormats(hasher: inout SHA256, rules: [ConditionalFormatRule]) {
     for rule in rules {
       if let encoded = try? JSONEncoder().encode(rule) {
-        hasher.update(data:encoded)
+        hasher.update(data: encoded)
       }
     }
   }
 
   private static func hashAutoFilter(hasher: inout SHA256, filter: SheetFilterState?) {
     guard let filter else {
-      hasher.update(data:Data([0]))
+      hasher.update(data: Data([0]))
       return
     }
-    hasher.update(data:Data([1]))
+    hasher.update(data: Data([1]))
     if let encoded = try? JSONEncoder().encode(filter) {
-      hasher.update(data:encoded)
+      hasher.update(data: encoded)
     }
   }
 
   private static func hashCharts(hasher: inout SHA256, charts: [SheetChart]) {
     for chart in charts {
       if let encoded = try? JSONEncoder().encode(chart) {
-        hasher.update(data:encoded)
+        hasher.update(data: encoded)
       }
     }
   }
@@ -116,7 +116,7 @@ public enum WorkbookFingerprint {
       hashInt(hasher: &hasher, value: image.anchorCol)
       hashInt(hasher: &hasher, value: image.widthEMU)
       hashInt(hasher: &hasher, value: image.heightEMU)
-      hasher.update(data:image.imageData)
+      hasher.update(data: image.imageData)
     }
   }
 
@@ -127,26 +127,26 @@ public enum WorkbookFingerprint {
 
   private static func hashString(hasher: inout SHA256, value: String) {
     var length = UInt32(value.utf8.count).littleEndian
-    withUnsafeBytes(of: length) { hasher.update(data:Data($0)) }
-    hasher.update(data:Data(value.utf8))
+    withUnsafeBytes(of: length) { hasher.update(data: Data($0)) }
+    hasher.update(data: Data(value.utf8))
   }
 
   private static func hashInt(hasher: inout SHA256, value: Int) {
     var little = Int64(value).littleEndian
-    withUnsafeBytes(of: little) { hasher.update(data:Data($0)) }
+    withUnsafeBytes(of: little) { hasher.update(data: Data($0)) }
   }
 
   private static func hashOptionalInt(hasher: inout SHA256, value: Int?) {
     guard let value else {
-      hasher.update(data:Data([0]))
+      hasher.update(data: Data([0]))
       return
     }
-    hasher.update(data:Data([1]))
+    hasher.update(data: Data([1]))
     hashInt(hasher: &hasher, value: value)
   }
 
   private static func hashCGFloat(hasher: inout SHA256, value: CGFloat) {
     var bits = Double(value).bitPattern.littleEndian
-    withUnsafeBytes(of: bits) { hasher.update(data:Data($0)) }
+    withUnsafeBytes(of: bits) { hasher.update(data: Data($0)) }
   }
 }

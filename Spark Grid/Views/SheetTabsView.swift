@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SparkGridCore
+import SwiftUI
 
 struct SheetTabsView: View {
   @Bindable var viewModel: SpreadsheetViewModel

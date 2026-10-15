@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 /// Answer oracle: every formula cell through a fresh scalar `FormulaEvaluator`.
 ///
@@ -33,12 +33,13 @@ public enum ScalarFormulaAnswers {
       }.sorted()
       for address in addresses {
         let value = oracle.value(sheetIndex: sheetIndex, address: address)
-        answers.append(CellAnswer(
-          sheetIndex: sheetIndex,
-          sheetName: sheet.name,
-          address: address,
-          value: value
-        ))
+        answers.append(
+          CellAnswer(
+            sheetIndex: sheetIndex,
+            sheetName: sheet.name,
+            address: address,
+            value: value
+          ))
         seen += 1
         if seen % 5000 == 0 {
           progress?(seen)
@@ -54,7 +55,8 @@ public enum ScalarFormulaAnswers {
     case .number(let number):
       return "n:" + String(format: "%.12g", number)
     case .string(let text):
-      let escaped = text
+      let escaped =
+        text
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\n", with: "\\n")
         .replacingOccurrences(of: "\t", with: "\\t")

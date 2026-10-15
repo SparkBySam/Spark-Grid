@@ -1,7 +1,7 @@
+import Formula
 import Foundation
 import GridCore
 import NumberFormat
-import Formula
 
 /// AutoFilter on a sheet. Persisted with the workbook; xlsx round-trip keeps range and selected values.
 public nonisolated struct SheetFilterState: Codable, Equatable, Sendable {
@@ -34,11 +34,14 @@ public nonisolated struct SheetFilterState: Codable, Equatable, Sendable {
     return col >= n.minCol && col <= n.maxCol && !excludedColumns.contains(col)
   }
 
-  public func isRowHidden(_ row: Int, sheet: Sheet, displayString: (CellAddress) -> String) -> Bool {
+  public func isRowHidden(_ row: Int, sheet: Sheet, displayString: (CellAddress) -> String) -> Bool
+  {
     isRowHidden(row, sheet: sheet, displayString: displayString, excludingColumn: nil)
   }
 
-  public func uniqueValues(forColumn col: Int, sheet: Sheet, displayString: (CellAddress) -> String) -> [String] {
+  public func uniqueValues(forColumn col: Int, sheet: Sheet, displayString: (CellAddress) -> String)
+    -> [String]
+  {
     let n = range.normalized
     guard isColumnActive(col), n.maxRow > n.minRow else { return [] }
     var seen = Set<String>()

@@ -1,8 +1,8 @@
+import Formula
 import Foundation
 import GridCore
-import NumberFormat
-import Formula
 import Model
+import NumberFormat
 
 public nonisolated enum CSVCodec {
   /// Parse CSV/TSV text into a sparse sheet cell map.
@@ -29,11 +29,11 @@ public nonisolated enum CSVCodec {
   private static func inferredFormat(for value: String) -> CellFormat? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.hasSuffix("%"),
-       Double(
-         String(trimmed.dropLast())
-           .trimmingCharacters(in: .whitespaces)
-           .replacingOccurrences(of: ",", with: "")
-       ) != nil
+      Double(
+        String(trimmed.dropLast())
+          .trimmingCharacters(in: .whitespaces)
+          .replacingOccurrences(of: ",", with: "")
+      ) != nil
     {
       var format = CellFormat()
       format.numberFormat = .percent
@@ -41,7 +41,7 @@ public nonisolated enum CSVCodec {
       return format
     }
     if trimmed.hasPrefix("$"),
-       Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: "")) != nil
+      Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: "")) != nil
     {
       var format = CellFormat()
       format.numberFormat = .currency
@@ -87,7 +87,8 @@ public nonisolated enum CSVCodec {
 
   private static func detectDelimiter(in text: String) -> Character {
     let sample = text.prefix(8_192)
-    let firstLine = sample.split(whereSeparator: \.isNewline).first.map(String.init) ?? String(sample)
+    let firstLine =
+      sample.split(whereSeparator: \.isNewline).first.map(String.init) ?? String(sample)
     let commaCount = firstLine.filter { $0 == "," }.count
     let tabCount = firstLine.filter { $0 == "\t" }.count
     let semicolonCount = firstLine.filter { $0 == ";" }.count
@@ -158,7 +159,8 @@ public nonisolated enum CSVCodec {
   }
 
   private static func escapeField(_ value: String) -> String {
-    let needsQuotes = value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")
+    let needsQuotes =
+      value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")
     guard needsQuotes else { return value }
     return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
   }

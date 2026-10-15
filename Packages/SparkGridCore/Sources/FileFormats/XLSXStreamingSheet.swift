@@ -1,10 +1,10 @@
 import CoreGraphics
-import Foundation
-import ZIPFoundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
+import GridCore
 import Model
+import NumberFormat
+import ZIPFoundation
 
 /// One forward scan of a worksheet's raw bytes. No `String.range` and no regular expressions.
 public nonisolated enum StreamingWorksheet {
@@ -292,7 +292,9 @@ public nonisolated enum StreamingWorksheet {
     public func literalRaw(cellType: String?, valueText: String?, inlineText: String?) -> String {
       let value = valueText.map(decodeXMLContent)
       if cellType == "s" || cellType == "sharedString" {
-        if !sharedTexts.isEmpty, let value, let index = Int(value), sharedTexts.indices.contains(index) {
+        if !sharedTexts.isEmpty, let value, let index = Int(value),
+          sharedTexts.indices.contains(index)
+        {
           if let text = sharedTexts[index] { return text }
           if let inlineText, !inlineText.isEmpty { return inlineText }
           return value
@@ -339,7 +341,9 @@ public nonisolated enum StreamingWorksheet {
           if let blank = emptyStringCache(cellType) { return blank }
         }
       }
-      if cellType == "s" || cellType == "sharedString", let valueText, let resolved = sharedText(at: decodeXMLContent(valueText)) {
+      if cellType == "s" || cellType == "sharedString", let valueText,
+        let resolved = sharedText(at: decodeXMLContent(valueText))
+      {
         return (resolved, .string)
       }
       if let inlineText {
@@ -354,7 +358,9 @@ public nonisolated enum StreamingWorksheet {
       return nil
     }
 
-    public func emptyStringCache(_ cellType: String?) -> (text: String, type: ImportedFormulaValueType)? {
+    public func emptyStringCache(_ cellType: String?) -> (
+      text: String, type: ImportedFormulaValueType
+    )? {
       guard cellType == "str" || cellType == "inlineStr" else { return nil }
       return ("", .string)
     }
@@ -398,7 +404,9 @@ public nonisolated enum StreamingWorksheet {
         } else if localIs(inner, "filterColumn"), inner.isClose {
           colId = nil
         }
-        if localIs(inner, "filter"), !inner.isClose, let colId, let range, let val = attribute(inner, "val") {
+        if localIs(inner, "filter"), !inner.isClose, let colId, let range,
+          let val = attribute(inner, "val")
+        {
           let decoded = val.contains("&") ? XLSXCodec.decodeXMLEntities(val) : val
           selected[range.normalized.minCol + colId, default: []].insert(decoded)
         }
@@ -422,9 +430,9 @@ public nonisolated enum StreamingWorksheet {
 
     public func applyColumn(_ tag: Tag, to sheet: inout Sheet) {
       guard let min = attributeRange(tag, "min").flatMap({ parseInt($0.0, $0.1) }),
-            let max = attributeRange(tag, "max").flatMap({ parseInt($0.0, $0.1) }),
-            max >= min,
-            let width = attributeDouble(tag, "width")
+        let max = attributeRange(tag, "max").flatMap({ parseInt($0.0, $0.1) }),
+        max >= min,
+        let width = attributeDouble(tag, "width")
       else { return }
       let pixels = CGFloat(width) * 7
       guard pixels > 0 else { return }
@@ -435,8 +443,8 @@ public nonisolated enum StreamingWorksheet {
 
     public func applyRow(_ tag: Tag, to sheet: inout Sheet) {
       guard let height = attributeDouble(tag, "ht"), height > 0,
-            let row = attributeRange(tag, "r").flatMap({ parseInt($0.0, $0.1) }),
-            row >= 1
+        let row = attributeRange(tag, "r").flatMap({ parseInt($0.0, $0.1) }),
+        row >= 1
       else { return }
       sheet.rowHeights[row - 1] = CGFloat(height)
     }
@@ -607,7 +615,8 @@ public nonisolated enum StreamingWorksheet {
     }
 
     public func skipSpecial(at start: Int) -> Int {
-      if start + 4 <= count, bytes[start + 1] == 33, bytes[start + 2] == 45, bytes[start + 3] == 45 {
+      if start + 4 <= count, bytes[start + 1] == 33, bytes[start + 2] == 45, bytes[start + 3] == 45
+      {
         var cursor = start + 4
         while cursor + 2 < count {
           if bytes[cursor] == 45, bytes[cursor + 1] == 45, bytes[cursor + 2] == 62 {
@@ -618,9 +627,9 @@ public nonisolated enum StreamingWorksheet {
         return count
       }
       if start + 9 <= count,
-         bytes[start + 1] == 33, bytes[start + 2] == 91, bytes[start + 3] == 67,
-         bytes[start + 4] == 68, bytes[start + 5] == 65, bytes[start + 6] == 84,
-         bytes[start + 7] == 65, bytes[start + 8] == 91
+        bytes[start + 1] == 33, bytes[start + 2] == 91, bytes[start + 3] == 67,
+        bytes[start + 4] == 68, bytes[start + 5] == 65, bytes[start + 6] == 84,
+        bytes[start + 7] == 65, bytes[start + 8] == 91
       {
         var cursor = start + 9
         while cursor + 2 < count {
@@ -788,7 +797,8 @@ public nonisolated enum StreamingWorksheet {
     public func decodeXMLContent(_ string: String) -> String {
       let normalized: String
       if string.contains("\r") {
-        normalized = string.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        normalized = string.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(
+          of: "\r", with: "\n")
       } else {
         normalized = string
       }
@@ -806,7 +816,7 @@ public nonisolated enum StreamingWorksheet {
         let entityStart = cursor
         cursor = normalized.index(after: cursor)
         guard let semi = normalized[cursor...].firstIndex(of: ";"),
-              normalized.distance(from: cursor, to: semi) <= 12
+          normalized.distance(from: cursor, to: semi) <= 12
         else {
           output.append("&")
           continue
@@ -842,7 +852,8 @@ public nonisolated enum StreamingWorksheet {
       } else {
         hex = false
       }
-      guard let value = UInt32(digits, radix: hex ? 16 : 10), let scalar = Unicode.Scalar(value) else {
+      guard let value = UInt32(digits, radix: hex ? 16 : 10), let scalar = Unicode.Scalar(value)
+      else {
         return nil
       }
       return scalar
@@ -923,7 +934,9 @@ public enum XLSXImportParity {
       note("defined names \(legacy.namedRanges.count) vs \(streamed.namedRanges.count)")
     }
     if legacy.xlsxThemeData != streamed.xlsxThemeData {
-      note("theme bytes \(legacy.xlsxThemeData?.count ?? -1) vs \(streamed.xlsxThemeData?.count ?? -1)")
+      note(
+        "theme bytes \(legacy.xlsxThemeData?.count ?? -1) vs \(streamed.xlsxThemeData?.count ?? -1)"
+      )
     }
 
     var cellCount = 0
@@ -950,10 +963,14 @@ public enum XLSXImportParity {
           note("\(left.name) \(address.a1) format differs")
         }
         if cell.importedFormulaResult != other.importedFormulaResult {
-          note("\(left.name) \(address.a1) cache \(cell.importedFormulaResult ?? "nil") vs \(other.importedFormulaResult ?? "nil")")
+          note(
+            "\(left.name) \(address.a1) cache \(cell.importedFormulaResult ?? "nil") vs \(other.importedFormulaResult ?? "nil")"
+          )
         }
         if cell.importedFormulaValueType != other.importedFormulaValueType {
-          note("\(left.name) \(address.a1) type \(String(describing: cell.importedFormulaValueType)) vs \(String(describing: other.importedFormulaValueType))")
+          note(
+            "\(left.name) \(address.a1) type \(String(describing: cell.importedFormulaValueType)) vs \(String(describing: other.importedFormulaValueType))"
+          )
         }
       }
       for address in right.cells.keys where left.cells[address] == nil {
@@ -966,7 +983,9 @@ public enum XLSXImportParity {
         note("\(left.name) row heights differ")
       }
       if left.frozenRows != right.frozenRows || left.frozenColumns != right.frozenColumns {
-        note("\(left.name) panes \(left.frozenRows)x\(left.frozenColumns) vs \(right.frozenRows)x\(right.frozenColumns)")
+        note(
+          "\(left.name) panes \(left.frozenRows)x\(left.frozenColumns) vs \(right.frozenRows)x\(right.frozenColumns)"
+        )
       }
       if left.mergedRanges != right.mergedRanges {
         note("\(left.name) merges \(left.mergedRanges.count) vs \(right.mergedRanges.count)")
@@ -975,7 +994,9 @@ public enum XLSXImportParity {
         note("\(left.name) autofilter differs")
       }
       if !sameRules(left.conditionalFormats, right.conditionalFormats) {
-        note("\(left.name) conditional formats \(left.conditionalFormats.count) vs \(right.conditionalFormats.count)")
+        note(
+          "\(left.name) conditional formats \(left.conditionalFormats.count) vs \(right.conditionalFormats.count)"
+        )
       }
       if !sameCharts(left.charts, right.charts) {
         note("\(left.name) charts \(left.charts.count) vs \(right.charts.count)")
@@ -994,7 +1015,9 @@ public enum XLSXImportParity {
     return (["\(problems) differences"] + lines).joined(separator: "\n")
   }
 
-  private static func sameRules(_ left: [ConditionalFormatRule], _ right: [ConditionalFormatRule]) -> Bool {
+  private static func sameRules(_ left: [ConditionalFormatRule], _ right: [ConditionalFormatRule])
+    -> Bool
+  {
     guard left.count == right.count else { return false }
     for (lhs, rhs) in zip(left, right) {
       if lhs.range != rhs.range || lhs.stopIfTrue != rhs.stopIfTrue
@@ -1023,7 +1046,8 @@ public enum XLSXImportParity {
     guard left.count == right.count else { return false }
     for (key, values) in left {
       guard let other = right[key], other.count == values.count else { return false }
-      for (index, item) in values.enumerated() where item.0 != other[index].0 || item.1 != other[index].1 {
+      for (index, item) in values.enumerated()
+      where item.0 != other[index].0 || item.1 != other[index].1 {
         return false
       }
     }

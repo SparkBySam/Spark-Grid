@@ -1,9 +1,9 @@
-import Foundation
-import GridCore
-import NumberFormat
 import Formula
+import Foundation
 import Functions
+import GridCore
 import Model
+import NumberFormat
 
 /// Cross-sheet formula updates that run after the viewed sheet has already refreshed.
 /// The edit path only schedules this. A sheet opened early is shown first; this pass
@@ -125,7 +125,9 @@ public nonisolated enum CrossSheetBackground {
     while head < queue.count {
       let coord = queue[head]
       head += 1
-      for formulaID in graph.formulaIDsReading(sheetID: coord.sheetID, row: coord.row, col: coord.col) {
+      for formulaID in graph.formulaIDsReading(
+        sheetID: coord.sheetID, row: coord.row, col: coord.col)
+      {
         guard graph.formulaCoords.indices.contains(formulaID) else { continue }
         let formulaCoord = graph.formulaCoords[formulaID]
         if overrides[formulaCoord] != nil {
@@ -229,7 +231,8 @@ private nonisolated final class EvaluationContext {
       currentSheetName = previousSheetName
     }
 
-    let cell = sheetsByID[coord.sheetID]?.cell(at: CellAddress(row: coord.row, col: coord.col)) ?? Cell()
+    let cell =
+      sheetsByID[coord.sheetID]?.cell(at: CellAddress(row: coord.row, col: coord.col)) ?? Cell()
     let raw = cell.raw.trimmingCharacters(in: .whitespacesAndNewlines)
     let expr: FormulaExpr
     if let parsed = expressions[coord] {
