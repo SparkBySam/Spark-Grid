@@ -1,7 +1,7 @@
 import Foundation
 
 /// Display formatting for a cell.
-struct CellFormat: Codable, Equatable, Sendable {
+nonisolated struct CellFormat: Codable, Equatable, Sendable {
   var bold = false
   var italic = false
   var underline = false
@@ -131,7 +131,7 @@ struct CellFormat: Codable, Equatable, Sendable {
 }
 
 /// Per-side borders for a cell.
-struct CellBorders: Codable, Equatable, Sendable {
+nonisolated struct CellBorders: Codable, Equatable, Sendable {
   var top: BorderEdge?
   var bottom: BorderEdge?
   var left: BorderEdge?
@@ -144,7 +144,7 @@ struct CellBorders: Codable, Equatable, Sendable {
   }
 }
 
-struct BorderEdge: Codable, Equatable, Sendable {
+nonisolated struct BorderEdge: Codable, Equatable, Sendable {
   var style: BorderStyle = .thin
   var color: CodableColor?
 
@@ -161,7 +161,7 @@ struct BorderEdge: Codable, Equatable, Sendable {
   }
 }
 
-enum BorderStyle: String, Codable, Sendable, CaseIterable {
+nonisolated enum BorderStyle: String, Codable, Sendable, CaseIterable {
   case thin
   case medium
   case thick
@@ -196,7 +196,7 @@ extension BorderEdge {
 }
 
 /// Toolbar / menu presets for applying borders to a selection.
-enum BorderPreset: String, CaseIterable, Sendable {
+nonisolated enum BorderPreset: String, CaseIterable, Sendable {
   case none
   case all
   case outside
@@ -237,7 +237,7 @@ enum BorderPreset: String, CaseIterable, Sendable {
 }
 
 /// Serializable color for document persistence.
-struct CodableColor: Codable, Equatable, Hashable, Sendable {
+nonisolated struct CodableColor: Codable, Equatable, Hashable, Sendable {
   var red: Double
   var green: Double
   var blue: Double

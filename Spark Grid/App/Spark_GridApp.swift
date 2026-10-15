@@ -12,6 +12,9 @@ struct Spark_GridApp: App {
   @State private var store = SpreadsheetDocumentStore()
 
   init() {
+    if ProcessInfo.processInfo.environment["SPARK_GRID_BENCHMARK"] == "1" {
+      PerformanceBenchmark.run()
+    }
 #if DEBUG
     if ProcessInfo.processInfo.environment["SPARK_GRID_BUG_BASH"] == "1" {
       _ = BugBashRunner.runIfRequested()

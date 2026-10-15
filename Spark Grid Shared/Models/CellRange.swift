@@ -1,6 +1,6 @@
 import Foundation
 
-struct CellRange: Codable, Equatable, Sendable {
+nonisolated struct CellRange: Codable, Equatable, Sendable {
   var start: CellAddress
   var end: CellAddress
 

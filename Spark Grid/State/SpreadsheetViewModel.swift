@@ -7,9 +7,16 @@ import Observation
 final class SpreadsheetViewModel {
   /// When true, `workbook` didSet skips a full formula rebuild (format-only / batched edits).
   private var suspendFormulaRebuild = false
+  /// When true, workbook writes are not document edits (tab switch, load sync).
+  private var suppressEditStamp = false
+  /// Real workbook edits. Tab switches, selection, scrolling, and zoom leave this alone.
+  private(set) var editStamp: UInt64 = 0
 
   var workbook: Workbook {
     didSet {
+      if !suppressEditStamp {
+        editStamp &+= 1
+      }
       contentRevision &+= 1
       hiddenRowsCache = nil
       conditionalFormatCache.removeAll(keepingCapacity: true)
@@ -167,6 +174,9 @@ final class SpreadsheetViewModel {
 
   init(workbook: Workbook) {
     self.workbook = workbook
+    formulaEngine.onExternalValues = { [weak self] in
+      self?.notifyGridRefresh()
+    }
     formulaEngine.rebuild(workbook: workbook)
     syncEditTextFromSelection()
     // Pull AutoFilter from the sheet so Excel header-row filters appear immediately.
@@ -177,6 +187,19 @@ final class SpreadsheetViewModel {
 
   func displayValue(at address: CellAddress) -> CellValue {
     formulaEngine.displayValue(at: address, sheet: activeSheet)
+  }
+
+  /// Grid text. Hides formula source that `displayValue` still returns for the answer check.
+  func sheetDisplayValue(at address: CellAddress, cell: Cell) -> CellValue {
+    formulaEngine.sheetDisplayValue(at: address, sheet: activeSheet, cell: cell)
+  }
+
+  /// Full workbook recalc using grouped aggregate range scans (does not run on open).
+  @discardableResult
+  func recalculateEntireWorkbook() -> TimeInterval {
+    let elapsed = formulaEngine.recalculateEntireWorkbook(workbook)
+    notifyGridRefresh()
+    return elapsed
   }
 
   func displayString(at address: CellAddress) -> String {
@@ -280,18 +303,37 @@ final class SpreadsheetViewModel {
     }
   }
 
+  /// Workbook assignment that must not mark the document edited.
+  func withoutRecordingEdit(_ body: () -> Void) {
+    let previous = suppressEditStamp
+    suppressEditStamp = true
+    defer { suppressEditStamp = previous }
+    body()
+  }
+
+  /// Member writes sometimes skip `workbook` didSet. Count the edit once when they do.
+  private func finishWorkbookMutation(stampBefore: UInt64) {
+    if !suppressEditStamp, editStamp == stampBefore {
+      editStamp &+= 1
+    }
+  }
+
   /// Format-only sheet writes — avoids re-parsing every formula on the sheet.
   func setActiveSheetPreservingFormulas(_ sheet: Sheet) {
+    let stampBefore = editStamp
     suspendFormulaRebuild = true
     workbook.activeSheet = sheet
     suspendFormulaRebuild = false
+    finishWorkbookMutation(stampBefore: stampBefore)
   }
 
   /// Value edits — incremental formula update instead of a full rebuild.
   private func setActiveSheet(_ sheet: Sheet, formulaCellsChanged addresses: [CellAddress]) {
+    let stampBefore = editStamp
     suspendFormulaRebuild = true
     workbook.activeSheet = sheet
     suspendFormulaRebuild = false
+    finishWorkbookMutation(stampBefore: stampBefore)
     if !addresses.isEmpty {
       formulaEngine.cellsDidChange(addresses, sheet: sheet)
     }
@@ -663,6 +705,7 @@ final class SpreadsheetViewModel {
     var cell = sheet.cell(at: address)
     cell.raw = value
     cell.importedFormulaResult = nil
+    cell.importedFormulaValueType = nil
     applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
     sheet.setCell(cell, at: address)
     setActiveSheet(sheet, formulaCellsChanged: [address])
@@ -930,12 +973,15 @@ final class SpreadsheetViewModel {
   func selectSheet(at index: Int) {
     commitEditIfNeeded()
     guard index >= 0, index < workbook.sheets.count else { return }
-    workbook.activeSheetIndex = index
-    // Member assignment on `workbook` does not always run didSet, which is what
-    // normally rebuilds the engine. Conditional formats on the new sheet must
-    // evaluate that sheet's cells, not the previous sheet's address cache.
-    formulaEngine.rebuild(workbook: workbook)
-    restoreFilterFromActiveSheet()
+    withoutRecordingEdit {
+      // One activation. `workbook` didSet would rebuild again and drop the
+      // values `activateSheet` just kept for the other sheets.
+      suspendFormulaRebuild = true
+      workbook.activeSheetIndex = index
+      suspendFormulaRebuild = false
+      formulaEngine.activateSheet(workbook)
+      restoreFilterFromActiveSheet()
+    }
     invalidateFindMatches()
     selection = .origin
     syncEditTextFromSelection()
@@ -948,6 +994,7 @@ final class SpreadsheetViewModel {
     guard index >= 0, index < workbook.sheets.count else { return }
 
     let wasActive = index == workbook.activeSheetIndex
+    let stampBefore = editStamp
     workbook.sheets.remove(at: index)
     if wasActive {
       workbook.activeSheetIndex = min(index, workbook.sheets.count - 1)
@@ -955,6 +1002,7 @@ final class SpreadsheetViewModel {
     } else if index < workbook.activeSheetIndex {
       workbook.activeSheetIndex -= 1
     }
+    finishWorkbookMutation(stampBefore: stampBefore)
     contentRevision &+= 1
     invalidateFindMatches()
     selection = .origin
@@ -966,7 +1014,9 @@ final class SpreadsheetViewModel {
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     guard index >= 0, index < workbook.sheets.count else { return }
+    let stampBefore = editStamp
     workbook.sheets[index].name = trimmed
+    finishWorkbookMutation(stampBefore: stampBefore)
   }
 
   // MARK: - Formatting
@@ -2086,6 +2136,8 @@ final class SpreadsheetViewModel {
       var sheet = activeSheet
       var cell = sheet.cell(at: address)
       cell.raw = value
+      cell.importedFormulaResult = nil
+      cell.importedFormulaValueType = nil
       applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
       sheet.setCell(cell, at: address)
       setActiveSheet(sheet, formulaCellsChanged: [address])

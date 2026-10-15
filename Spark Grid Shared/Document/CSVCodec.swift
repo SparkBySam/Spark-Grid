@@ -1,6 +1,6 @@
 import Foundation
 
-enum CSVCodec {
+nonisolated enum CSVCodec {
   /// Parse CSV/TSV text into a sparse sheet cell map.
   static func importCSV(_ text: String) -> [CellAddress: Cell] {
     let normalized = normalizeLineEndings(stripBOM(text))

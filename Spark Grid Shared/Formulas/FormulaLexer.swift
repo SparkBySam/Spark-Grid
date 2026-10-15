@@ -27,7 +27,7 @@ nonisolated enum FormulaToken: Equatable {
   case eof
 }
 
-struct FormulaLexer {
+nonisolated struct FormulaLexer {
   private let chars: [Character]
   private var index = 0
 

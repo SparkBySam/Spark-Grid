@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// Embedded picture anchored on a sheet (Excel drawing / oneCellAnchor).
-struct SheetImage: Identifiable, Codable, Equatable, Sendable {
+nonisolated struct SheetImage: Identifiable, Codable, Equatable, Sendable {
   var id: UUID
   /// Top-left anchor cell (0-based row/column).
   var anchorRow: Int

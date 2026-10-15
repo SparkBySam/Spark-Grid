@@ -10,10 +10,20 @@ final class SpreadsheetDocumentStore {
   /// Live grid view model for the open window; used by print and menu commands.
   var activeViewModel: SpreadsheetViewModel?
   var fileURL: URL?
+  /// Bumped when a file load or new document replaces the workbook. Not an edit.
+  private(set) var externalWorkbookToken: UInt64 = 0
   private(set) var isDirty = false
   private(set) var isAutosaving = false
 
-  private var savedFingerprint: Data?
+  /// Edits since the last load, save, or new document. Not a content hash.
+  private var changeCount: UInt64 = 0
+  /// Imported formula `<v>` values still match the file. An edit can make them stale,
+  /// and a save then omits them instead of writing the old results.
+  private var importedFormulaCachesCurrent = false
+  private var savedChangeCount: UInt64 = 0
+  /// Grid whose `editStamp` has been adopted. A replacement grid is a new baseline.
+  private weak var observedViewModel: SpreadsheetViewModel?
+  private var observedEditStamp: UInt64 = 0
   private var autosaveTask: Task<Void, Never>?
   private var isForceClosing = false
   /// Quit delivers `applicationShouldTerminate` and `windowShouldClose` for the same close.
@@ -28,10 +38,6 @@ final class SpreadsheetDocumentStore {
     case save, discard, cancel
   }
   #endif
-
-  init() {
-    savedFingerprint = WorkbookFingerprint.data(for: SpreadsheetDocument().workbook)
-  }
 
   var displayTitle: String {
     let base = fileURL?.lastPathComponent ?? "Untitled"
@@ -53,10 +59,16 @@ final class SpreadsheetDocumentStore {
     guard confirmReplaceCurrentDocument() else { return }
     document = SpreadsheetDocument()
     fileURL = nil
-    savedFingerprint = fingerprint(of: document.workbook)
-    isDirty = false
+    externalWorkbookToken &+= 1
+    importedFormulaCachesCurrent = false
+    markClean()
     isAutosaving = false
     isForceClosing = false
+    let generation = fileURL
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.fileURL == generation else { return }
+      self.markClean()
+    }
   }
 
   func load(from url: URL) throws {
@@ -67,50 +79,64 @@ final class SpreadsheetDocumentStore {
         url.stopAccessingSecurityScopedResource()
       }
     }
-    document = try SpreadsheetDocument.load(from: url)
+
+    let loading = WorkbookLoadingWindow(filename: url.lastPathComponent)
+    defer { loading.close() }
+    // Let the loading window paint before the import occupies the background queue.
+    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+
+    final class Box: @unchecked Sendable {
+      var document: SpreadsheetDocument?
+      var error: Error?
+    }
+    let box = Box()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        box.document = try SpreadsheetDocument.load(from: url)
+      } catch {
+        box.error = error
+      }
+      group.leave()
+    }
+    while group.wait(timeout: .now()) == .timedOut {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if let error = box.error { throw error }
+    guard let loaded = box.document else {
+      throw CocoaError(.fileReadUnknown)
+    }
+
+    document = loaded
     fileURL = url
-    savedFingerprint = fingerprint(of: document.workbook)
-    isDirty = false
+    externalWorkbookToken &+= 1
+    importedFormulaCachesCurrent = true
+    markClean()
     isAutosaving = false
     noteRecent(url)
-    // Remount / viewModel sync can write the workbook back once on the next turn.
-    // Re-baseline so a clean open doesn't show "Edited".
+    // Remount can assign the workbook once on the next turn. That is not an edit.
     let loadedURL = url
     DispatchQueue.main.async { [weak self] in
       guard let self, self.fileURL == loadedURL else { return }
-      self.savedFingerprint = self.fingerprint(of: self.document.workbook)
-      self.isDirty = false
+      self.markClean()
     }
   }
 
   func save(to url: URL? = nil) throws {
-    let destination = url ?? fileURL
-    guard let destination else { return }
-    // Prefer the live grid workbook so AutoFilter / in-memory edits aren't dropped.
-    if let viewModel = activeViewModel {
-      viewModel.syncAutoFilterToActiveSheet()
-      document.workbook = viewModel.workbook
-    }
-    let accessing = destination.startAccessingSecurityScopedResource()
-    defer {
-      if accessing {
-        destination.stopAccessingSecurityScopedResource()
-      }
-    }
-    if destination.pathExtension.lowercased() == "xlsx" {
-      let data = try XLSXCodec.exportWorkbook(document.workbook)
-      try data.write(to: destination, options: .atomic)
-    } else {
-      let csv = CSVCodec.exportCSV(from: document.workbook.activeSheet)
-      try csv.write(to: destination, atomically: true, encoding: .utf8)
-    }
-    fileURL = destination
-    savedFingerprint = fingerprint(of: document.workbook)
-    isDirty = false
-    noteRecent(destination)
+    guard let snapshot = makeSaveSnapshot(to: url) else { return }
+    try waitForBackgroundWrite(of: snapshot)
+  }
+
+  /// Direct workbook writes that do not go through the live grid (tests).
+  func noteEdit() {
+    changeCount &+= 1
+    importedFormulaCachesCurrent = false
+    isDirty = true
   }
 
   func documentDidChange() {
+    adoptAttachedEdits()
     let dirty = computeDirtyState()
     guard dirty != isDirty else { return }
     isDirty = dirty
@@ -274,21 +300,138 @@ final class SpreadsheetDocumentStore {
   }
 
   private func performAutosave() {
-    guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty else { return }
+    guard AppSettings.shared.autosaveEnabled, fileURL != nil, isDirty, !isAutosaving else { return }
+    guard let snapshot = makeSaveSnapshot(to: nil) else { return }
     isAutosaving = true
-    defer { isAutosaving = false }
-    try? save()
+    let generation = snapshot.changeCount
+    let destination = snapshot.destination
+    Task.detached(priority: .utility) {
+      var failure: String?
+      do {
+        try SpreadsheetDocumentStore.write(snapshot)
+      } catch {
+        failure = error.localizedDescription
+      }
+      let message = failure
+      await MainActor.run { [weak self] in
+        guard let self else { return }
+        if snapshot.accessingSecurityScope {
+          destination.stopAccessingSecurityScopedResource()
+        }
+        self.isAutosaving = false
+        guard message == nil else { return }
+        guard self.changeCount == generation, self.fileURL == destination else { return }
+        self.markClean()
+        self.noteRecent(destination)
+      }
+    }
+  }
+
+  /// Workbook copy taken on the main thread. Export and the file write run elsewhere.
+  private struct WorkbookSaveSnapshot: Sendable {
+    var workbook: Workbook
+    var destination: URL
+    var xlsx: Bool
+    var changeCount: UInt64
+    var accessingSecurityScope: Bool
+    var includeFormulaCaches: Bool
+  }
+
+  private func makeSaveSnapshot(to url: URL?) -> WorkbookSaveSnapshot? {
+    if let viewModel = activeViewModel {
+      viewModel.syncAutoFilterToActiveSheet()
+      document.workbook = viewModel.workbook
+    }
+    documentDidChange()
+    let destination = url ?? fileURL
+    guard let destination else { return nil }
+    let accessing = destination.startAccessingSecurityScopedResource()
+    return WorkbookSaveSnapshot(
+      workbook: document.workbook,
+      destination: destination,
+      xlsx: destination.pathExtension.lowercased() == "xlsx",
+      changeCount: changeCount,
+      accessingSecurityScope: accessing,
+      includeFormulaCaches: importedFormulaCachesCurrent
+    )
+  }
+
+  /// Interactive save waits until the file is written, but the export is not on this thread.
+  /// The run loop keeps the window live while the background write finishes.
+  private func waitForBackgroundWrite(of snapshot: WorkbookSaveSnapshot) throws {
+    final class Box: @unchecked Sendable {
+      var error: Error?
+    }
+    let box = Box()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        try SpreadsheetDocumentStore.write(snapshot)
+      } catch {
+        box.error = error
+      }
+      group.leave()
+    }
+    while group.wait(timeout: .now()) == .timedOut {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if snapshot.accessingSecurityScope {
+      snapshot.destination.stopAccessingSecurityScopedResource()
+    }
+    if let error = box.error { throw error }
+    fileURL = snapshot.destination
+    if changeCount == snapshot.changeCount {
+      markClean()
+    }
+    noteRecent(snapshot.destination)
+  }
+
+  nonisolated private static func write(_ snapshot: WorkbookSaveSnapshot) throws {
+    precondition(!Thread.isMainThread)
+    if snapshot.xlsx {
+      let data = try XLSXCodec.exportWorkbook(
+        snapshot.workbook,
+        includeFormulaCaches: snapshot.includeFormulaCaches
+      )
+      try data.write(to: snapshot.destination, options: .atomic)
+    } else {
+      let csv = CSVCodec.exportCSV(from: snapshot.workbook.activeSheet)
+      try csv.write(to: snapshot.destination, atomically: true, encoding: .utf8)
+    }
+  }
+
+  private func markClean() {
+    if let viewModel = activeViewModel {
+      observedViewModel = viewModel
+      observedEditStamp = viewModel.editStamp
+    }
+    changeCount = 0
+    savedChangeCount = 0
+    isDirty = false
+  }
+
+  /// Counts edit-stamp movement on the attached grid. A new grid is a baseline, not an edit.
+  private func adoptAttachedEdits() {
+    guard let viewModel = activeViewModel else { return }
+    if observedViewModel !== viewModel {
+      observedViewModel = viewModel
+      observedEditStamp = viewModel.editStamp
+      return
+    }
+    let stamp = viewModel.editStamp
+    guard stamp != observedEditStamp else { return }
+    if stamp > observedEditStamp {
+      changeCount &+= stamp - observedEditStamp
+    } else {
+      changeCount &+= 1
+    }
+    importedFormulaCachesCurrent = false
+    observedEditStamp = stamp
   }
 
   private func computeDirtyState() -> Bool {
-    guard let saved = savedFingerprint else {
-      return !document.workbook.isEffectivelyEmpty
-    }
-    return fingerprint(of: document.workbook) != saved
-  }
-
-  private func fingerprint(of workbook: Workbook) -> Data? {
-    WorkbookFingerprint.data(for: workbook)
+    changeCount != savedChangeCount
   }
 
   private func noteRecent(_ url: URL) {
@@ -321,5 +464,43 @@ final class SpreadsheetDocumentStore {
     alert.informativeText = error.localizedDescription
     alert.alertStyle = .warning
     alert.runModal()
+  }
+}
+
+/// Shown on the main thread while `SpreadsheetDocument.load` runs off it.
+private final class WorkbookLoadingWindow {
+  private var window: NSWindow?
+
+  init(filename: String) {
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 64))
+    let spinner = NSProgressIndicator(frame: NSRect(x: 18, y: 22, width: 20, height: 20))
+    spinner.style = .spinning
+    spinner.controlSize = .small
+    spinner.startAnimation(nil)
+    let label = NSTextField(labelWithString: "Opening \(filename)…")
+    label.frame = NSRect(x: 48, y: 22, width: 312, height: 20)
+    label.lineBreakMode = .byTruncatingMiddle
+    content.addSubview(spinner)
+    content.addSubview(label)
+
+    let panel = NSWindow(
+      contentRect: content.frame,
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    panel.title = "Opening"
+    panel.contentView = content
+    panel.isReleasedWhenClosed = false
+    panel.center()
+    panel.orderFrontRegardless()
+    panel.displayIfNeeded()
+    window = panel
+  }
+
+  func close() {
+    window?.orderOut(nil)
+    window?.close()
+    window = nil
   }
 }

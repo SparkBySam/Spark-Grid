@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum FormulaError: Equatable, Sendable, CaseIterable {
+nonisolated enum FormulaError: Equatable, Hashable, Sendable, CaseIterable {
   case divZero
   case ref
   case value
@@ -155,6 +155,33 @@ nonisolated enum CellValue: Equatable, Sendable {
     if trimmed.isEmpty { return .blank }
     if let error = FormulaError(displayCode: trimmed) { return .error(error) }
     return fromLiteralRaw(trimmed)
+  }
+
+  /// Cached `<v>` using the cell's OOXML type. Untyped text keeps the old classification.
+  static func fromImportedCache(_ raw: String, type: ImportedFormulaValueType?) -> CellValue {
+    switch type {
+    case .boolean:
+      switch raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
+      case "1", "TRUE": return .bool(true)
+      case "0", "FALSE": return .bool(false)
+      default: return .bool(false)
+      }
+    case .error:
+      let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      if let error = FormulaError(displayCode: trimmed) { return .error(error) }
+      return .error(.error)
+    case .string:
+      let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? .blank : .string(trimmed)
+    case .number:
+      let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      if let number = Double(trimmed.replacingOccurrences(of: ",", with: "")) {
+        return .number(number)
+      }
+      return fromImportedExcel(trimmed)
+    case nil:
+      return fromImportedExcel(raw)
+    }
   }
 
   static func fromLiteralRaw(_ raw: String) -> CellValue {

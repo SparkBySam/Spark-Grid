@@ -1,6 +1,6 @@
 import Foundation
 
-enum A1Reference {
+nonisolated enum A1Reference {
   struct ParsedAddress: Equatable {
     var row: Int
     var col: Int
