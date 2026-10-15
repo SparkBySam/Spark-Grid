@@ -1,0 +1,12 @@
+#!/bin/bash
+# Fast stages only: lint, format, layers, privacy, debug package build and tests.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+"$root/scripts/lint.sh"
+"$root/scripts/check-format.sh"
+"$root/scripts/check-layers.sh"
+"$root/scripts/check-privacy.sh"
+"$root/scripts/check-package.sh" debug
