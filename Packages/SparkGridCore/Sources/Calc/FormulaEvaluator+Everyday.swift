@@ -362,6 +362,9 @@ extension FormulaEvaluator {
       index += 2
     }
     var memo: [LookupMemoKey: CellValue] = [:]
+    if kind == .average {
+      return averageOfMatchingRows(sum: sum, tests: tests, memo: &memo)
+    }
     if let cache = aggregateRangeCache {
       if let lookupKeys = aggregateLookupKeys(criteria: tests.map(\.2), tests: tests.map(\.1)) {
         let criteriaKeys = tests.map { aggregateRangeKey(for: $0.0) }
@@ -437,6 +440,42 @@ extension FormulaEvaluator {
       guard matchCount > 0 else { return .error(.divZero) }
       return .number(total / Double(matchCount))
     }
+  }
+
+  /// A criteria match whose averaged cell is an error is that error. `SUMIFS` still skips it.
+  private func averageOfMatchingRows(
+    sum: RangeAnchor,
+    tests: [(RangeAnchor, CriteriaTest, CellValue)],
+    memo: inout [LookupMemoKey: CellValue]
+  ) -> CellValue {
+    let sumValues = snapshotValues(anchor: sum, memo: &memo)
+    let rangeSnapshots = tests.map { snapshotValues(anchor: $0.0, memo: &memo) }
+    var total = 0.0
+    var matchCount = 0
+    for offset in 0..<sumValues.count {
+      var matched = true
+      for (rangeIndex, test) in tests.map(\.1).enumerated() {
+        guard rangeSnapshots.indices.contains(rangeIndex),
+          rangeSnapshots[rangeIndex].indices.contains(offset)
+        else {
+          matched = false
+          break
+        }
+        let value = rangeSnapshots[rangeIndex][offset]
+        if aggregateRowError(value) || !criteriaMatch(value, test) {
+          matched = false
+          break
+        }
+      }
+      guard matched else { continue }
+      let value = sumValues[offset]
+      if case .error(let error) = value { return .error(error) }
+      guard let number = numericAddend(value) else { continue }
+      total += number
+      matchCount += 1
+    }
+    guard matchCount > 0 else { return .error(.divZero) }
+    return .number(total / Double(matchCount))
   }
 
   private func reduceMatches(
@@ -886,7 +925,7 @@ extension FormulaEvaluator {
     var sum = 0.0
     var count = 0
     for value in values {
-      if case .error = value { continue }
+      if case .error(let error) = value { return .error(error) }
       guard let number = statsNumericValue(value) else { continue }
       sum += number
       count += 1

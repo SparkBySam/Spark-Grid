@@ -4,11 +4,11 @@ Updated: 2026-10-16. Commit this file in the same commit as the work it describe
 
 ## Phase
 
-Phase A is in progress. A formula cell inside a range is calculated before that range is read. Unqualified ranges inside a formula stay on the sheet that owns that formula. The four answer-check paths are not at 0 yet.
+Phase A is in progress. Paint, edits, and full recalculation are at 0 mismatches except `YTD Summary!R5`. The shuffled path is not.
 
 ## Next task
 
-Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. A cached aggregate range is dropped when a cell inside it is calculated later. The four paths were not re-run after that change. Last counts: paint 2, edits 2, full 2, shuffled seed 1 is 1,224. Paint, edits, and full miss `YTD Summary!R62` and `YTD Summary!R63`.
+Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. Paint, edits, and full are there. Shuffled seed 1 still has 1,222.
 
 ## Last gate result
 
@@ -59,6 +59,17 @@ Unqualified ranges are cached on the sheet that owns the formula. A summary that
 Paint, edits, and full recalculation miss `YTD Summary!R62` and `YTD Summary!R63`. The shuffled path still misses 1,224.
 
 A cached aggregate range is now dropped when a cell inside it is calculated later. `testDayWindowCountsMatchWhenTheRowTotalIsVisitedFirst` passed. The four paths above were not re-run. Release timings were not re-run.
+
+`AVERAGE` and `AVERAGEIFS` return an error that sits in the averaged cells. `IFERROR` then shows its fallback. Same day, Release package test, caches cleared, 48,191 formulas. Release timings were not re-run.
+
+| Path | Mismatches | Exempt |
+|---|---|---|
+| `sheetDisplayValue`, paint order | 0 | 1 |
+| `sheetDisplayValue`, shuffled, seed 1 | 1,222 | 1 |
+| `sheetDisplayValue` after edits and cross-sheet catch-up | 0 | 1 |
+| Full recalculation | 0 | 1 |
+
+Paint, edits, and full recalculation match except `YTD Summary!R5`. The shuffled path dropped from 1,224 to 1,222.
 
 ## Latest Release numbers
 
