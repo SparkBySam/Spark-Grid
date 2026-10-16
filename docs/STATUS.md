@@ -8,7 +8,7 @@ Phase A is in progress. A formula cell inside a range is calculated before that 
 
 ## Next task
 
-Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. Cross-sheet totals now keep each sheet's range on that sheet. Paint, edits, and full recalculation each have 2 mismatches left, `YTD Summary!R62` and `YTD Summary!R63`. The shuffled path has 1,224.
+Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. A cached aggregate range is dropped when a cell inside it is calculated later. The four paths were not re-run after that change. Last counts: paint 2, edits 2, full 2, shuffled seed 1 is 1,224. Paint, edits, and full miss `YTD Summary!R62` and `YTD Summary!R63`.
 
 ## Last gate result
 
@@ -57,6 +57,8 @@ Unqualified ranges are cached on the sheet that owns the formula. A summary that
 | Full recalculation | 2 | 1 |
 
 Paint, edits, and full recalculation miss `YTD Summary!R62` and `YTD Summary!R63`. The shuffled path still misses 1,224.
+
+A cached aggregate range is now dropped when a cell inside it is calculated later. `testDayWindowCountsMatchWhenTheRowTotalIsVisitedFirst` passed. The four paths above were not re-run. Release timings were not re-run.
 
 ## Latest Release numbers
 

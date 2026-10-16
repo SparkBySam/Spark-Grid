@@ -99,10 +99,14 @@ public nonisolated final class FormulaAggregateRangeCache {
   }
 
   public func invalidate(sheetName: String, address: CellAddress) {
+    guard !snapshots.isEmpty else { return }
     let sheet = sheetName.lowercased()
     var removedKeys: Set<AggregateRangeKey> = []
     snapshots = snapshots.filter { key, _ in
-      if key.sheet == sheet && key.contains(address: address) {
+      // A display-path range is stored with an empty sheet until the formula's
+      // sheet is known. That snapshot still covers this cell.
+      let sameSheet = key.sheet == sheet || key.sheet.isEmpty
+      if sameSheet && key.contains(address: address) {
         removedKeys.insert(key)
         return false
       }

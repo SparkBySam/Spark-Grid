@@ -222,8 +222,15 @@ public final class FormulaEngine {
     evaluator.aggregateRangeCache = aggregateRangeCache
     evaluator.lookupTableCache = lookupTableCache
     let value = evaluator.evaluate(expr)
-    valueCache[address] = value
+    storeCalculatedValue(value, at: address, sheet: sheet)
     return value
+  }
+
+  /// A range snapshot taken before this cell was calculated would keep the old
+  /// value. Drop every cached range that contains the cell.
+  private func storeCalculatedValue(_ value: CellValue, at address: CellAddress, sheet: Sheet) {
+    valueCache[address] = value
+    aggregateRangeCache.invalidate(sheetName: sheet.name, address: address)
   }
 
   private var precedentVisiting: Set<CellAddress> = []
@@ -1557,7 +1564,7 @@ public final class FormulaEngine {
       evalDependencies(address)
 
       evaluator.prepareForCellEvaluation(origin: address)
-      valueCache[address] = evaluator.evaluate(expr)
+      storeCalculatedValue(evaluator.evaluate(expr), at: address, sheet: sheet)
     }
 
     evaluator = FormulaEvaluator { [weak self] ref in
