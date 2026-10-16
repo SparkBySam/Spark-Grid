@@ -1711,6 +1711,7 @@ public final class FormulaEngine {
         return self.resolveForeign(sheetName: targetSheet, address: ref.address)
       }
       evaluator.evaluationOrigin = address
+      evaluator.formulaSheetName = sheet.name
       evaluator.namedRangeLookup = { [weak self] name in
         self?.namedRangeExpr(named: name)
       }

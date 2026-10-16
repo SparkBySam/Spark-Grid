@@ -761,7 +761,7 @@ extension FormulaEvaluator {
     case .range(let start, let end):
       let bounds = normalizedBounds(start: start, end: end)
       return RangeAnchor(
-        sheet: start.sheet ?? end.sheet,
+        sheet: start.sheet ?? end.sheet ?? formulaSheetName,
         row: bounds.minRow,
         col: bounds.minCol,
         rows: bounds.maxRow - bounds.minRow + 1,
@@ -769,7 +769,8 @@ extension FormulaEvaluator {
       )
     case .cellRef(let ref):
       guard !ref.isRowOpen, !ref.isColOpen else { return nil }
-      return RangeAnchor(sheet: ref.sheet, row: ref.row, col: ref.col, rows: 1, cols: 1)
+      return RangeAnchor(
+        sheet: ref.sheet ?? formulaSheetName, row: ref.row, col: ref.col, rows: 1, cols: 1)
     default:
       return nil
     }

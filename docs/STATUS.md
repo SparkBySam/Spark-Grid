@@ -4,11 +4,11 @@ Updated: 2026-10-16. Commit this file in the same commit as the work it describe
 
 ## Phase
 
-Phase A is in progress. A formula cell inside a range is calculated before that range is read. The four answer-check paths are not at 0 yet.
+Phase A is in progress. A formula cell inside a range is calculated before that range is read. Unqualified ranges inside a formula stay on the sheet that owns that formula. The four answer-check paths are not at 0 yet.
 
 ## Next task
 
-Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. `TEXT` date and time codes now go through `ExcelFormatCode`. Full recalculation has 2 mismatches left. The display paths still miss cross-sheet totals.
+Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. Cross-sheet totals now keep each sheet's range on that sheet. Paint, edits, and full recalculation each have 2 mismatches left, `YTD Summary!R62` and `YTD Summary!R63`. The shuffled path has 1,224.
 
 ## Last gate result
 
@@ -46,6 +46,17 @@ Full recalculation was unchanged at 367 plus the exempt cell. Paint order and th
 | Full recalculation | 2 | 1 |
 
 The 365 `TEXT` formulas that were wrong on every path now match. The check still fails until every path is 0 mismatches except `YTD Summary!R5`.
+
+Unqualified ranges are cached on the sheet that owns the formula. A summary that adds two sheets' `COUNTIF` results no longer reuses the first sheet's column. Same day, Release package test, caches cleared, 48,191 formulas. Release timings were not re-run for this commit.
+
+| Path | Mismatches | Exempt |
+|---|---|---|
+| `sheetDisplayValue`, paint order | 2 | 1 |
+| `sheetDisplayValue`, shuffled, seed 1 | 1,224 | 1 |
+| `sheetDisplayValue` after edits and cross-sheet catch-up | 2 | 1 |
+| Full recalculation | 2 | 1 |
+
+Paint, edits, and full recalculation miss `YTD Summary!R62` and `YTD Summary!R63`. The shuffled path still misses 1,224.
 
 ## Latest Release numbers
 

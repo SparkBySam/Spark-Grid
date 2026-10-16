@@ -57,6 +57,10 @@ public nonisolated struct FormulaEvaluator {
     set { evaluationOriginCell.address = newValue }
   }
 
+  /// Sheet that owns the formula being evaluated. Unqualified ranges belong to that
+  /// sheet. Without this, two sheets' `COUNTIF($C$1:$C$2,$A1)` share one cache key.
+  public var formulaSheetName: String?
+
   /// Shared range snapshots for COUNTIFS / SUMIFS-style functions (one scan per range per batch).
   public var aggregateRangeCache: FormulaAggregateRangeCache?
   /// Exact VLOOKUP / HLOOKUP tables (KPI Config lookups).
@@ -230,8 +234,9 @@ public nonisolated struct FormulaEvaluator {
     }
     guard count > 0 else { return [] }
     if let cache = aggregateRangeCache {
+      let sheetName = start.sheet ?? end.sheet ?? formulaSheetName
       let key = AggregateRangeKey(
-        sheet: start.sheet ?? end.sheet,
+        sheet: sheetName,
         row: n.minRow,
         col: n.minCol,
         rows: rows,
@@ -241,7 +246,7 @@ public nonisolated struct FormulaEvaluator {
         let row = n.minRow + index / cols
         let col = n.minCol + index % cols
         var ref = FormulaRef(
-          sheet: start.sheet ?? end.sheet, row: row, col: col, absRow: false, absCol: false)
+          sheet: sheetName, row: row, col: col, absRow: false, absCol: false)
         return lookup(ref)
       }
     }
