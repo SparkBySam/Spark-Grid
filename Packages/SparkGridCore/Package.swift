@@ -19,7 +19,8 @@ let package = Package(
     .macOS(.v14)
   ],
   products: [
-    .library(name: "SparkGridCore", targets: ["SparkGridCore"])
+    .library(name: "SparkGridCore", targets: ["SparkGridCore"]),
+    .executable(name: "spark-grid-cli", targets: ["spark-grid-cli"]),
   ],
   dependencies: [
     .package(url: "https://github.com/CoreOffice/CoreXLSX.git", .upToNextMinor(from: "0.14.2")),
@@ -94,6 +95,19 @@ let package = Package(
         "FileFormats",
         "Engine",
         "Rendering",
+      ],
+      swiftSettings: engineSettings
+    ),
+    .executableTarget(
+      name: "spark-grid-cli",
+      dependencies: [
+        "GridCore",
+        "NumberFormat",
+        "Formula",
+        "Model",
+        "Calc",
+        "FileFormats",
+        "Engine",
       ],
       swiftSettings: engineSettings
     ),

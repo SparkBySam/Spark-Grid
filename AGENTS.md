@@ -104,6 +104,21 @@ Requirements: macOS 14 or later, Xcode 27 or later recommended. Marketing versio
 open "Spark Grid.xcodeproj"
 ```
 
+Headless checks, from `Packages/SparkGridCore`:
+
+```bash
+swift run spark-grid-cli eval '=ABS(-2)'
+swift run spark-grid-cli cat workbook.xlsx --sheet Sheet1 --range A1:F20
+swift run spark-grid-cli recalc workbook.xlsx
+swift run spark-grid-cli check workbook.xlsx
+swift run spark-grid-cli bench workbook.xlsx
+swift run spark-grid-cli run workbook.xlsx \
+  --cmd '{"id":"cell.set","arguments":{"address":"A1","raw":"1"}}' \
+  --out /tmp/spark-grid-out.xlsx
+```
+
+`check` prints counts and cell addresses, not values. `bench` times import, fingerprint, recalc, and export. Open, scroll, and edit timings stay on the app harness (`SPARK_GRID_BENCHMARK=1`). Point `SPARK_GRID_BENCHMARK_LOG` at a `/tmp` path if you want `bench` to write a copy there. Do not point it at the repo. `cat` refuses a range bigger than 200 rows or 40 columns.
+
 Release build, own derived data, no signing when a local build only needs to run:
 
 ```bash
@@ -115,9 +130,7 @@ xcodebuild -scheme "Spark Grid" -configuration Release \
 
 Quick Look uses the scheme `Spark Grid Quick Look`.
 
-There is no `spark-grid-cli` yet. That is W6. Until then, formula and file checks go through the app's benchmark launch or through package tests once `Packages/SparkGridCore` exists.
-
-W6 commands, once they exist: `eval`, `cat`, `recalc`, `check`, `bench`, and `run`.
+`swift run spark-grid-cli` from `Packages/SparkGridCore` is the headless tool. The commands are listed above.
 
 ## When to ask the user
 

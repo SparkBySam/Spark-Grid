@@ -38,16 +38,9 @@ final class CorpusAnswerCheck: XCTestCase {
         continue
       }
       let workbook = try XLSXCodec.importWorkbook(from: data)
-      let expected = AnswerComparison.savedFormulaResults(in: workbook)
-      let cleared = AnswerComparison.clearingFormulaCaches(workbook)
-      let actual = AnswerComparison.calculatedFormulaResults(in: cleared)
       let exempt = exemptions(in: differences, fileName: entry.name)
-      let result = AnswerComparison.mismatches(
-        expected: expected,
-        actual: actual,
-        exempt: exempt
-      )
-      let exempted = expected.keys.filter { exempt.contains($0.lowercased()) }.count
+      let result = AnswerComparison.compareSavedResults(in: workbook, exempt: exempt)
+      let exempted = exempt.count
       print(
         "corpus answer check: file \(entry.name) checked \(result.checked) mismatches \(result.mismatches.count) exempt \(exempted)"
       )

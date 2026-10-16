@@ -130,6 +130,21 @@ public enum AnswerComparison {
     "\(sheet)!\(address.a1)"
   }
 
+  /// Compares saved formula caches with a fresh calculation. Formulas with no cache are not mismatches.
+  public static func compareSavedResults(in workbook: Workbook, exempt: Set<String> = []) -> (
+    checked: Int, mismatches: [AnswerMismatch]
+  ) {
+    let expected = savedFormulaResults(in: workbook)
+    let cleared = clearingFormulaCaches(workbook)
+    let calculated = calculatedFormulaResults(in: cleared)
+    var actual: [String: CellValue] = [:]
+    actual.reserveCapacity(expected.count)
+    for key in expected.keys {
+      actual[key] = calculated[key] ?? .blank
+    }
+    return mismatches(expected: expected, actual: actual, exempt: exempt)
+  }
+
   public static func mismatches(
     expected: [String: CellValue],
     actual: [String: CellValue],
