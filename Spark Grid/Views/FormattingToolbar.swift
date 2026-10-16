@@ -83,14 +83,14 @@ struct FormattingToolbar: View {
       ToolbarIconButton(
         systemName: "arrow.uturn.backward", title: "Undo", showLabel: showLabels, active: false
       ) {
-        undoManager?.undo()
+        viewModel.undo()
       }
       .disabled(!(undoManager?.canUndo ?? false))
 
       ToolbarIconButton(
         systemName: "arrow.uturn.forward", title: "Redo", showLabel: showLabels, active: false
       ) {
-        undoManager?.redo()
+        viewModel.redo()
       }
       .disabled(!(undoManager?.canRedo ?? false))
     }

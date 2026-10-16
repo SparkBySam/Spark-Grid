@@ -128,7 +128,8 @@ extension SpreadsheetViewModel {
   func pasteCopiedConditionalFormats(
     _ payload: SpreadsheetClipboard.ConditionalFormatClipboardPayload?,
     at origin: CellAddress,
-    actionName: String = "Paste"
+    actionName: String = "Paste",
+    recordUndo: Bool = true
   ) {
     guard let payload else { return }
     let sheet = activeSheet
@@ -147,23 +148,31 @@ extension SpreadsheetViewModel {
       changed = true
     }
     guard changed else { return }
-    applyConditionalFormats(next, undoBefore: sheet.conditionalFormats, actionName: actionName)
+    applyConditionalFormats(
+      next,
+      undoBefore: sheet.conditionalFormats,
+      actionName: actionName,
+      recordUndo: recordUndo
+    )
   }
 
   private func applyConditionalFormats(
     _ rules: [ConditionalFormatRule],
     undoBefore: [ConditionalFormatRule],
-    actionName: String
+    actionName: String,
+    recordUndo: Bool = true
   ) {
     var sheet = activeSheet
     sheet.conditionalFormats = rules
     setActiveSheetPreservingFormulas(sheet)
     conditionalFormatCache.removeAll(keepingCapacity: true)
     conditionalFormatCacheRevision = -1
-    undoManager?.registerUndo(withTarget: self) { target in
-      target.applyConditionalFormats(undoBefore, undoBefore: rules, actionName: actionName)
+    if recordUndo {
+      undoManager?.registerUndo(withTarget: self) { target in
+        target.applyConditionalFormats(undoBefore, undoBefore: rules, actionName: actionName)
+      }
+      undoManager?.setActionName(actionName)
     }
-    undoManager?.setActionName(actionName)
     notifyGridRefresh()
   }
 

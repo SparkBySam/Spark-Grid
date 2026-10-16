@@ -259,131 +259,28 @@ extension SpreadsheetViewModel {
     guard n.maxRow >= n.minRow, n.maxCol >= n.minCol else { return }
     guard column >= n.minCol, column <= n.maxCol else { return }
 
-    let snapshot = workbook
     let headerOffset = hasHeader ? 1 : 0
     let firstDataRow = n.minRow + headerOffset
     guard firstDataRow <= n.maxRow else { return }
 
-    struct RowPack {
-      var rowIndex: Int
-      var cells: [Int: Cell]
-      var height: CGFloat?
-      var sortKey: String
-      var sortNumber: Double?
-    }
-
-    var packs: [RowPack] = []
-    for row in firstDataRow...n.maxRow {
-      var cells: [Int: Cell] = [:]
-      for col in n.minCol...n.maxCol {
-        let address = CellAddress(row: row, col: col)
-        if let cell = activeSheet.cells[address] {
-          cells[col] = cell
-        }
-      }
-      let address = CellAddress(row: row, col: column)
-      let key = displayString(at: address)
-      let number =
-        displayValue(at: address).asNumber
-        ?? Double(
-          key.replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: "%", with: "")
-            .replacingOccurrences(of: "$", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines))
-      packs.append(
-        RowPack(
-          rowIndex: row,
-          cells: cells,
-          height: activeSheet.rowHeights[row],
-          sortKey: key,
-          sortNumber: number
-        ))
-    }
-
-    packs.sort { lhs, rhs in
-      let cmp: ComparisonResult
-      if let ln = lhs.sortNumber, let rn = rhs.sortNumber {
-        cmp = ln == rn ? .orderedSame : (ln < rn ? .orderedAscending : .orderedDescending)
-      } else if lhs.sortNumber != nil {
-        cmp = .orderedAscending
-      } else if rhs.sortNumber != nil {
-        cmp = .orderedDescending
-      } else {
-        cmp = lhs.sortKey.localizedStandardCompare(rhs.sortKey)
-      }
-      if cmp == .orderedSame {
-        return lhs.rowIndex < rhs.rowIndex
-      }
-      return direction == .ascending ? cmp == .orderedAscending : cmp == .orderedDescending
-    }
-
-    var sheet = activeSheet
-    // Clear old cells in data rows.
-    for row in firstDataRow...n.maxRow {
-      for col in n.minCol...n.maxCol {
-        sheet.cells.removeValue(forKey: CellAddress(row: row, col: col))
-      }
-      sheet.rowHeights.removeValue(forKey: row)
-    }
-
-    for (offset, pack) in packs.enumerated() {
-      let newRow = firstDataRow + offset
-      let rowDelta = newRow - pack.rowIndex
-      for (col, cell) in pack.cells {
-        var next = cell
-        if rowDelta != 0 {
-          next.raw = FormulaRewriter.adjust(cell.raw, rowDelta: rowDelta, colDelta: 0)
-        }
-        sheet.cells[CellAddress(row: newRow, col: col)] = next
-      }
-      if let height = pack.height {
-        sheet.rowHeights[newRow] = height
-      }
-    }
-    sheet.recomputePopulatedExtents()
-
-    var rowMap: [Int: Int] = [:]
-    for (offset, pack) in packs.enumerated() {
-      rowMap[pack.rowIndex] = firstDataRow + offset
-    }
-
-    func remapFullyContained(_ range: CellRange) -> CellRange? {
-      let rn = range.normalized
-      guard rn.minCol >= n.minCol, rn.maxCol <= n.maxCol,
-        rn.minRow >= firstDataRow, rn.maxRow <= n.maxRow
-      else { return nil }
-      var mappedRows: [Int] = []
-      mappedRows.reserveCapacity(rn.maxRow - rn.minRow + 1)
-      for row in rn.minRow...rn.maxRow {
-        guard let mapped = rowMap[row] else { return nil }
-        mappedRows.append(mapped)
-      }
-      guard let newMin = mappedRows.min(), let newMax = mappedRows.max() else { return nil }
-      return CellRange(
-        start: CellAddress(row: newMin, col: rn.minCol),
-        end: CellAddress(row: newMax, col: rn.maxCol)
+    let snapshot = workbook
+    let rangeLabel = CellRange(
+      start: CellAddress(row: n.minRow, col: n.minCol),
+      end: CellAddress(row: n.maxRow, col: n.maxCol)
+    ).a1Label
+    guard
+      applyCommand(
+        "data.sort",
+        [
+          "sheet": activeSheet.name,
+          "range": rangeLabel,
+          "column": String(column),
+          "ascending": direction == .ascending ? "true" : "false",
+          "header": hasHeader ? "true" : "false",
+        ],
+        incremental: false
       )
-    }
-
-    sheet.mergedRanges = sheet.mergedRanges.map { merge in
-      remapFullyContained(merge) ?? merge
-    }
-    sheet.conditionalFormats = sheet.conditionalFormats.map { rule in
-      var next = rule
-      if let remapped = remapFullyContained(rule.range) {
-        next.range = remapped
-      }
-      return next
-    }
-    sheet.charts = sheet.charts.map { chart in
-      var next = chart
-      if let remapped = remapFullyContained(chart.dataRange) {
-        next.dataRange = remapped
-      }
-      return next
-    }
-
-    activeSheet = sheet
+    else { return }
     registerWorkbookStructureUndo(before: snapshot, action: "Sort Range")
     notifyGridRefresh()
   }

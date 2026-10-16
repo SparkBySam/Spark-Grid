@@ -35,6 +35,57 @@ final class CommandFuzzTests: XCTestCase {
     XCTAssertEqual(session.workbook.activeSheet.cell(at: .origin).raw, "42")
   }
 
+  func testApplyDoesNotSnapshotUndo() {
+    let session = WorkbookSession()
+    var workbook = session.workbook
+    let outcome = session.apply(
+      id: "cell.set",
+      arguments: ["address": "A1", "raw": "50%"],
+      to: &workbook
+    )
+    XCTAssertTrue(outcome.ok)
+    XCTAssertEqual(workbook.activeSheet.cell(at: .origin).raw, "50%")
+    XCTAssertEqual(workbook.activeSheet.cell(at: .origin).format?.numberFormat, .percent)
+    XCTAssertFalse(session.canUndo)
+  }
+
+  func testSortMovesAMergeWithItsRow() {
+    var sheet = Sheet(name: "Sheet1")
+    sheet.setCell(Cell(raw: "b"), at: CellAddress(row: 0, col: 0))
+    sheet.setCell(Cell(raw: "a"), at: CellAddress(row: 1, col: 0))
+    sheet.mergedRanges = [
+      CellRange(
+        start: CellAddress(row: 0, col: 0),
+        end: CellAddress(row: 0, col: 1)
+      )
+    ]
+    var workbook = Workbook(sheets: [sheet])
+    let session = WorkbookSession(workbook: workbook)
+    let outcome = session.apply(
+      id: "data.sort",
+      arguments: ["range": "A1:B2", "column": "0", "ascending": "true"],
+      to: &workbook
+    )
+    XCTAssertTrue(outcome.ok, outcome.message)
+    XCTAssertEqual(workbook.activeSheet.cell(at: CellAddress(row: 0, col: 0)).raw, "a")
+    XCTAssertEqual(workbook.activeSheet.cell(at: CellAddress(row: 1, col: 0)).raw, "b")
+    let merge = workbook.activeSheet.mergedRanges[0].normalized
+    XCTAssertEqual(merge.minRow, 1)
+    XCTAssertEqual(merge.maxCol, 1)
+  }
+
+  func testPasteAdjustsARelativeFormula() {
+    var workbook = Workbook()
+    let session = WorkbookSession()
+    let outcome = session.apply(
+      id: "edit.paste",
+      arguments: ["anchor": "B2", "text": "=A1", "rowDelta": "1", "colDelta": "1"],
+      to: &workbook
+    )
+    XCTAssertTrue(outcome.ok, outcome.message)
+    XCTAssertEqual(workbook.activeSheet.cell(at: CellAddress(row: 1, col: 1)).raw, "=B2")
+  }
+
   func testFuzzSmoke() throws {
     let env = ProcessInfo.processInfo.environment
     let seed = UInt64(env["SPARK_GRID_FUZZ_SEED"] ?? "") ?? 1

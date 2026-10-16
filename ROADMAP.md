@@ -2,7 +2,7 @@
 
 ## Stage
 
-Workflow gates W1–W6 are committed. The gate still fails at privacy and assets. Ledger ground truth is 1646 formulas, 0 mismatches. KPI saved-result check is 48191 formulas, 367 mismatches, 1 exempt. Correctness and lag work stays paused. Version on this branch: 1.2.0 (5).
+Workflow gates W1–W7 are committed. The gate still fails at privacy and assets. Ledger ground truth is 1646 formulas, 0 mismatches. KPI saved-result check is 48191 formulas, 367 mismatches, 1 exempt. Correctness and lag work stays paused. Version on this branch: 1.2.0 (5).
 
 ## Headline numbers
 
@@ -10,6 +10,7 @@ Release, 2026-10-15, commit `2958120`, KPI file: import 0.358 s, open 0.580 s, e
 
 ## Progress log
 
+- 2026-10-15 — W7: view-model cell edits, paste, fill, structure changes, sort, and sheet add, rename, and delete go through `WorkbookSession.apply`. Document undo stays on `UndoManager`. Full gate still blocked by privacy and assets.
 - 2026-10-15 — W6: `spark-grid-cli` eval, cat, recalc, check, bench, and run. Smoke: `eval '=ABS(-2)'` prints `2`. Full gate still blocked by privacy and assets.
 - 2026-10-15 — W5: corpus manifest (hash only), ledger Python ground truth (1646 formulas, 0 mismatches), KPI saved-result check (48191 formulas, 367 mismatches, 1 exempt), fuzz smoke (seed 1, 20 steps, pass), unit tests for every present function. Full gate still blocked by privacy and assets.
 - 2026-10-15 — W4: crash-rule violations removed, hostile-input caps added, recovery copy written after edits. SwiftLint and swift-format pass. Full gate still blocked by later stages.

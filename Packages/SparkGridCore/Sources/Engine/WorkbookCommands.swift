@@ -4,6 +4,7 @@ import Formula
 import Foundation
 import GridCore
 import Model
+import NumberFormat
 
 /// One engine command. Programmatic `run` never opens a dialog.
 public struct EngineCommand: Equatable, Sendable {
@@ -61,7 +62,8 @@ public final class WorkbookSession {
       id: "edit.paste",
       label: "Paste",
       shortcut: "⌘V",
-      parameters: "sheet (optional), anchor (A1), text (tab-separated rows)"
+      parameters:
+        "sheet (optional), anchor (A1), text (tab-separated rows), rowDelta, colDelta"
     ),
     EngineCommand(
       id: "edit.fill",
@@ -167,11 +169,33 @@ public final class WorkbookSession {
     }
     guard known(id) else { return CommandOutcome(ok: false, message: "Unknown command \(id)") }
     var copy = workbook
-    let applied = apply(id, arguments: arguments, to: &copy)
+    let applied = perform(id, arguments: arguments, to: &copy, sortDisplay: nil)
     guard applied.ok else { return CommandOutcome(ok: false, message: applied.message) }
     undoStack.append(workbook)
     redoStack.removeAll()
     workbook = copy
+    lastChange = applied.change
+    return CommandOutcome(ok: true, message: "")
+  }
+
+  /// Applies one command to `workbook` without storing an undo snapshot.
+  /// `edit.undo` and `edit.redo` stay on `undo()` and `redo()`.
+  /// Pass `sortDisplay` when the caller already has calculated text, so sort does not recalculate.
+  public func apply(
+    id: String,
+    arguments: [String: String] = [:],
+    to workbook: inout Workbook,
+    sortDisplay: ((Sheet, CellAddress) -> (key: String, number: Double?))? = nil
+  ) -> CommandOutcome {
+    switch id {
+    case "edit.undo", "edit.redo":
+      return CommandOutcome(ok: false, message: "\(id) uses undo() and redo() on the session")
+    default:
+      break
+    }
+    guard known(id) else { return CommandOutcome(ok: false, message: "Unknown command \(id)") }
+    let applied = perform(id, arguments: arguments, to: &workbook, sortDisplay: sortDisplay)
+    guard applied.ok else { return CommandOutcome(ok: false, message: applied.message) }
     lastChange = applied.change
     return CommandOutcome(ok: true, message: "")
   }
@@ -212,9 +236,12 @@ public final class WorkbookSession {
     var change: WorkbookChange
   }
 
-  private func apply(_ id: String, arguments: [String: String], to workbook: inout Workbook)
-    -> Applied
-  {
+  private func perform(
+    _ id: String,
+    arguments: [String: String],
+    to workbook: inout Workbook,
+    sortDisplay: ((Sheet, CellAddress) -> (key: String, number: Double?))?
+  ) -> Applied {
     switch id {
     case "cell.set":
       return setCell(arguments, workbook: &workbook)
@@ -231,7 +258,7 @@ public final class WorkbookSession {
     case "sheet.deleteColumns":
       return mutateStructure(arguments, workbook: &workbook, axis: .column, inserting: false)
     case "data.sort":
-      return sort(arguments, workbook: &workbook)
+      return sort(arguments, workbook: &workbook, sortDisplay: sortDisplay)
     case "sheet.add":
       return addSheet(arguments, workbook: &workbook)
     case "sheet.rename":
@@ -268,6 +295,7 @@ public final class WorkbookSession {
     cell.raw = raw
     cell.importedFormulaResult = nil
     cell.importedFormulaValueType = nil
+    applyPercentLiteralIfNeeded(to: &cell)
     sheet.setCell(cell, at: address)
     workbook.sheets[index] = sheet
     return Applied(
@@ -304,6 +332,8 @@ public final class WorkbookSession {
       return Applied(
         ok: false, message: "edit.paste sheet was not found", change: emptyChange(workbook))
     }
+    let rowDelta = intArgument(arguments, "rowDelta") ?? 0
+    let colDelta = intArgument(arguments, "colDelta") ?? 0
     var sheet = workbook.sheets[index]
     var addresses: [CellAddress] = []
     for (rowOffset, fields) in rows.enumerated() {
@@ -315,10 +345,15 @@ public final class WorkbookSession {
           return Applied(
             ok: false, message: "edit.paste lands past the grid cap", change: emptyChange(workbook))
         }
+        let raw =
+          (rowDelta == 0 && colDelta == 0)
+          ? field
+          : FormulaRewriter.adjust(field, rowDelta: rowDelta, colDelta: colDelta)
         var cell = sheet.cell(at: address)
-        cell.raw = field
+        cell.raw = raw
         cell.importedFormulaResult = nil
         cell.importedFormulaValueType = nil
+        applyPercentLiteralIfNeeded(to: &cell)
         sheet.setCell(cell, at: address)
         addresses.append(address)
       }
@@ -379,6 +414,9 @@ public final class WorkbookSession {
         cell.raw = value
         cell.importedFormulaResult = nil
         cell.importedFormulaValueType = nil
+        if sourceCell.format == nil {
+          applyPercentLiteralIfNeeded(to: &cell)
+        }
         if let format = sourceCell.format {
           cell.format = format
         }
@@ -510,7 +548,11 @@ public final class WorkbookSession {
     )
   }
 
-  private func sort(_ arguments: [String: String], workbook: inout Workbook) -> Applied {
+  private func sort(
+    _ arguments: [String: String],
+    workbook: inout Workbook,
+    sortDisplay: ((Sheet, CellAddress) -> (key: String, number: Double?))?
+  ) -> Applied {
     guard let rangeText = arguments["range"], let range = parseRange(rangeText) else {
       return Applied(ok: false, message: "data.sort needs range", change: emptyChange(workbook))
     }
@@ -534,11 +576,23 @@ public final class WorkbookSession {
       return Applied(
         ok: false, message: "data.sort range has no data rows", change: emptyChange(workbook))
     }
-    var probe = workbook
-    probe.activeSheetIndex = sheetIndex
-    let engine = FormulaEngine()
-    engine.rebuild(workbook: probe, recalculate: true)
-    let source = probe.activeSheet
+    let source: Sheet
+    let display: (CellAddress) -> (key: String, number: Double?)
+    if let sortDisplay {
+      source = workbook.sheets[sheetIndex]
+      display = { address in sortDisplay(source, address) }
+    } else {
+      var probe = workbook
+      probe.activeSheetIndex = sheetIndex
+      let engine = FormulaEngine()
+      engine.rebuild(workbook: probe, recalculate: true)
+      source = probe.activeSheet
+      display = { address in
+        let value = engine.displayValue(at: address, sheet: source)
+        let key = value.displayString
+        return (key, self.sortNumber(for: key, value: value))
+      }
+    }
 
     struct RowPack {
       var rowIndex: Int
@@ -557,15 +611,14 @@ public final class WorkbookSession {
           cells[col] = cell
         }
       }
-      let address = CellAddress(row: row, col: column)
-      let value = engine.displayValue(at: address, sheet: source)
+      let shown = display(CellAddress(row: row, col: column))
       packs.append(
         RowPack(
           rowIndex: row,
           cells: cells,
           height: source.rowHeights[row],
-          sortKey: value.displayString,
-          sortNumber: value.asNumber
+          sortKey: shown.key,
+          sortNumber: shown.number
         )
       )
     }
@@ -605,6 +658,42 @@ public final class WorkbookSession {
         sheet.rowHeights[newRow] = height
       }
     }
+    var rowMap: [Int: Int] = [:]
+    for (offset, pack) in packs.enumerated() {
+      rowMap[pack.rowIndex] = firstDataRow + offset
+    }
+    func remapFullyContained(_ range: CellRange) -> CellRange? {
+      let bounds = range.normalized
+      guard bounds.minCol >= n.minCol, bounds.maxCol <= n.maxCol, bounds.minRow >= firstDataRow,
+        bounds.maxRow <= n.maxRow
+      else { return nil }
+      var mappedRows: [Int] = []
+      mappedRows.reserveCapacity(bounds.maxRow - bounds.minRow + 1)
+      for row in bounds.minRow...bounds.maxRow {
+        guard let mapped = rowMap[row] else { return nil }
+        mappedRows.append(mapped)
+      }
+      guard let newMin = mappedRows.min(), let newMax = mappedRows.max() else { return nil }
+      return CellRange(
+        start: CellAddress(row: newMin, col: bounds.minCol),
+        end: CellAddress(row: newMax, col: bounds.maxCol)
+      )
+    }
+    sheet.mergedRanges = sheet.mergedRanges.map { remapFullyContained($0) ?? $0 }
+    sheet.conditionalFormats = sheet.conditionalFormats.map { rule in
+      var next = rule
+      if let remapped = remapFullyContained(rule.range) {
+        next.range = remapped
+      }
+      return next
+    }
+    sheet.charts = sheet.charts.map { chart in
+      var next = chart
+      if let remapped = remapFullyContained(chart.dataRange) {
+        next.dataRange = remapped
+      }
+      return next
+    }
     sheet.recomputePopulatedExtents()
     sheet.rebuildFormulaIngestIndex()
     workbook.sheets[sheetIndex] = sheet
@@ -637,6 +726,33 @@ public final class WorkbookSession {
       suffix += 1
     }
     return "Sheet \(workbook.sheets.count + 1)"
+  }
+
+  private func sortNumber(for key: String, value: CellValue) -> Double? {
+    if let number = value.asNumber { return number }
+    let stripped =
+      key
+      .replacingOccurrences(of: ",", with: "")
+      .replacingOccurrences(of: "%", with: "")
+      .replacingOccurrences(of: "$", with: "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return Double(stripped)
+  }
+
+  private func applyPercentLiteralIfNeeded(to cell: inout Cell) {
+    let trimmed = cell.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasSuffix("%"), !FormulaSyntax.isFormula(trimmed) else { return }
+    let number = String(trimmed.dropLast())
+      .trimmingCharacters(in: .whitespaces)
+      .replacingOccurrences(of: ",", with: "")
+    guard Double(number) != nil else { return }
+    var format = cell.format ?? CellFormat()
+    guard format.numberFormat == .general else { return }
+    format.numberFormat = .percent
+    if format.decimalPlaces == nil {
+      format.decimalPlaces = 2
+    }
+    cell.format = format
   }
 
   private func intArgument(_ arguments: [String: String], _ key: String) -> Int? {
