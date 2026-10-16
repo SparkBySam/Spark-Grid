@@ -27,34 +27,38 @@ Paint order differs in 9,916 formulas. That count is the 9,915 mismatches plus t
 
 ## Latest Release numbers
 
-Date: 2026-10-15. Binary: Release build of `2958120`. Machine: this Mac. W4 changes crash paths, not the timed open/save/scroll paths. These numbers stay the baseline until a new Release run.
+Date: 2026-10-16. Binary: Release build on `cursor/workflow-gates` after W7's edit path, with edit-to-pixels measured through the next `display()`. Machine: this Mac. Edit to pixels starts at `commitEdit` and stops when that display pass returns. The painted count is cells drawn in that pass.
 
 KPI reference file:
 
 | Path | Release |
 |---|---|
-| Import | 0.358 s |
-| Fingerprint | 3.922 s |
-| Export | 2.282 s |
+| Import | 0.364 s |
+| Fingerprint | 3.773 s |
+| Export | 2.251 s |
 | Autosave on the main thread | 0.000 s |
-| Open | 0.580 s |
+| Open | 0.681 s |
 | Unsaved-changes check | 0.000 s |
-| Slowest first screen | 0.056 s |
-| June scroll, worst screen | 0.146 s (13 ticks) |
+| Slowest first screen | 0.054 s (December) |
+| June scroll, worst screen | 0.132 s (13 ticks) |
 | Tab switch | 0.000 s |
-| One edit commit | 0.004 s |
-| Resident memory | ~305 MB |
+| One edit commit | 0.003 s (YTD Summary!A1) |
+| Edit to pixels | 0.046 s, 1452 cells painted |
+| Resident memory | ~306 MB |
 
 Synthetic ledger:
 
 | Path | Release |
 |---|---|
-| Import | 0.498 s |
-| Fingerprint | 0.420 s |
-| Export | 0.824 s |
-| Open | 3.550 s |
-| Scroll, worst screen | 0.628 s (7 ticks) |
-| One edit commit | 0.132 s |
-| Resident memory | ~1297 MB |
+| Import | 0.519 s |
+| Fingerprint | 0.424 s |
+| Export | 0.827 s |
+| Open | 3.598 s |
+| Slowest first screen | 1.114 s (IndexMatch) |
+| Scroll, worst screen | 0.605 s (7 ticks) |
+| Tab switch | 0.000 s |
+| One edit commit | 0.160 s (Ledger!C2) |
+| Edit to pixels | 3.281 s, 92 cells painted |
+| Resident memory | ~1327 MB |
 
-Older baseline (2026-10-11) is in `.cursor/rules/performance.mdc`. Use the table above when a commit needs before/after numbers, and replace it when a new Release run finishes.
+Previous Release run, 2026-10-15, commit `2958120`: KPI open 0.580 s, one edit commit 0.004 s, June scroll worst 0.146 s (13 ticks), export 2.282 s. Ledger open 3.550 s, one edit commit 0.132 s, scroll worst 0.628 s (7 ticks), export 0.824 s. Edit to pixels was not measured. Older baseline (2026-10-11) is in `.cursor/rules/performance.mdc`. Use the table above when a commit needs before/after numbers, and replace it when a new Release run finishes.

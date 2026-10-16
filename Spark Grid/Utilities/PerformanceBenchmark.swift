@@ -222,12 +222,20 @@ enum PerformanceBenchmark {
     let commitStarted = CFAbsoluteTimeGetCurrent()
     editViewModel.commitEdit()
     let commitSeconds = CFAbsoluteTimeGetCurrent() - commitStarted
+    editGrid.grid.testingResetScrollCounters()
+    editGrid.grid.needsDisplay = true
+    editGrid.grid.display()
+    let pixelsSeconds = CFAbsoluteTimeGetCurrent() - commitStarted
+    let paintedCells = editGrid.grid.liveScrollCellVisits
     let editSyncStarted = CFAbsoluteTimeGetCurrent()
     syncOnChange(store: store, viewModel: editViewModel)
     let editSyncSeconds = CFAbsoluteTimeGetCurrent() - editSyncStarted
     editGrid.close()
     emit(
       "commitEdit\t\(editViewModel.activeSheet.name)!\(editAddress.a1)\t\(formatSeconds(commitSeconds))"
+    )
+    emit(
+      "edit-to-pixels\t\(editViewModel.activeSheet.name)!\(editAddress.a1)\t\(formatSeconds(pixelsSeconds))\tpainted \(paintedCells)"
     )
     emit(String(format: "edit-onchange %.3f s", editSyncSeconds))
     emit(String(format: "edit %.3f s", commitSeconds + editSyncSeconds))
@@ -244,6 +252,8 @@ enum PerformanceBenchmark {
         firstScreenName: slowest?.0 ?? "",
         edit: commitSeconds + editSyncSeconds,
         commit: commitSeconds,
+        pixels: pixelsSeconds,
+        paintedCells: paintedCells,
         tab: selectSeconds + selectSyncSeconds,
         export: exportSeconds,
         scroll: scroll.worst,
@@ -318,6 +328,8 @@ enum PerformanceBenchmark {
     firstScreenName: String,
     edit: TimeInterval,
     commit: TimeInterval,
+    pixels: TimeInterval,
+    paintedCells: Int,
     tab: TimeInterval,
     export: TimeInterval,
     scroll: TimeInterval,
@@ -326,7 +338,7 @@ enum PerformanceBenchmark {
     fingerprint: TimeInterval,
     residentMB: Double
   ) -> String {
-    "SUMMARY\t\(label)\topen \(formatSeconds(open))\tunsaved \(formatSeconds(unsaved))\tfirst \(formatSeconds(firstScreen)) (\(firstScreenName))\tedit \(formatSeconds(edit))\tcommitEdit \(formatSeconds(commit))\ttab \(formatSeconds(tab))\texport \(formatSeconds(export))\tscroll \(formatSeconds(scroll)) (\(scrollSheet))\timport \(formatSeconds(importSeconds))\tfingerprint \(formatSeconds(fingerprint))\tresident \(String(format: "%.0f", residentMB))MB"
+    "SUMMARY\t\(label)\topen \(formatSeconds(open))\tunsaved \(formatSeconds(unsaved))\tfirst \(formatSeconds(firstScreen)) (\(firstScreenName))\tedit \(formatSeconds(edit))\tcommitEdit \(formatSeconds(commit))\tedit-to-pixels \(formatSeconds(pixels)) painted \(paintedCells)\ttab \(formatSeconds(tab))\texport \(formatSeconds(export))\tscroll \(formatSeconds(scroll)) (\(scrollSheet))\timport \(formatSeconds(importSeconds))\tfingerprint \(formatSeconds(fingerprint))\tresident \(String(format: "%.0f", residentMB))MB"
   }
 
   private static func formatSeconds(_ seconds: TimeInterval) -> String {
