@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -144,7 +145,8 @@ struct SpreadsheetStructureCommands: Commands {
     guard let viewModel else { return }
     let alert = NSAlert()
     alert.messageText = "Define Named Range"
-    alert.informativeText = "Name the current selection (\(viewModel.selectionRange.start.a1):\(viewModel.selectionRange.end.a1))."
+    alert.informativeText =
+      "Name the current selection (\(viewModel.selectionRange.start.a1):\(viewModel.selectionRange.end.a1))."
     alert.alertStyle = .informational
     alert.addButton(withTitle: "Define")
     alert.addButton(withTitle: "Cancel")

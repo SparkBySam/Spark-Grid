@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 
 struct FormulaBarView: View {
@@ -99,7 +100,8 @@ struct FormulaBarView: View {
       }
       .help(
         contentLineCount > 1
-          ? (isExpanded ? "Double-click to collapse formula bar" : "Double-click to expand formula bar")
+          ? (isExpanded
+            ? "Double-click to collapse formula bar" : "Double-click to expand formula bar")
           : "Formula bar"
       )
 

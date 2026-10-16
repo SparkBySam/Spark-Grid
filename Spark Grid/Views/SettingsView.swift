@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 
 struct SettingsView: View {

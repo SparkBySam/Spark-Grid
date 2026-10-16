@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 
 /// System spell checking for text being typed in the cell editor and formula bar.
 /// `NSTextView` draws the Mac underline and the standard suggestions / Ignore / Learn menu.

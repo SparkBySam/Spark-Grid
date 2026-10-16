@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -23,7 +24,9 @@ struct SpreadsheetFileCommands: Commands {
       Button("Save") {
         _ = store.saveInteractively()
       }
-      .keyboardShortcut(settings.keyEquivalent(for: .save), modifiers: settings.eventModifiers(for: .save))
+      .keyboardShortcut(
+        settings.keyEquivalent(for: .save), modifiers: settings.eventModifiers(for: .save)
+      )
       .disabled(store.fileURL == nil && store.document.workbook.isEffectivelyEmpty)
 
       Button("Save As…") {
@@ -45,7 +48,8 @@ struct SpreadsheetFileCommands: Commands {
   private func saveAsPanel() {
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.spreadsheetML, .commaSeparatedText]
-    let baseName = store.fileURL?.deletingPathExtension().lastPathComponent
+    let baseName =
+      store.fileURL?.deletingPathExtension().lastPathComponent
       ?? store.document.workbook.activeSheet.name
     // Default to Excel so formatting/CF/filters survive round-trip.
     panel.nameFieldStringValue = "\(baseName).xlsx"
@@ -57,8 +61,8 @@ struct SpreadsheetFileCommands: Commands {
     guard panel.runModal() == .OK, let url = panel.url else { return }
     let destination = normalizedSaveURL(url, panel: panel)
     if destination.pathExtension.lowercased() != "xlsx",
-       store.hasMultipleSheets,
-       !confirmCSVOnly()
+      store.hasMultipleSheets,
+      !confirmCSVOnly()
     {
       return
     }
@@ -76,8 +80,8 @@ struct SpreadsheetFileCommands: Commands {
       destination = destination.deletingLastPathComponent().appendingPathComponent(trimmed)
     }
     if #available(macOS 15.0, *),
-       let type = panel.currentContentType,
-       type.conforms(to: .spreadsheetML) || type.identifier == UTType.spreadsheetML.identifier
+      let type = panel.currentContentType,
+      type.conforms(to: .spreadsheetML) || type.identifier == UTType.spreadsheetML.identifier
     {
       if destination.pathExtension.lowercased() != "xlsx" {
         destination = destination.deletingPathExtension().appendingPathExtension("xlsx")

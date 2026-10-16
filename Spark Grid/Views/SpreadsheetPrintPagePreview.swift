@@ -1,3 +1,4 @@
+import SparkGridCore
 import SwiftUI
 
 struct SpreadsheetPrintPagePreview: View {
@@ -213,7 +214,9 @@ struct SpreadsheetPrintPagePreview: View {
     token: String,
     snapshot: SpreadsheetPrintPreviewContent
   ) {
-    let neighbors = [page - 1, page + 1].filter { $0 >= 1 && $0 <= pageCount && pageCache[$0] == nil }
+    let neighbors = [page - 1, page + 1].filter {
+      $0 >= 1 && $0 <= pageCount && pageCache[$0] == nil
+    }
     for neighbor in neighbors {
       let image = SpreadsheetPrintSnapshotRenderer.renderPageImage(
         content: snapshot,
@@ -228,7 +231,8 @@ struct SpreadsheetPrintPagePreview: View {
 
   private func trimCacheIfNeeded() {
     // Keep a small window around the current page so flipping back feels instant.
-    let keep = Set([currentPage - 1, currentPage, currentPage + 1].filter { $0 >= 1 && $0 <= pageCount })
+    let keep = Set(
+      [currentPage - 1, currentPage, currentPage + 1].filter { $0 >= 1 && $0 <= pageCount })
     pageCache = pageCache.filter { keep.contains($0.key) }
   }
 

@@ -1,5 +1,6 @@
 import AppKit
 import QuickLookUI
+import SparkGridCore
 import UniformTypeIdentifiers
 
 /// Finder Quick Look preview: spreadsheet grid with basic cell editing and Save.
@@ -26,7 +27,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
   @available(*, unavailable)
   required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
+    return nil
   }
 
   override func loadView() {
@@ -207,7 +208,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         return
       }
     }
-    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.sparkbysam.SparkGrid") else {
+    guard
+      let appURL = NSWorkspace.shared.urlForApplication(
+        withBundleIdentifier: "com.sparkbysam.SparkGrid")
+    else {
       NSWorkspace.shared.open(session.fileURL)
       return
     }

@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 
 /// AppKit formula bar using NSTextView so ref colors survive focus/editing.
@@ -109,7 +110,8 @@ struct FormulaBarTextField: NSViewRepresentable {
       isApplyingAttributes = true
       defer { isApplyingAttributes = false }
 
-      let font = textView.font
+      let font =
+        textView.font
         ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
       let color = NSColor.labelColor
       let attributed = FormulaReferenceScanner.attributedFormula(
@@ -141,12 +143,14 @@ struct FormulaBarTextField: NSViewRepresentable {
       lastAppliedKey = key
     }
 
-    private func applyPlainTypingAttributes(textView: FormulaBarNSTextView, storage: NSTextStorage) {
+    private func applyPlainTypingAttributes(textView: FormulaBarNSTextView, storage: NSTextStorage)
+    {
       guard !isApplyingAttributes else { return }
       isApplyingAttributes = true
       defer { isApplyingAttributes = false }
 
-      let font = textView.font
+      let font =
+        textView.font
         ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
       let color = NSColor.labelColor
       let selected = textView.selectedRange
@@ -243,11 +247,13 @@ struct FormulaBarTextField: NSViewRepresentable {
       indexOfSelectedItem index: UnsafeMutablePointer<Int>?
     ) -> [String] {
       guard textView.string.hasPrefix("=") else { return [] }
-      guard FormulaAutocomplete.shouldOfferPopup(
-        in: textView.string,
-        utf16Cursor: charRange.location + charRange.length,
-        namedRanges: parent.namedRanges
-      ) else { return [] }
+      guard
+        FormulaAutocomplete.shouldOfferPopup(
+          in: textView.string,
+          utf16Cursor: charRange.location + charRange.length,
+          namedRanges: parent.namedRanges
+        )
+      else { return [] }
       let partial = (textView.string as NSString).substring(with: charRange)
       index?.pointee = 0
       return FormulaAutocomplete.suggestions(
@@ -321,11 +327,13 @@ struct FormulaBarTextField: NSViewRepresentable {
 
     private func applyTabCompletion() -> Bool {
       guard let textView else { return false }
-      guard let result = FormulaAutocomplete.tabComplete(
-        text: textView.string,
-        utf16Cursor: textView.selectedRange.location,
-        namedRanges: parent.namedRanges
-      ) else { return false }
+      guard
+        let result = FormulaAutocomplete.tabComplete(
+          text: textView.string,
+          utf16Cursor: textView.selectedRange.location,
+          namedRanges: parent.namedRanges
+        )
+      else { return false }
       textView.string = result.text
       textView.setSelectedRange(NSRange(location: result.cursor, length: 0))
       parent.text = result.text
@@ -339,11 +347,13 @@ struct FormulaBarTextField: NSViewRepresentable {
     private func maybeOfferCompletions() {
       guard let textView else { return }
       let cursor = textView.selectedRange.location
-      guard FormulaAutocomplete.shouldOfferPopup(
-        in: textView.string,
-        utf16Cursor: cursor,
-        namedRanges: parent.namedRanges
-      ) else {
+      guard
+        FormulaAutocomplete.shouldOfferPopup(
+          in: textView.string,
+          utf16Cursor: cursor,
+          namedRanges: parent.namedRanges
+        )
+      else {
         NSObject.cancelPreviousPerformRequests(
           withTarget: self,
           selector: #selector(triggerComplete),
@@ -379,7 +389,7 @@ final class FormulaBarContainerView: NSView {
 
   @available(*, unavailable)
   required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
+    return nil
   }
 
   func setVisibleHeight(_ height: CGFloat) {
@@ -387,7 +397,8 @@ final class FormulaBarContainerView: NSView {
     guard abs(visibleHeight - next) > 0.5 else { return }
     visibleHeight = next
     // Document can grow taller than the viewport so multiline cells scroll when collapsed.
-    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    textView.maxSize = NSSize(
+      width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     invalidateIntrinsicContentSize()
     needsLayout = true
   }
@@ -418,7 +429,8 @@ final class FormulaBarContainerView: NSView {
     textView.textContainer?.lineFragmentPadding = 2
     textView.textContainerInset = NSSize(width: 0, height: 1)
     textView.minSize = .zero
-    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    textView.maxSize = NSSize(
+      width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     textView.insertionPointColor = .labelColor
     textView.focusRingType = .none
     textView.autoresizingMask = [.width]
@@ -446,7 +458,8 @@ final class FormulaBarContainerView: NSView {
       frame.size.width = max(clip.bounds.width, 1)
       let usedHeight: CGFloat
       if let container = textView.textContainer,
-         let layoutManager = textView.layoutManager {
+        let layoutManager = textView.layoutManager
+      {
         usedHeight = layoutManager.usedRect(for: container).height
       } else {
         usedHeight = visibleHeight
@@ -596,8 +609,9 @@ final class FormulaBarNSTextView: NSTextView {
 
   override func insertText(_ insertString: Any, replacementRange: NSRange) {
     if let event = NSApp.currentEvent,
-       event.type == .keyDown,
-       AppSettings.shared.matches(.save, event: event) {
+      event.type == .keyDown,
+      AppSettings.shared.matches(.save, event: event)
+    {
       _ = SparkGridSaveShortcut.perform()
       return
     }
@@ -620,9 +634,11 @@ final class FormulaBarNSTextView: NSTextView {
     }
     let before = string
     super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
-    let commitOnReturn = flag
+    let commitOnReturn =
+      flag
       && movement == NSTextMovement.`return`.rawValue
-      && (before == string || FormulaAutocomplete.isExactCompletion(partial: partial, completion: word))
+      && (before == string
+        || FormulaAutocomplete.isExactCompletion(partial: partial, completion: word))
     guard commitOnReturn else { return }
     let editor = self
     DispatchQueue.main.async {

@@ -1,7 +1,10 @@
 import AppKit
+import SparkGridCore
 
 /// Editable NSTableView backed by a `PreviewSession`.
-final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableViewDelegate,
+  NSTextFieldDelegate
+{
   let tableView = NSTableView()
   var session: PreviewSession?
   var onEdit: (() -> Void)?
@@ -60,7 +63,8 @@ final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableView
     session?.previewRowCount ?? 0
   }
 
-  func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+  func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView?
+  {
     guard let tableColumn, let session else { return nil }
 
     if tableColumn.identifier == rowHeaderIdentifier {
@@ -90,7 +94,9 @@ final class PreviewTableController: NSObject, NSTableViewDataSource, NSTableView
     return field
   }
 
-  private func reusedField(in tableView: NSTableView, identifier: NSUserInterfaceItemIdentifier) -> NSTextField {
+  private func reusedField(in tableView: NSTableView, identifier: NSUserInterfaceItemIdentifier)
+    -> NSTextField
+  {
     if let existing = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField {
       return existing
     }

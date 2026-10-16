@@ -42,3 +42,6 @@ fixtures/
 .venv-img/
 Spark Grid/Assets.xcassets/AppIcon.appiconset/_blue_backup/
 AppStoreScreenshots/_raw*
+
+# Pinned SwiftLint binary downloaded by scripts/lint.sh
+.tools/

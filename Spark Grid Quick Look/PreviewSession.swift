@@ -1,4 +1,5 @@
 import Foundation
+import SparkGridCore
 import UniformTypeIdentifiers
 
 /// In-memory spreadsheet session for Quick Look preview + basic cell edits.
@@ -108,11 +109,11 @@ final class PreviewSession {
   private static func inferredFormat(for value: String) -> CellFormat? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.hasSuffix("%"),
-       Double(
-         String(trimmed.dropLast())
-           .trimmingCharacters(in: .whitespaces)
-           .replacingOccurrences(of: ",", with: "")
-       ) != nil
+      Double(
+        String(trimmed.dropLast())
+          .trimmingCharacters(in: .whitespaces)
+          .replacingOccurrences(of: ",", with: "")
+      ) != nil
     {
       var format = CellFormat()
       format.numberFormat = .percent
@@ -120,7 +121,7 @@ final class PreviewSession {
       return format
     }
     if trimmed.hasPrefix("$"),
-       Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: "")) != nil
+      Double(String(trimmed.dropFirst()).replacingOccurrences(of: ",", with: "")) != nil
     {
       var format = CellFormat()
       format.numberFormat = .currency

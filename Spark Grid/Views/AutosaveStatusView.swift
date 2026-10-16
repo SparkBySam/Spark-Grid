@@ -1,3 +1,4 @@
+import SparkGridCore
 import SwiftUI
 
 struct AutosaveStatusView: View {
@@ -71,9 +72,11 @@ struct AutosaveStatusView: View {
       return "Save this document to enable autosave"
     }
     if store.isDirty {
-      return "Unsaved changes — autosaves \(AppSettings.label(forInterval: settings.autosaveIntervalSeconds).lowercased())"
+      return
+        "Unsaved changes — autosaves \(AppSettings.label(forInterval: settings.autosaveIntervalSeconds).lowercased())"
     }
-    return "All changes saved — autosaves \(AppSettings.label(forInterval: settings.autosaveIntervalSeconds).lowercased())"
+    return
+      "All changes saved — autosaves \(AppSettings.label(forInterval: settings.autosaveIntervalSeconds).lowercased())"
   }
 }
 

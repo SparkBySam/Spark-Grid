@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SparkGridCore
 import UniformTypeIdentifiers
 
 @Observable
@@ -40,13 +41,13 @@ final class SpreadsheetDocumentStore {
   /// The second call reuses this answer so the save prompt appears once.
   private var answeredCloseAttempt: Bool?
   #if DEBUG
-  /// BugBash sets this to count the save prompt without a modal alert.
-  var unsavedPromptTestAnswer: UnsavedPromptTestAnswer?
-  private(set) var unsavedPromptCount = 0
+    /// BugBash sets this to count the save prompt without a modal alert.
+    var unsavedPromptTestAnswer: UnsavedPromptTestAnswer?
+    private(set) var unsavedPromptCount = 0
 
-  enum UnsavedPromptTestAnswer {
-    case save, discard, cancel
-  }
+    enum UnsavedPromptTestAnswer {
+      case save, discard, cancel
+    }
   #endif
 
   var displayTitle: String {
@@ -144,6 +145,7 @@ final class SpreadsheetDocumentStore {
     changeCount &+= 1
     importedFormulaCachesCurrent = false
     isDirty = true
+    scheduleCrashRecovery()
   }
 
   func documentDidChange() {
@@ -232,7 +234,8 @@ final class SpreadsheetDocumentStore {
     panel.allowsOtherFileTypes = false
     panel.isExtensionHidden = false
     panel.title = "Save Spreadsheet"
-    panel.message = "Choose Excel Workbook (.xlsx) to keep all sheets, or CSV for the active sheet only."
+    panel.message =
+      "Choose Excel Workbook (.xlsx) to keep all sheets, or CSV for the active sheet only."
     guard panel.runModal() == .OK, let url = panel.url else { return false }
 
     if url.pathExtension.lowercased() != "xlsx", hasMultipleSheets, !confirmActiveSheetOnlySave() {
@@ -304,14 +307,14 @@ final class SpreadsheetDocumentStore {
 
   private func promptForUnsavedChanges() -> UnsavedChangesChoice {
     #if DEBUG
-    unsavedPromptCount += 1
-    if let unsavedPromptTestAnswer {
-      switch unsavedPromptTestAnswer {
-      case .save: return .save
-      case .discard: return .discard
-      case .cancel: return .cancel
+      unsavedPromptCount += 1
+      if let unsavedPromptTestAnswer {
+        switch unsavedPromptTestAnswer {
+        case .save: return .save
+        case .discard: return .discard
+        case .cancel: return .cancel
+        }
       }
-    }
     #endif
     let alert = NSAlert()
     alert.messageText = "Do you want to save the changes you made?"
@@ -436,11 +439,12 @@ final class SpreadsheetDocumentStore {
     let superseded = queuedSave != nil
     if let failure {
       if !superseded, reportErrors || waitingToTerminate || windowWaitingForSave != nil {
-        presentSaveError(NSError(
-          domain: "SparkGridSave",
-          code: 1,
-          userInfo: [NSLocalizedDescriptionKey: failure]
-        ))
+        presentSaveError(
+          NSError(
+            domain: "SparkGridSave",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: failure]
+          ))
       }
     } else if stillThisDocument, !superseded {
       fileURL = destination
@@ -487,7 +491,7 @@ final class SpreadsheetDocumentStore {
   }
 
   nonisolated private static func write(_ snapshot: WorkbookSaveSnapshot) throws {
-    precondition(!Thread.isMainThread)
+    try BackgroundWriteGuard.requireBackgroundThread()
     if snapshot.xlsx {
       let data = try XLSXCodec.exportWorkbook(
         snapshot.workbook,
@@ -527,10 +531,47 @@ final class SpreadsheetDocumentStore {
     }
     importedFormulaCachesCurrent = false
     observedEditStamp = stamp
+    scheduleCrashRecovery()
   }
 
   private func computeDirtyState() -> Bool {
     changeCount != savedChangeCount
+  }
+
+  private var recoveryTask: Task<Void, Never>?
+
+  /// Writes a recovery copy off the main thread after edits. A clean quit deletes it.
+  private func scheduleCrashRecovery() {
+    if ProcessInfo.processInfo.environment["SPARK_GRID_BENCHMARK"] == "1" { return }
+    recoveryTask?.cancel()
+    recoveryTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 2_000_000_000)
+      guard !Task.isCancelled else { return }
+      if let viewModel = activeViewModel {
+        viewModel.syncAutoFilterToActiveSheet()
+        document.workbook = viewModel.workbook
+      }
+      let workbook = document.workbook
+      let path = fileURL?.path
+      let directory = CrashRecoveryStore.defaultDirectory()
+      await Task.detached(priority: .utility) {
+        try? CrashRecoveryStore.write(workbook: workbook, documentPath: path, in: directory)
+      }.value
+    }
+  }
+
+  func restoreCrashRecovery() throws {
+    let loaded = try CrashRecoveryStore.load()
+    document = SpreadsheetDocument(workbook: loaded.workbook)
+    if let path = loaded.documentPath {
+      let url = URL(fileURLWithPath: path)
+      if FileManager.default.fileExists(atPath: url.path) {
+        fileURL = url
+      }
+    }
+    externalWorkbookToken &+= 1
+    importedFormulaCachesCurrent = true
+    markClean()
   }
 
   private func noteRecent(_ url: URL) {

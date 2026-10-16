@@ -1,3 +1,4 @@
+import SparkGridCore
 import SwiftUI
 
 struct SpreadsheetViewCommands: Commands {

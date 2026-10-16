@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Observation
+import SparkGridCore
 
 /// UI state and mutations for the active workbook. Undo integrates with the document undo manager.
 @Observable
@@ -112,6 +114,8 @@ final class SpreadsheetViewModel {
 
   /// Evaluates `=` formulas; display helpers use this cache.
   let formulaEngine = FormulaEngine()
+  /// Workbook edits that the fuzzer and `spark-grid-cli run` also perform.
+  private let engineCommands = WorkbookSession()
 
   /// Colored references for the formula being edited, or the selected cell's formula (preview).
   var formulaReferenceHighlights: [FormulaRefHighlight] {
@@ -526,10 +530,11 @@ final class SpreadsheetViewModel {
       if alreadyUsed {
         replaceSelection(with: CellRange(start: .origin, end: wholeEnd))
       } else {
-        replaceSelection(with: CellRange(
-          start: CellAddress(row: usedNorm.minRow, col: usedNorm.minCol),
-          end: CellAddress(row: usedNorm.maxRow, col: usedNorm.maxCol)
-        ))
+        replaceSelection(
+          with: CellRange(
+            start: CellAddress(row: usedNorm.minRow, col: usedNorm.minCol),
+            end: CellAddress(row: usedNorm.maxRow, col: usedNorm.maxCol)
+          ))
       }
     } else {
       replaceSelection(with: CellRange(start: .origin, end: wholeEnd))
@@ -602,10 +607,11 @@ final class SpreadsheetViewModel {
     let sheet = activeSheet
     let a = max(0, min(sheet.effectiveColumnCount - 1, startCol))
     let b = max(0, min(sheet.effectiveColumnCount - 1, endCol))
-    replaceSelection(with: CellRange(
-      start: CellAddress(row: 0, col: a),
-      end: CellAddress(row: sheet.effectiveRowCount - 1, col: b)
-    ))
+    replaceSelection(
+      with: CellRange(
+        start: CellAddress(row: 0, col: a),
+        end: CellAddress(row: sheet.effectiveRowCount - 1, col: b)
+      ))
     syncEditTextFromSelection()
     isEditing = false
   }
@@ -614,9 +620,9 @@ final class SpreadsheetViewModel {
     let clampedCol = max(0, min(activeSheet.effectiveColumnCount - 1, col))
     let range = selectionRange.normalized
     if !hasMultipleSelectionRanges,
-       selectionAxis == .column,
-       range.minCol == clampedCol,
-       range.maxCol == clampedCol
+      selectionAxis == .column,
+      range.minCol == clampedCol,
+      range.maxCol == clampedCol
     {
       select(CellAddress(row: 0, col: clampedCol))
     } else {
@@ -633,10 +639,11 @@ final class SpreadsheetViewModel {
     let sheet = activeSheet
     let a = max(0, min(sheet.effectiveRowCount - 1, startRow))
     let b = max(0, min(sheet.effectiveRowCount - 1, endRow))
-    replaceSelection(with: CellRange(
-      start: CellAddress(row: a, col: 0),
-      end: CellAddress(row: b, col: sheet.effectiveColumnCount - 1)
-    ))
+    replaceSelection(
+      with: CellRange(
+        start: CellAddress(row: a, col: 0),
+        end: CellAddress(row: b, col: sheet.effectiveColumnCount - 1)
+      ))
     syncEditTextFromSelection()
     isEditing = false
   }
@@ -645,9 +652,9 @@ final class SpreadsheetViewModel {
     let clampedRow = max(0, min(activeSheet.effectiveRowCount - 1, row))
     let range = selectionRange.normalized
     if !hasMultipleSelectionRanges,
-       selectionAxis == .row,
-       range.minRow == clampedRow,
-       range.maxRow == clampedRow
+      selectionAxis == .row,
+      range.minRow == clampedRow,
+      range.maxRow == clampedRow
     {
       select(CellAddress(row: clampedRow, col: 0))
     } else {
@@ -674,13 +681,7 @@ final class SpreadsheetViewModel {
       noteFormulaEditTextChanged()
       return
     }
-    registerUndo(address: address, oldValue: oldValue, newValue: newValue)
-    var sheet = activeSheet
-    var cell = sheet.cell(at: address)
-    cell.raw = newValue
-    applyInferredNumberFormatIfNeeded(to: &cell, raw: newValue)
-    sheet.setCell(cell, at: address)
-    setActiveSheet(sheet, formulaCellsChanged: [address])
+    setCellValue(newValue, at: address)
     isEditing = false
     noteFormulaEditTextChanged()
   }
@@ -700,15 +701,8 @@ final class SpreadsheetViewModel {
   func setCellValue(_ value: String, at address: CellAddress) {
     let oldValue = activeSheet.cell(at: address).raw
     guard value != oldValue else { return }
+    guard writeCell(value, at: address) else { return }
     registerUndo(address: address, oldValue: oldValue, newValue: value)
-    var sheet = activeSheet
-    var cell = sheet.cell(at: address)
-    cell.raw = value
-    cell.importedFormulaResult = nil
-    cell.importedFormulaValueType = nil
-    applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
-    sheet.setCell(cell, at: address)
-    setActiveSheet(sheet, formulaCellsChanged: [address])
     if address == selectionAnchor && !isEditing {
       editText = value
     }
@@ -719,22 +713,63 @@ final class SpreadsheetViewModel {
     }
   }
 
-  /// When the user types/imports `50%`, keep the raw text for the formula bar and mark percent format
-  /// so the grid shows a percentage instead of the fractional evaluated value.
-  private func applyInferredNumberFormatIfNeeded(to cell: inout Cell, raw: String) {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed.hasSuffix("%"),
-          !FormulaSyntax.isFormula(trimmed),
-          Double(String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")) != nil
-    else { return }
-    var format = cell.format ?? CellFormat()
-    if format.numberFormat == .general {
-      format.numberFormat = .percent
-      if format.decimalPlaces == nil {
-        format.decimalPlaces = defaultDecimalPlaces(for: .percent)
-      }
-      cell.format = format
+  /// `cell.set`. Percent literals pick up a percent format inside the command.
+  private func writeCell(_ value: String, at address: CellAddress) -> Bool {
+    applyCommand(
+      "cell.set",
+      [
+        "sheet": activeSheet.name,
+        "address": address.a1,
+        "raw": value,
+      ],
+      incremental: true
+    )
+  }
+
+  @discardableResult
+  func applyCommand(
+    _ id: String,
+    _ arguments: [String: String],
+    incremental: Bool
+  ) -> Bool {
+    var next = workbook
+    let outcome = engineCommands.apply(
+      id: id,
+      arguments: arguments,
+      to: &next,
+      sortDisplay: id == "data.sort"
+        ? { _, address in
+          self.sortKey(at: address)
+        } : nil
+    )
+    guard outcome.ok else { return false }
+    let change = engineCommands.lastChange
+    if incremental, !change.structural,
+      next.sheets.count == workbook.sheets.count,
+      workbook.sheets.indices.contains(workbook.activeSheetIndex),
+      change.sheetName.caseInsensitiveCompare(activeSheet.name) == .orderedSame
+    {
+      setActiveSheet(
+        next.sheets[workbook.activeSheetIndex],
+        formulaCellsChanged: change.addresses
+      )
+    } else {
+      workbook = next
     }
+    return true
+  }
+
+  private func sortKey(at address: CellAddress) -> (key: String, number: Double?) {
+    let key = displayString(at: address)
+    let number =
+      displayValue(at: address).asNumber
+      ?? Double(
+        key.replacingOccurrences(of: ",", with: "")
+          .replacingOccurrences(of: "%", with: "")
+          .replacingOccurrences(of: "$", with: "")
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+      )
+    return (key, number)
   }
 
   func applyFormulaBar() {
@@ -766,7 +801,8 @@ final class SpreadsheetViewModel {
     sheet.columnWidths[col] = newWidth
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerColumnWidthUndo(col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Auto Fit Column")
+      registerColumnWidthUndo(
+        col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Auto Fit Column")
     }
   }
 
@@ -797,7 +833,8 @@ final class SpreadsheetViewModel {
     sheet.rowHeights[row] = newHeight
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerRowHeightUndo(row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Auto Fit Row")
+      registerRowHeightUndo(
+        row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Auto Fit Row")
     }
   }
 
@@ -807,7 +844,8 @@ final class SpreadsheetViewModel {
     for col in 0...lastCol {
       autoFitColumn(col, recordUndo: false)
     }
-    registerColumnWidthsUndo(before: before, after: activeSheet.columnWidths, actionName: "Auto Fit Columns")
+    registerColumnWidthsUndo(
+      before: before, after: activeSheet.columnWidths, actionName: "Auto Fit Columns")
   }
 
   func autoFitAllRows() {
@@ -816,7 +854,8 @@ final class SpreadsheetViewModel {
     for row in 0...lastRow where !isRowHiddenByFilter(row) {
       autoFitRow(row, recordUndo: false)
     }
-    registerRowHeightsUndo(before: before, after: activeSheet.rowHeights, actionName: "Auto Fit Rows")
+    registerRowHeightsUndo(
+      before: before, after: activeSheet.rowHeights, actionName: "Auto Fit Rows")
   }
 
   func columnWidth(for col: Int) -> CGFloat {
@@ -835,7 +874,8 @@ final class SpreadsheetViewModel {
     sheet.columnWidths[col] = newWidth
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerColumnWidthUndo(col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Resize Column")
+      registerColumnWidthUndo(
+        col: col, oldWidth: oldWidth, newWidth: newWidth, actionName: "Resize Column")
     }
   }
 
@@ -847,7 +887,8 @@ final class SpreadsheetViewModel {
     sheet.rowHeights[row] = newHeight
     setActiveSheetPreservingFormulas(sheet)
     if recordUndo {
-      registerRowHeightUndo(row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Resize Row")
+      registerRowHeightUndo(
+        row: row, oldHeight: oldHeight, newHeight: newHeight, actionName: "Resize Row")
     }
   }
 
@@ -960,11 +1001,19 @@ final class SpreadsheetViewModel {
 
   func addSheet() {
     commitEditIfNeeded()
-    var wb = workbook
-    let index = wb.sheets.count + 1
-    wb.sheets.append(Sheet(name: "Sheet\(index)"))
-    wb.activeSheetIndex = wb.sheets.count - 1
-    workbook = wb
+    var next = workbook
+    let preferred = "Sheet\(next.sheets.count + 1)"
+    let outcome = engineCommands.apply(
+      id: "sheet.add",
+      arguments: ["name": preferred],
+      to: &next
+    )
+    guard outcome.ok else { return }
+    if let index = next.sheets.firstIndex(where: { $0.name == engineCommands.lastChange.sheetName })
+    {
+      next.activeSheetIndex = index
+    }
+    workbook = next
     selection = .origin
     syncEditTextFromSelection()
     isEditing = false
@@ -991,16 +1040,17 @@ final class SpreadsheetViewModel {
   func deleteSheet(at index: Int) {
     commitEditIfNeeded()
     guard workbook.sheets.count > 1 else { return }
-    guard index >= 0, index < workbook.sheets.count else { return }
+    guard workbook.sheets.indices.contains(index) else { return }
 
+    let name = workbook.sheets[index].name
     let wasActive = index == workbook.activeSheetIndex
     let stampBefore = editStamp
-    workbook.sheets.remove(at: index)
+    var next = workbook
+    let outcome = engineCommands.apply(id: "sheet.delete", arguments: ["sheet": name], to: &next)
+    guard outcome.ok else { return }
+    workbook = next
     if wasActive {
-      workbook.activeSheetIndex = min(index, workbook.sheets.count - 1)
       restoreFilterFromActiveSheet()
-    } else if index < workbook.activeSheetIndex {
-      workbook.activeSheetIndex -= 1
     }
     finishWorkbookMutation(stampBefore: stampBefore)
     contentRevision &+= 1
@@ -1013,9 +1063,16 @@ final class SpreadsheetViewModel {
   func renameSheet(at index: Int, to name: String) {
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
-    guard index >= 0, index < workbook.sheets.count else { return }
+    guard workbook.sheets.indices.contains(index) else { return }
     let stampBefore = editStamp
-    workbook.sheets[index].name = trimmed
+    var next = workbook
+    let outcome = engineCommands.apply(
+      id: "sheet.rename",
+      arguments: ["sheet": workbook.sheets[index].name, "name": trimmed],
+      to: &next
+    )
+    guard outcome.ok else { return }
+    workbook = next
     finishWorkbookMutation(stampBefore: stampBefore)
   }
 
@@ -1359,7 +1416,9 @@ final class SpreadsheetViewModel {
     applyFormat(to: CellRange(start: address, end: address), mutate: mutate)
   }
 
-  private func registerFormatUndo(address: CellAddress, oldFormat: CellFormat, newFormat: CellFormat) {
+  private func registerFormatUndo(
+    address: CellAddress, oldFormat: CellFormat, newFormat: CellFormat
+  ) {
     undoManager?.registerUndo(withTarget: self) { target in
       target.applyFormat(oldFormat, at: address, skipUndo: true)
       target.undoManager?.registerUndo(withTarget: target) { inner in
@@ -1408,22 +1467,28 @@ final class SpreadsheetViewModel {
   }
 
   var insertRowAboveTitle: String {
-    Self.structureInsertTitle(count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Above")
+    Self.structureInsertTitle(
+      count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Above")
   }
 
   var insertRowBelowTitle: String {
-    Self.structureInsertTitle(count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Below")
+    Self.structureInsertTitle(
+      count: rowInsertCount, singular: "Row", plural: "Rows", placement: "Below")
   }
 
   var insertColumnLeftTitle: String {
-    Self.structureInsertTitle(count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Left")
+    Self.structureInsertTitle(
+      count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Left")
   }
 
   var insertColumnRightTitle: String {
-    Self.structureInsertTitle(count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Right")
+    Self.structureInsertTitle(
+      count: columnInsertCount, singular: "Column", plural: "Columns", placement: "Right")
   }
 
-  static func structureInsertTitle(count: Int, singular: String, plural: String, placement: String) -> String {
+  static func structureInsertTitle(count: Int, singular: String, plural: String, placement: String)
+    -> String
+  {
     if count <= 1 {
       return "Insert \(singular) \(placement)"
     }
@@ -1475,7 +1540,9 @@ final class SpreadsheetViewModel {
 
   /// Distinct selected indexes on one axis, plus the outer edges of that selection.
   /// A contiguous block's count is its span. Gaps in a multi-range selection are not counted.
-  private func structureSelectionBounds(_ axis: StructureInsertAxis) -> (min: Int, max: Int, count: Int) {
+  private func structureSelectionBounds(_ axis: StructureInsertAxis) -> (
+    min: Int, max: Int, count: Int
+  ) {
     let ranges = selectionRanges.isEmpty ? [selectionRange] : selectionRanges
     var seen = Set<Int>()
     var minIndex = Int.max
@@ -1664,32 +1731,30 @@ final class SpreadsheetViewModel {
       end: clamp(end)
     ).normalized
 
-    let srcRowCount = sourceRange.maxRow - sourceRange.minRow + 1
-    let srcColCount = sourceRange.maxCol - sourceRange.minCol + 1
+    let srcRowCount = InputBounds.span(from: sourceRange.minRow, through: sourceRange.maxRow)
+    let srcColCount = InputBounds.span(from: sourceRange.minCol, through: sourceRange.maxCol)
+    let fillRows = InputBounds.span(from: fillRange.minRow, through: fillRange.maxRow)
+    let fillCols = InputBounds.span(from: fillRange.minCol, through: fillRange.maxCol)
     guard srcRowCount > 0, srcColCount > 0 else { return }
+    guard InputBounds.materializedCount(rows: fillRows, cols: fillCols) != nil else { return }
 
-    undoManager?.beginUndoGrouping()
-    for row in fillRange.minRow...fillRange.maxRow {
-      for col in fillRange.minCol...fillRange.maxCol {
-        if row >= sourceRange.minRow && row <= sourceRange.maxRow && col >= sourceRange.minCol && col <= sourceRange.maxCol {
-          continue
-        }
-        let srcRow = sourceRange.minRow + positiveMod(row - sourceRange.minRow, srcRowCount)
-        let srcCol = sourceRange.minCol + positiveMod(col - sourceRange.minCol, srcColCount)
-        let srcAddress = CellAddress(row: srcRow, col: srcCol)
-        let srcCell = activeSheet.cell(at: srcAddress)
-        let destAddress = CellAddress(row: row, col: col)
-        let rowDelta = destAddress.row - srcAddress.row
-        let colDelta = destAddress.col - srcAddress.col
-        let value = FormulaRewriter.adjust(srcCell.raw, rowDelta: rowDelta, colDelta: colDelta)
-        setCellValue(value, at: destAddress)
-        if let format = srcCell.format {
-          applyFormat(format, at: destAddress, skipUndo: true)
-        }
-      }
-    }
-    undoManager?.endUndoGrouping()
-    undoManager?.setActionName("Fill")
+    let sourceLabel = CellRange(
+      start: CellAddress(row: sourceRange.minRow, col: sourceRange.minCol),
+      end: CellAddress(row: sourceRange.maxRow, col: sourceRange.maxCol)
+    ).a1Label
+    let snapshot = workbook
+    guard
+      applyCommand(
+        "edit.fill",
+        [
+          "sheet": activeSheet.name,
+          "source": sourceLabel,
+          "end": clamp(end).a1,
+        ],
+        incremental: true
+      )
+    else { return }
+    registerWorkbookStructureUndo(before: snapshot, action: "Fill")
 
     selectionEnd = CellAddress(row: fillRange.maxRow, col: fillRange.maxCol)
     setPrimaryRange(from: selectionAnchor, to: selectionEnd)
@@ -1697,174 +1762,71 @@ final class SpreadsheetViewModel {
   }
 
   private func insertRows(at index: Int, count: Int) {
-    commitEditIfNeeded()
-    let snapshot = workbook
-    var wb = workbook
-    let sheetName = wb.activeSheet.name
-    rewriteFormulas(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .row,
-      change: .insert(at: index, count: count)
+    mutateStructure(
+      "sheet.insertRows",
+      index: index,
+      count: count,
+      action: "Insert Rows",
+      clampAfter: false
     )
-    shiftNamedRanges(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .row,
-      change: .insert(at: index, count: count)
-    )
-    SheetStructureMutation.insertRows(into: &wb.activeSheet, at: index, count: count)
-    workbook = wb
-    registerWorkbookStructureUndo(before: snapshot, action: "Insert Rows")
   }
 
   private func deleteRows(at index: Int, count: Int) {
-    commitEditIfNeeded()
-    let snapshot = workbook
-    var wb = workbook
-    let sheetName = wb.activeSheet.name
-    rewriteFormulas(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .row,
-      change: .delete(at: index, count: count)
+    mutateStructure(
+      "sheet.deleteRows",
+      index: index,
+      count: count,
+      action: "Delete Rows",
+      clampAfter: true
     )
-    shiftNamedRanges(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .row,
-      change: .delete(at: index, count: count)
-    )
-    SheetStructureMutation.deleteRows(in: &wb.activeSheet, at: index, count: count)
-    workbook = wb
-    registerWorkbookStructureUndo(before: snapshot, action: "Delete Rows")
-    clampSelectionToSheet()
   }
 
   private func insertColumns(at index: Int, count: Int) {
-    commitEditIfNeeded()
-    let snapshot = workbook
-    var wb = workbook
-    let sheetName = wb.activeSheet.name
-    rewriteFormulas(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .column,
-      change: .insert(at: index, count: count)
+    mutateStructure(
+      "sheet.insertColumns",
+      index: index,
+      count: count,
+      action: "Insert Columns",
+      clampAfter: false
     )
-    shiftNamedRanges(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .column,
-      change: .insert(at: index, count: count)
-    )
-    SheetStructureMutation.insertColumns(into: &wb.activeSheet, at: index, count: count)
-    workbook = wb
-    registerWorkbookStructureUndo(before: snapshot, action: "Insert Columns")
   }
 
   private func deleteColumns(at index: Int, count: Int) {
+    mutateStructure(
+      "sheet.deleteColumns",
+      index: index,
+      count: count,
+      action: "Delete Columns",
+      clampAfter: true
+    )
+  }
+
+  private func mutateStructure(
+    _ id: String,
+    index: Int,
+    count: Int,
+    action: String,
+    clampAfter: Bool
+  ) {
+    let count = InputBounds.cappedCount(count)
+    guard count > 0 else { return }
     commitEditIfNeeded()
     let snapshot = workbook
-    var wb = workbook
-    let sheetName = wb.activeSheet.name
-    rewriteFormulas(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .column,
-      change: .delete(at: index, count: count)
-    )
-    shiftNamedRanges(
-      in: &wb,
-      mutatedSheetName: sheetName,
-      axis: .column,
-      change: .delete(at: index, count: count)
-    )
-    SheetStructureMutation.deleteColumns(in: &wb.activeSheet, at: index, count: count)
-    workbook = wb
-    registerWorkbookStructureUndo(before: snapshot, action: "Delete Columns")
-    clampSelectionToSheet()
-  }
-
-  private func rewriteFormulas(
-    in workbook: inout Workbook,
-    mutatedSheetName: String,
-    axis: FormulaRewriter.Axis,
-    change: FormulaRewriter.StructureChange
-  ) {
-    for sheetIndex in workbook.sheets.indices {
-      let sheetName = workbook.sheets[sheetIndex].name
-      var cells = workbook.sheets[sheetIndex].cells
-      var changed = false
-      for (address, cell) in cells where FormulaSyntax.isFormula(cell.raw) {
-        let next = FormulaRewriter.shiftForStructure(
-          cell.raw,
-          formulaSheetName: sheetName,
-          mutatedSheetName: mutatedSheetName,
-          axis: axis,
-          change: change
-        )
-        if next != cell.raw {
-          var updated = cell
-          updated.raw = next
-          cells[address] = updated
-          changed = true
-        }
-      }
-      if changed {
-        // Same addresses — populated extents stay valid.
-        workbook.sheets[sheetIndex].cells = cells
-      }
+    guard
+      applyCommand(
+        id,
+        [
+          "sheet": activeSheet.name,
+          "index": String(index),
+          "count": String(count),
+        ],
+        incremental: false
+      )
+    else { return }
+    registerWorkbookStructureUndo(before: snapshot, action: action)
+    if clampAfter {
+      clampSelectionToSheet()
     }
-  }
-
-  private func shiftNamedRanges(
-    in workbook: inout Workbook,
-    mutatedSheetName: String,
-    axis: FormulaRewriter.Axis,
-    change: FormulaRewriter.StructureChange
-  ) {
-    var next: [String: NamedRange] = [:]
-    for (key, named) in workbook.namedRanges {
-      guard named.resolvesToRange else {
-        next[key] = named
-        continue
-      }
-      guard named.sheetName.caseInsensitiveCompare(mutatedSheetName) == .orderedSame else {
-        next[key] = named
-        continue
-      }
-      let start = FormulaRef(
-        sheet: named.sheetName,
-        row: named.startRow,
-        col: named.startCol,
-        absRow: false,
-        absCol: false
-      )
-      let end = FormulaRef(
-        sheet: named.sheetName,
-        row: named.endRow,
-        col: named.endCol,
-        absRow: false,
-        absCol: false
-      )
-      let shifted = FormulaRewriter.shiftForStructure(
-        "=\(A1Reference.formatRange(start: start, end: end))",
-        formulaSheetName: named.sheetName,
-        mutatedSheetName: mutatedSheetName,
-        axis: axis,
-        change: change
-      )
-      if shifted == "=#REF!" { continue }
-      let body = shifted.hasPrefix("=") ? String(shifted.dropFirst()) : shifted
-      guard let (s, e) = A1Reference.parseFormulaRange(body) else { continue }
-      next[key] = NamedRange(
-        name: named.name,
-        sheetName: named.sheetName,
-        range: CellRange(start: s.address, end: e.address)
-      )
-    }
-    workbook.namedRanges = next
   }
 
   func registerWorkbookStructureUndo(before: Workbook, action: String) {
@@ -1893,11 +1855,6 @@ final class SpreadsheetViewModel {
       noteSelectionChanged()
     }
     syncEditTextFromSelection()
-  }
-
-  private func positiveMod(_ value: Int, _ modulus: Int) -> Int {
-    let remainder = value % modulus
-    return remainder >= 0 ? remainder : remainder + modulus
   }
 
   private func registerFreezeUndo(oldRows: Int, oldCols: Int, newRows: Int, newCols: Int) {
@@ -1953,7 +1910,7 @@ final class SpreadsheetViewModel {
     guard !trimmed.isEmpty else { return }
     let upper = trimmed.uppercased()
     guard upper.first?.isLetter == true,
-          upper.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
+      upper.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
     else { return }
 
     let snapshot = workbook
@@ -2001,7 +1958,8 @@ final class SpreadsheetViewModel {
   }
 
   private func makeSelectionCopy() -> SelectionCopy? {
-    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) }) else {
+    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) })
+    else {
       return nil
     }
     if selectionRanges.count == 1 {
@@ -2009,7 +1967,9 @@ final class SpreadsheetViewModel {
       let region: SpreadsheetClipboard.CopyRegion
       if rangeHasContent(range) {
         region = SpreadsheetClipboard.copyRegion(from: activeSheet, range: range)
-      } else if let bounds = ConditionalFormatPaste.coveredBounds(on: activeSheet, intersecting: range) {
+      } else if let bounds = ConditionalFormatPaste.coveredBounds(
+        on: activeSheet, intersecting: range)
+      {
         region = SpreadsheetClipboard.copyRegion(from: activeSheet, range: bounds)
       } else {
         return nil
@@ -2027,7 +1987,8 @@ final class SpreadsheetViewModel {
 
   /// Copies cell raw values (including formulas) and records origin for relative paste.
   func copyFormulas() {
-    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) }) else { return }
+    guard selectionRanges.contains(where: { rangeHasContent($0) || rangeHasConditionalFormat($0) })
+    else { return }
     let range = selectionRange.normalized
     let bounds = CellRange(
       start: CellAddress(row: range.minRow, col: range.minCol),
@@ -2052,7 +2013,8 @@ final class SpreadsheetViewModel {
     for (address, cell) in activeSheet.cells {
       guard !cell.raw.isEmpty else { continue }
       if address.row >= n.minRow, address.row <= n.maxRow,
-         address.col >= n.minCol, address.col <= n.maxCol {
+        address.col >= n.minCol, address.col <= n.maxCol
+      {
         return true
       }
     }
@@ -2138,21 +2100,45 @@ final class SpreadsheetViewModel {
   ) {
     let rowDelta = adjustFormulas ? origin.row - (sourceOrigin?.row ?? origin.row) : 0
     let colDelta = adjustFormulas ? origin.col - (sourceOrigin?.col ?? origin.col) : 0
+    let pasteRows = grid.count
+    let pasteCols = grid.map(\.count).max() ?? 0
+    guard InputBounds.materializedCount(rows: pasteRows, cols: pasteCols) != nil else { return }
 
-    undoManager?.beginUndoGrouping()
+    var clipped: [[String]] = []
     for (rowOffset, row) in grid.enumerated() {
+      let rowIndex = origin.row + rowOffset
+      if rowIndex >= activeSheet.effectiveRowCount { break }
+      var fields: [String] = []
       for (colOffset, value) in row.enumerated() {
-        let address = CellAddress(row: origin.row + rowOffset, col: origin.col + colOffset)
-        guard address.row < activeSheet.effectiveRowCount, address.col < activeSheet.effectiveColumnCount else { continue }
-        let nextValue = adjustFormulas
-          ? FormulaRewriter.adjust(value, rowDelta: rowDelta, colDelta: colDelta)
-          : value
-        setCellValue(nextValue, at: address)
+        let colIndex = origin.col + colOffset
+        if colIndex >= activeSheet.effectiveColumnCount { break }
+        fields.append(value)
       }
+      clipped.append(fields)
     }
-    pasteCopiedConditionalFormats(conditionalFormats, at: origin, actionName: actionName)
-    undoManager?.endUndoGrouping()
-    undoManager?.setActionName(actionName)
+    guard clipped.contains(where: { !$0.isEmpty }) else { return }
+    let text = clipped.map { $0.joined(separator: "\t") }.joined(separator: "\n")
+    let snapshot = workbook
+    guard
+      applyCommand(
+        "edit.paste",
+        [
+          "sheet": activeSheet.name,
+          "anchor": origin.a1,
+          "text": text,
+          "rowDelta": String(rowDelta),
+          "colDelta": String(colDelta),
+        ],
+        incremental: true
+      )
+    else { return }
+    pasteCopiedConditionalFormats(
+      conditionalFormats,
+      at: origin,
+      actionName: actionName,
+      recordUndo: false
+    )
+    registerWorkbookStructureUndo(before: snapshot, action: actionName)
 
     if let lastRow = grid.indices.last, let lastCol = grid[lastRow].indices.last {
       selectionEnd = CellAddress(row: origin.row + lastRow, col: origin.col + lastCol)
@@ -2184,16 +2170,17 @@ final class SpreadsheetViewModel {
     undoManager?.setActionName("Edit Cell")
   }
 
+  func undo() {
+    undoManager?.undo()
+  }
+
+  func redo() {
+    undoManager?.redo()
+  }
+
   private func setCellValue(_ value: String, at address: CellAddress, skipUndo: Bool) {
     if skipUndo {
-      var sheet = activeSheet
-      var cell = sheet.cell(at: address)
-      cell.raw = value
-      cell.importedFormulaResult = nil
-      cell.importedFormulaValueType = nil
-      applyInferredNumberFormatIfNeeded(to: &cell, raw: value)
-      sheet.setCell(cell, at: address)
-      setActiveSheet(sheet, formulaCellsChanged: [address])
+      guard writeCell(value, at: address) else { return }
       if address == selectionAnchor {
         syncEditTextFromSelection()
       }
@@ -2206,5 +2193,3 @@ final class SpreadsheetViewModel {
     }
   }
 }
-
-import AppKit

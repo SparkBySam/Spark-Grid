@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 
 struct SpreadsheetFormatCommands: Commands {
@@ -8,13 +9,20 @@ struct SpreadsheetFormatCommands: Commands {
   var body: some Commands {
     CommandMenu("Format") {
       Button("Bold") { viewModel?.toggleBold() }
-        .keyboardShortcut(settings.keyEquivalent(for: .bold), modifiers: settings.eventModifiers(for: .bold))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .bold), modifiers: settings.eventModifiers(for: .bold)
+        )
         .disabled(viewModel == nil)
       Button("Italic") { viewModel?.toggleItalic() }
-        .keyboardShortcut(settings.keyEquivalent(for: .italic), modifiers: settings.eventModifiers(for: .italic))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .italic), modifiers: settings.eventModifiers(for: .italic)
+        )
         .disabled(viewModel == nil)
       Button("Underline") { viewModel?.toggleUnderline() }
-        .keyboardShortcut(settings.keyEquivalent(for: .underline), modifiers: settings.eventModifiers(for: .underline))
+        .keyboardShortcut(
+          settings.keyEquivalent(for: .underline),
+          modifiers: settings.eventModifiers(for: .underline)
+        )
         .disabled(viewModel == nil)
       Button("Strikethrough") { viewModel?.toggleStrikethrough() }
         .disabled(viewModel == nil)

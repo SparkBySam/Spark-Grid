@@ -1,3 +1,4 @@
+import SparkGridCore
 import SwiftUI
 
 struct SpreadsheetPrintSetupView: View {
@@ -252,7 +253,9 @@ struct SpreadsheetPrintSetupView: View {
     .background(Color(nsColor: .controlBackgroundColor))
   }
 
-  private func settingsField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+  private func settingsField<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
+    -> some View
+  {
     VStack(alignment: .leading, spacing: 8) {
       Text(title)
         .font(.subheadline.weight(.semibold))

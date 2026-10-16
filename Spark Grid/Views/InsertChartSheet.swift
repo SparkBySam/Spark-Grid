@@ -1,3 +1,4 @@
+import SparkGridCore
 import SwiftUI
 
 /// Insert Chart chooser: kind, category column, value mode / column, live preview.
@@ -278,7 +279,8 @@ struct InsertChartSheet: View {
 
   private var footerText: String {
     if let dataRange {
-      return "Range \(dataRange.a1Description). Pick a label column and either a numeric column or “Count of rows”."
+      return
+        "Range \(dataRange.a1Description). Pick a label column and either a numeric column or “Count of rows”."
     }
     if rangeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return "Select a range of cells before a chart is created."
@@ -477,8 +479,8 @@ enum ChartDataRangeParser {
     guard !trimmed.isEmpty, !trimmed.contains("!") else { return nil }
     let compact = trimmed.replacingOccurrences(of: " ", with: "")
     guard let (start, end) = A1Reference.parseFormulaRange(compact),
-          !start.isRowOpen, !start.isColOpen,
-          !end.isRowOpen, !end.isColOpen
+      !start.isRowOpen, !start.isColOpen,
+      !end.isRowOpen, !end.isColOpen
     else { return nil }
     let range = CellRange(start: start.address, end: end.address)
     guard !range.isSingleCell else { return nil }

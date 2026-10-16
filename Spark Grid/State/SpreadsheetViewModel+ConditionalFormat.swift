@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 extension SpreadsheetViewModel {
   /// Full conditional paint (format + data bars / icons).
@@ -66,7 +67,8 @@ extension SpreadsheetViewModel {
     var sheet = activeSheet
     let before = sheet.conditionalFormats
     sheet.conditionalFormats.append(rule)
-    applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Add Conditional Format")
+    applyConditionalFormats(
+      sheet.conditionalFormats, undoBefore: before, actionName: "Add Conditional Format")
   }
 
   func removeConditionalFormatRules(ids: Set<UUID>) {
@@ -76,7 +78,8 @@ extension SpreadsheetViewModel {
     let before = sheet.conditionalFormats
     sheet.conditionalFormats.removeAll { ids.contains($0.id) }
     guard sheet.conditionalFormats != before else { return }
-    applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Remove Conditional Format")
+    applyConditionalFormats(
+      sheet.conditionalFormats, undoBefore: before, actionName: "Remove Conditional Format")
   }
 
   func clearConditionalFormats(intersecting range: CellRange) {
@@ -87,7 +90,8 @@ extension SpreadsheetViewModel {
       rangesIntersect(rule.range, range)
     }
     guard sheet.conditionalFormats != before else { return }
-    applyConditionalFormats(sheet.conditionalFormats, undoBefore: before, actionName: "Clear Conditional Formats")
+    applyConditionalFormats(
+      sheet.conditionalFormats, undoBefore: before, actionName: "Clear Conditional Formats")
   }
 
   func replaceConditionalFormatRule(_ rule: ConditionalFormatRule) {
@@ -97,7 +101,9 @@ extension SpreadsheetViewModel {
     replaceConditionalFormats(rules, actionName: "Edit Conditional Format")
   }
 
-  func replaceConditionalFormats(_ rules: [ConditionalFormatRule], actionName: String = "Conditional Format") {
+  func replaceConditionalFormats(
+    _ rules: [ConditionalFormatRule], actionName: String = "Conditional Format"
+  ) {
     commitEditIfNeeded()
     let before = activeSheet.conditionalFormats
     guard before != rules else { return }
@@ -122,7 +128,8 @@ extension SpreadsheetViewModel {
   func pasteCopiedConditionalFormats(
     _ payload: SpreadsheetClipboard.ConditionalFormatClipboardPayload?,
     at origin: CellAddress,
-    actionName: String = "Paste"
+    actionName: String = "Paste",
+    recordUndo: Bool = true
   ) {
     guard let payload else { return }
     let sheet = activeSheet
@@ -141,23 +148,31 @@ extension SpreadsheetViewModel {
       changed = true
     }
     guard changed else { return }
-    applyConditionalFormats(next, undoBefore: sheet.conditionalFormats, actionName: actionName)
+    applyConditionalFormats(
+      next,
+      undoBefore: sheet.conditionalFormats,
+      actionName: actionName,
+      recordUndo: recordUndo
+    )
   }
 
   private func applyConditionalFormats(
     _ rules: [ConditionalFormatRule],
     undoBefore: [ConditionalFormatRule],
-    actionName: String
+    actionName: String,
+    recordUndo: Bool = true
   ) {
     var sheet = activeSheet
     sheet.conditionalFormats = rules
     setActiveSheetPreservingFormulas(sheet)
     conditionalFormatCache.removeAll(keepingCapacity: true)
     conditionalFormatCacheRevision = -1
-    undoManager?.registerUndo(withTarget: self) { target in
-      target.applyConditionalFormats(undoBefore, undoBefore: rules, actionName: actionName)
+    if recordUndo {
+      undoManager?.registerUndo(withTarget: self) { target in
+        target.applyConditionalFormats(undoBefore, undoBefore: rules, actionName: actionName)
+      }
+      undoManager?.setActionName(actionName)
     }
-    undoManager?.setActionName(actionName)
     notifyGridRefresh()
   }
 

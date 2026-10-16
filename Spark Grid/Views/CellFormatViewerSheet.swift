@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 
 struct CellFormatViewerSheet: View {
@@ -37,7 +38,8 @@ struct CellFormatViewerSheet: View {
       case .time:
         return "Hour, minute, and second."
       case .custom:
-        return "Type a format code. Sections are positive, negative, zero, and text. Put words in quotes."
+        return
+          "Type a format code. Sections are positive, negative, zero, and text. Put words in quotes."
       }
     }
 
@@ -131,7 +133,8 @@ struct CellFormatViewerSheet: View {
   private var storedFormatKey: String {
     let format = viewModel.selectedFormat
     let places = format.decimalPlaces.map { String($0) } ?? ""
-    return "\(viewModel.workbook.activeSheetIndex):\(viewModel.selection.a1):\(format.numberFormat.rawValue):\(format.formatCode ?? ""):\(places)"
+    return
+      "\(viewModel.workbook.activeSheetIndex):\(viewModel.selection.a1):\(format.numberFormat.rawValue):\(format.formatCode ?? ""):\(places)"
   }
 
   private var draftFormat: CellFormat {
@@ -346,21 +349,25 @@ struct CellFormatViewerSheet: View {
         .textFieldStyle(.roundedBorder)
         .font(.system(.body, design: .monospaced))
       if rule.predicate.editsValues {
-        TextField(rule.predicate.secondaryEditText == nil ? "Value" : "First value", text: $rulePrimary)
-          .textFieldStyle(.roundedBorder)
+        TextField(
+          rule.predicate.secondaryEditText == nil ? "Value" : "First value", text: $rulePrimary
+        )
+        .textFieldStyle(.roundedBorder)
         if rule.predicate.secondaryEditText != nil {
           TextField("Second value", text: $ruleSecondary)
             .textFieldStyle(.roundedBorder)
         }
       }
       if rule.predicate.usesFontStyle {
-        Toggle("Bold", isOn: Binding(
-          get: { ruleBold },
-          set: { newValue in
-            ruleBold = newValue
-            ruleBoldTouched = true
-          }
-        ))
+        Toggle(
+          "Bold",
+          isOn: Binding(
+            get: { ruleBold },
+            set: { newValue in
+              ruleBold = newValue
+              ruleBoldTouched = true
+            }
+          ))
       }
       if let ruleError {
         Text(ruleError)
@@ -388,8 +395,8 @@ struct CellFormatViewerSheet: View {
       Button("Close") { runPanel(.close) }
         .keyboardShortcut(.cancelAction)
       Button("Apply") { runPanel(.apply) }
-      .keyboardShortcut(.defaultAction)
-      .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        .buttonStyle(.borderedProminent)
     }
     .padding(16)
   }
@@ -399,7 +406,8 @@ struct CellFormatViewerSheet: View {
     if !force, key == loadedKey { return }
     loadedKey = key
     let format = viewModel.selectedFormat
-    if let code = format.formatCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+    if let code = format.formatCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty
+    {
       category = .custom
       codeText = code
     } else {
@@ -411,7 +419,9 @@ struct CellFormatViewerSheet: View {
   private func selectCategory(_ next: Category) {
     if next == .custom, codeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       let stored = viewModel.selectedFormat
-      if let code = stored.formatCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+      if let code = stored.formatCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !code.isEmpty
+      {
         codeText = code
       } else if stored.numberFormat != .general {
         let seeded = stored.viewerFormatCode
@@ -449,7 +459,10 @@ struct CellFormatViewerSheet: View {
   }
 
   private func updateRule(_ rule: ConditionalFormatRule) {
-    guard var edited = rule.edited(rangeText: ruleRangeText, primary: rulePrimary, secondary: ruleSecondary) else {
+    guard
+      var edited = rule.edited(
+        rangeText: ruleRangeText, primary: rulePrimary, secondary: ruleSecondary)
+    else {
       ruleError = "That range or value doesn’t match this rule."
       return
     }
@@ -605,7 +618,9 @@ enum CellFormatCodePaste {
   private static func fieldFromFirstResponder() -> CellFormatCodeTextField? {
     let responder = NSApp.keyWindow?.firstResponder
     if let field = responder as? CellFormatCodeTextField { return field }
-    if let textView = responder as? NSTextView, let field = textView.delegate as? CellFormatCodeTextField {
+    if let textView = responder as? NSTextView,
+      let field = textView.delegate as? CellFormatCodeTextField
+    {
       return field
     }
     return nil
@@ -726,10 +741,13 @@ final class CellFormatCodeTextField: NSTextField {
       }
       storage.endEditing()
       let caret = range.location + (pasted as NSString).length
-      editor.setSelectedRange(NSRange(location: min(caret, (editor.string as NSString).length), length: 0))
+      editor.setSelectedRange(
+        NSRange(location: min(caret, (editor.string as NSString).length), length: 0))
       editor.typingAttributes = typed
       editor.didChangeText()
-      if inserted.length > 0, let storage = editor.textStorage, NSMaxRange(inserted) <= storage.length {
+      if inserted.length > 0, let storage = editor.textStorage,
+        NSMaxRange(inserted) <= storage.length
+      {
         storage.beginEditing()
         storage.setAttributes(typed, range: inserted)
         storage.endEditing()
@@ -744,10 +762,12 @@ final class CellFormatCodeTextField: NSTextField {
   private func attributesMatchingTypedText(in editor: NSTextView) -> [NSAttributedString.Key: Any] {
     var attrs = editor.typingAttributes
     if attrs[.font] == nil {
-      attrs[.font] = editor.font ?? font ?? NSFont.monospacedSystemFont(
-        ofSize: NSFont.systemFontSize,
-        weight: .regular
-      )
+      attrs[.font] =
+        editor.font ?? font
+        ?? NSFont.monospacedSystemFont(
+          ofSize: NSFont.systemFontSize,
+          weight: .regular
+        )
     }
     if attrs[.foregroundColor] == nil {
       attrs[.foregroundColor] = textColor ?? NSColor.labelColor

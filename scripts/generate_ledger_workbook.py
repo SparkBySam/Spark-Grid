@@ -274,6 +274,42 @@ def chain_sheet() -> str:
     return worksheet_shell("\n".join(rows) + "\n")
 
 
+def category_sums() -> list[int]:
+    """SUMIFS totals for each category. Category and month are lockstep, so only one month is nonzero."""
+    totals = [0] * len(CATEGORIES)
+    for index in range(1, LEDGER_ROWS + 1):
+        totals[(index - 1) % len(CATEGORIES)] += amount_for(index)
+    return totals
+
+
+def write_answers(path: Path) -> None:
+    """Python-computed formula results. These are the ledger ground truth, not engine output."""
+    totals = category_sums()
+    lines = [
+        "# Python-computed formula results for the synthetic ledger.",
+        "# Not Spark Grid output. Tokens: n:<number> s:<text> b:TRUE e:#N/A blank",
+    ]
+    lines.append(f"Ledger!G2\tn:{totals[0]}")
+    for slot in range(LOOKUP_ROWS):
+        index = 1 + slot * (LEDGER_ROWS // LOOKUP_ROWS)
+        excel_row = slot + 2
+        amount = amount_for(index)
+        lines.append(f"VLOOKUP!B{excel_row}\tn:{amount}")
+        lines.append(f"IndexMatch!B{excel_row}\tn:{amount}")
+    for index in range(len(CATEGORIES)):
+        excel_row = index + 2
+        for month in range(1, 13):
+            column = chr(ord("A") + month)
+            value = totals[index] if month == index + 1 else 0
+            lines.append(f"Summary!{column}{excel_row}\tn:{value}")
+    lines.append(f"Summary!A20\tn:{CHAIN_ROWS}")
+    lines.append(f"Chain!B1\tn:{amount_for(1)}")
+    for excel_row in range(2, CHAIN_ROWS + 1):
+        lines.append(f"Chain!A{excel_row}\tn:{excel_row}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_workbook(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sheets = {
@@ -297,8 +333,15 @@ def write_workbook(path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--output", required=True, type=Path)
+    parser.add_argument(
+        "--answers",
+        type=Path,
+        help="Write Python-computed formula results. Do not point this at the repo.",
+    )
     args = parser.parse_args()
     write_workbook(args.output)
+    if args.answers is not None:
+        write_answers(args.answers)
     print(
         f"wrote {args.output} ledger_rows={LEDGER_ROWS} "
         f"lookups={LOOKUP_ROWS} chain={CHAIN_ROWS}"

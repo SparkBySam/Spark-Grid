@@ -1,4 +1,5 @@
 import Foundation
+import SparkGridCore
 
 /// Conditional-format rules carried with a cell copy.
 ///
@@ -73,13 +74,16 @@ enum ConditionalFormatPaste {
   static func sameAppearance(_ lhs: ConditionalFormatRule, _ rhs: ConditionalFormatRule) -> Bool {
     let a = lhs.range.normalized
     let b = rhs.range.normalized
-    return a.minRow == b.minRow && a.maxRow == b.maxRow && a.minCol == b.minCol && a.maxCol == b.maxCol
+    return a.minRow == b.minRow && a.maxRow == b.maxRow && a.minCol == b.minCol
+      && a.maxCol == b.maxCol
       && lhs.stopIfTrue == rhs.stopIfTrue
       && lhs.predicate == rhs.predicate
       && lhs.style == rhs.style
   }
 
-  private static func clip(_ rule: ConditionalFormatRule, to bounds: CellRange) -> ConditionalFormatRule? {
+  private static func clip(_ rule: ConditionalFormatRule, to bounds: CellRange)
+    -> ConditionalFormatRule?
+  {
     guard let clipped = intersection(rule.range, bounds) else { return nil }
     let from = topLeft(rule.range)
     let to = topLeft(clipped)
@@ -121,7 +125,9 @@ enum ConditionalFormatPaste {
     rowDelta: Int,
     colDelta: Int
   ) -> ConditionalFormatPredicate {
-    guard case .formula(let raw) = predicate, rowDelta != 0 || colDelta != 0 else { return predicate }
+    guard case .formula(let raw) = predicate, rowDelta != 0 || colDelta != 0 else {
+      return predicate
+    }
     return .formula(shiftFormula(raw, rowDelta: rowDelta, colDelta: colDelta))
   }
 

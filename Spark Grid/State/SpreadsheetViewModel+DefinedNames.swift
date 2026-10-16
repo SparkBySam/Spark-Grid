@@ -1,4 +1,5 @@
 import Foundation
+import SparkGridCore
 
 extension SpreadsheetViewModel {
   var definedNames: [NamedRange] {
@@ -42,7 +43,8 @@ extension SpreadsheetViewModel {
     }
     wb.setNamedRange(named)
     workbook = wb
-    registerDefinedNameUndo(before: before, after: workbook, action: original == nil ? "Add Name" : "Edit Name")
+    registerDefinedNameUndo(
+      before: before, after: workbook, action: original == nil ? "Add Name" : "Edit Name")
     if named.resolvesToRange {
       revealDefinedName(named)
     }
@@ -78,7 +80,7 @@ extension SpreadsheetViewModel {
   static func isAcceptableDefinedName(_ name: String) -> Bool {
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.first?.isLetter == true,
-          trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
+      trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" })
     else { return false }
     return A1Reference.parseAddress(trimmed) == nil
   }

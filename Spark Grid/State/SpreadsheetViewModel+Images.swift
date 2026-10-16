@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SparkGridCore
 
 extension SpreadsheetViewModel {
   func insertImageFromFile(url: URL) {
@@ -20,8 +21,8 @@ extension SpreadsheetViewModel {
       return true
     }
     if let tiff = pasteboard.data(forType: .tiff),
-       let rep = NSBitmapImageRep(data: tiff),
-       let png = rep.representation(using: .png, properties: [:])
+      let rep = NSBitmapImageRep(data: tiff),
+      let png = rep.representation(using: .png, properties: [:])
     {
       insertImage(data: png, contentType: "image/png")
       return true
@@ -95,7 +96,9 @@ extension SpreadsheetViewModel {
     reorderImage(id: id, toFront: false, recordUndo: true, actionName: "Send Picture to Back")
   }
 
-  private func reorderImage(id: UUID, toFront: Bool, recordUndo: Bool, actionName: String = "Reorder Picture") {
+  private func reorderImage(
+    id: UUID, toFront: Bool, recordUndo: Bool, actionName: String = "Reorder Picture"
+  ) {
     var sheet = activeSheet
     guard let index = sheet.images.firstIndex(where: { $0.id == id }) else { return }
     let before = sheet.images
@@ -134,7 +137,9 @@ extension SpreadsheetViewModel {
     sheet.images[index].rowOffsetEMU = max(0, rowOffsetEMU)
     sheet.images[index].colOffsetEMU = max(0, colOffsetEMU)
     if let widthEMU { sheet.images[index].widthEMU = max(SheetImage.emu(fromPoints: 12), widthEMU) }
-    if let heightEMU { sheet.images[index].heightEMU = max(SheetImage.emu(fromPoints: 12), heightEMU) }
+    if let heightEMU {
+      sheet.images[index].heightEMU = max(SheetImage.emu(fromPoints: 12), heightEMU)
+    }
     setActiveSheetPreservingFormulas(sheet)
     notifyGridRefresh()
   }

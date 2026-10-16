@@ -1,4 +1,5 @@
 import AppKit
+import SparkGridCore
 import SwiftUI
 
 /// Shared geometry for the strip above the grid so spacer and chrome stay in sync.
@@ -58,7 +59,8 @@ enum SpreadsheetChrome {
     formulaBarLineCount: Int = 1,
     showingFormulaArgumentHint: Bool = false
   ) -> CGFloat {
-    var height = toolbarHeight(showLabels: showLabels)
+    var height =
+      toolbarHeight(showLabels: showLabels)
       + dividerHeight
       + formulaBarHeight(lineCount: formulaBarLineCount)
       + dividerHeight
@@ -112,7 +114,8 @@ struct SpreadsheetWindowView: View {
 
   var body: some View {
     let showingFormulaError = viewModel.selectedFormulaErrorExplanation != nil
-    let formulaContentLines = SpreadsheetChrome.formulaBarContentLineCount(for: viewModel.formulaBarText)
+    let formulaContentLines = SpreadsheetChrome.formulaBarContentLineCount(
+      for: viewModel.formulaBarText)
     let formulaViewportLines = SpreadsheetChrome.formulaBarViewportLineCount(
       contentLines: formulaContentLines,
       expanded: isFormulaBarExpanded
@@ -164,9 +167,12 @@ struct SpreadsheetWindowView: View {
         isChartsPanelCollapsed = false
       }
     }
-    .sheet(isPresented: $viewModel.isInsertChartPresented, onDismiss: {
-      viewModel.editingChartID = nil
-    }) {
+    .sheet(
+      isPresented: $viewModel.isInsertChartPresented,
+      onDismiss: {
+        viewModel.editingChartID = nil
+      }
+    ) {
       InsertChartSheet(viewModel: viewModel)
     }
     .focusedValue(\.spreadsheetViewModel, viewModel)
