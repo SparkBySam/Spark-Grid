@@ -6,6 +6,12 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
+ci_app_dd="/tmp/spark-grid-ci-app"
+ci_ql_dd="/tmp/spark-grid-ci-ql"
+cleanup_ci_builds() {
+  rm -rf "$ci_app_dd" "$ci_ql_dd"
+}
+trap cleanup_ci_builds EXIT
 started="$(perl -MTime::HiRes=time -e 'printf "%.6f", time')"
 elapsed() {
   perl -MTime::HiRes=time -e 'printf "%.1f", time - $ARGV[0]' "$started"
