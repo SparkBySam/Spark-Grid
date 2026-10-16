@@ -18,7 +18,8 @@ enum PerformanceBenchmark {
     let root = env["SPARK_GRID_BENCHMARK_ROOT"] ?? FileManager.default.currentDirectoryPath
     let answersDirectory =
       env["SPARK_GRID_BENCHMARK_ANSWERS"]
-      ?? (root as NSString).appendingPathComponent("scripts/answers")
+      ?? FileManager.default.temporaryDirectory
+      .appendingPathComponent("spark-grid-benchmark-answers", isDirectory: true).path
     let logPath = env["SPARK_GRID_BENCHMARK_LOG"] ?? "/tmp/spark-grid-phase0-baseline.txt"
     var lines: [String] = []
     func emit(_ line: String) {
@@ -30,6 +31,8 @@ enum PerformanceBenchmark {
     }
 
     do {
+      try FileManager.default.createDirectory(
+        atPath: answersDirectory, withIntermediateDirectories: true)
       try verifyCachedFormulaRoundTrip(emit: emit)
       if env["SPARK_GRID_BENCHMARK_COMPARE_IMPORT"] == "1" {
         try compareImporters(env: env, root: root, emit: emit)
@@ -151,8 +154,17 @@ enum PerformanceBenchmark {
     let baselineURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("spark-grid-phase0-empty-\(label).xlsx")
     try store.save(to: baselineURL)
+    // Load a copy. An edit during the timing must not write the caller's file.
+    let openCopy = FileManager.default.temporaryDirectory
+      .appendingPathComponent("spark-grid-bench-open-\(label)-\(UUID().uuidString).xlsx")
+    try FileManager.default.copyItem(at: url, to: openCopy)
+    defer { try? FileManager.default.removeItem(at: openCopy) }
+    let autosaveDuringOpen = AppSettings.shared.autosaveEnabled
+    AppSettings.shared.autosaveEnabled = false
+    defer { AppSettings.shared.autosaveEnabled = autosaveDuringOpen }
     let openStarted = CFAbsoluteTimeGetCurrent()
-    try store.load(from: url)
+    try store.load(from: openCopy)
+    store.fileURL = nil
     drainMain()
     let viewModel = SpreadsheetViewModel(workbook: store.document.workbook)
     let grid = BenchmarkGrid(viewModel: viewModel, frame: viewportFrame(for: viewModel.activeSheet))
