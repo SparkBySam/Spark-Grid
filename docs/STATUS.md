@@ -8,7 +8,7 @@ Phase A is in progress. A formula cell inside a range is calculated before that 
 
 ## Next task
 
-Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. `TEXT` date and time codes are next.
+Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. `TEXT` date and time codes now go through `ExcelFormatCode`. Full recalculation has 2 mismatches left. The display paths still miss cross-sheet totals.
 
 ## Last gate result
 
@@ -34,42 +34,53 @@ Range reads now calculate formula cells in the range before the range is assembl
 | `sheetDisplayValue` after edits and cross-sheet catch-up | 896 | 1 |
 | Full recalculation | 367 | 1 |
 
-Full recalculation is unchanged at 367 plus the exempt cell. Paint order and the edit path dropped from 9,915. The shuffled path dropped from 32,833. The check still fails until every path is 0 mismatches except `YTD Summary!R5`.
+Full recalculation was unchanged at 367 plus the exempt cell. Paint order and the edit path dropped from 9,915. The shuffled path dropped from 32,833.
+
+`TEXT` now uses `ExcelFormatCode` for date, time, and number codes. Same day, Release, caches cleared, 48,191 formulas:
+
+| Path | Mismatches | Exempt |
+|---|---|---|
+| `sheetDisplayValue`, paint order | 531 | 1 |
+| `sheetDisplayValue`, shuffled, seed 1 | 1,753 | 1 |
+| `sheetDisplayValue` after edits and cross-sheet catch-up | 531 | 1 |
+| Full recalculation | 2 | 1 |
+
+The 365 `TEXT` formulas that were wrong on every path now match. The check still fails until every path is 0 mismatches except `YTD Summary!R5`.
 
 ## Latest Release numbers
 
-Date: 2026-10-16. Binary: Release build on `cursor/workflow-gates` after range reads calculate before the range is read. Machine: this Mac. Edit to pixels starts at `commitEdit` and stops when that display pass returns. The painted count is cells drawn in that pass.
+Date: 2026-10-16. Binary: Release build on `cursor/workflow-gates` after `TEXT` uses `ExcelFormatCode`. Machine: this Mac. Edit to pixels starts at `commitEdit` and stops when that display pass returns. The painted count is cells drawn in that pass. The benchmark loads a copy of the workbook.
 
 KPI reference file:
 
 | Path | Release |
 |---|---|
-| Import | 0.367 s |
-| Fingerprint | 3.904 s |
-| Export | 2.191 s |
+| Import | 0.369 s |
+| Fingerprint | 3.808 s |
+| Export | 2.226 s |
 | Autosave on the main thread | 0.000 s |
-| Open | 0.643 s |
+| Open | 0.669 s |
 | Unsaved-changes check | 0.000 s |
-| Slowest first screen | 0.057 s (May) |
-| June scroll, worst screen | 0.135 s (13 ticks) |
+| Slowest first screen | 0.056 s (May) |
+| June scroll, worst screen | 0.127 s (13 ticks) |
 | Tab switch | 0.000 s |
 | One edit commit | 0.003 s (YTD Summary!A1) |
 | Edit to pixels | 0.046 s, 1452 cells painted |
-| Resident memory | ~305 MB |
+| Resident memory | ~302 MB |
 
 Synthetic ledger:
 
 | Path | Release |
 |---|---|
-| Import | 0.560 s |
-| Fingerprint | 0.441 s |
-| Export | 0.846 s |
-| Open | 3.585 s |
-| Slowest first screen | 1.078 s (IndexMatch) |
-| Scroll, worst screen | 0.675 s (7 ticks) |
+| Import | 0.532 s |
+| Fingerprint | 0.423 s |
+| Export | 0.832 s |
+| Open | 3.783 s |
+| Slowest first screen | 1.124 s (IndexMatch) |
+| Scroll, worst screen | 0.684 s (7 ticks) |
 | Tab switch | 0.000 s |
-| One edit commit | 0.190 s (Ledger!C2) |
-| Edit to pixels | 3.284 s, 92 cells painted |
-| Resident memory | ~821 MB |
+| One edit commit | 0.142 s (Ledger!C2) |
+| Edit to pixels | 3.510 s, 92 cells painted |
+| Resident memory | ~1173 MB |
 
-Previous Release run, 2026-10-16, after the edit-to-pixels measurement and before range reads: KPI open 0.681 s, one edit commit 0.003 s, edit to pixels 0.046 s (1452 cells), June scroll worst 0.132 s (13 ticks), export 2.251 s. Ledger open 3.598 s, one edit commit 0.160 s, edit to pixels 3.281 s (92 cells), scroll worst 0.605 s (7 ticks), export 0.827 s. Older baseline (2026-10-11) is in `.cursor/rules/performance.mdc`. Use the table above when a commit needs before/after numbers, and replace it when a new Release run finishes.
+Previous Release run, 2026-10-16, after range reads and before `TEXT`: KPI open 0.643 s, one edit commit 0.003 s, edit to pixels 0.046 s (1452 cells), June scroll worst 0.135 s (13 ticks), export 2.191 s. Ledger open 3.585 s, one edit commit 0.190 s, edit to pixels 3.284 s (92 cells), scroll worst 0.675 s (7 ticks), export 0.846 s. Older baseline (2026-10-11) is in `.cursor/rules/performance.mdc`. Use the table above when a commit needs before/after numbers, and replace it when a new Release run finishes.

@@ -645,33 +645,15 @@ public nonisolated struct FormulaEvaluator {
     if case .error = value { return value }
     let formatValue = evaluate(args[1])
     if case .error = formatValue { return formatValue }
-    let pattern = formatValue.asString.uppercased()
-
+    let pattern = formatValue.asString
     if let number = value.asNumber {
-      if pattern.contains("Y") || pattern.contains("M") || pattern.contains("D") {
-        guard let date = ExcelDate.date(from: number) else { return .error(.value) }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        switch pattern {
-        case "YYYY-MM-DD", "YYYY/MM/DD":
-          formatter.dateFormat = "yyyy-MM-dd"
-        case "M/D/YYYY", "M/D/YY":
-          formatter.dateFormat = "M/d/yyyy"
-        case "MMMM D, YYYY":
-          formatter.dateFormat = "MMMM d, yyyy"
-        default:
-          formatter.dateFormat = "yyyy-MM-dd"
-        }
-        return .string(formatter.string(from: date))
-      }
-      if pattern == "0" { return .string(String(Int(number.rounded()))) }
-      if pattern == "0.0" { return .string(String(format: "%.1f", number)) }
-      if pattern == "0.00" { return .string(String(format: "%.2f", number)) }
-      if pattern == "0%" || pattern == "0.00%" {
-        return .string(String(format: "%.0f%%", number * 100))
+      if let rendered = ExcelFormatCode.formatted(number, code: pattern, fractionDigits: nil) {
+        return .string(rendered)
       }
       return .string(value.displayString)
+    }
+    if let rendered = ExcelFormatCode.formattedText(value.asString, code: pattern) {
+      return .string(rendered)
     }
     return .string(value.asString)
   }
