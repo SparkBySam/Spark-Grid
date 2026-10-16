@@ -51,7 +51,7 @@ Finder’s Space preview does not open Spark Grid for `.csv` or `.xlsx`. macOS u
 export SPARK_GRID_BUG_BASH=1
 export SPARK_GRID_FIXTURES="/path/to/fixtures"   # optional; copy samples here for the sandboxed app
 # formulas.xlsx, conditional_format.xlsx, enterprise_themed.xlsx, enterprise_images.xlsx
-# bdc_kpi_ytd_layout.xlsx, BDC-Digital-KPI-2026.xlsx (KPI open-path test)
+# The KPI workbook is SPARK_GRID_CORPUS. It is not in git.
 ```
 
 Missing fixtures are skipped.

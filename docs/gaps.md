@@ -4,8 +4,8 @@ Pick the top item that belongs to the current phase in `docs/STATUS.md`. Do not 
 
 ## This phase
 
-1. W8. Write `ATTRIBUTION.md` and clear `scripts/check-privacy.sh` without committing customer values. Remove tracked KPI-derived `scripts/answers/reference-answers.txt`. The privacy and asset scripts already exist and fail.
+Workflow gates W1–W8 are done. Correct answers is the next phase and is not started.
 
 ## Later, in order
 
-2. Correct answers, after the gates exist. Range reads must use calculated precedents. `TEXT` must follow the format code. Long formula chains must evaluate iteratively. The only known saved-result exception today is the malformed formula recorded in `corpus/known-differences.md`. Do not special-case that cell in the engine.
+1. Correct answers. Range reads must use calculated precedents. `TEXT` must follow the format code. Long formula chains must evaluate iteratively. The only known saved-result exception today is the malformed formula recorded in `corpus/known-differences.md`. Do not special-case that cell in the engine.

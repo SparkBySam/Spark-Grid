@@ -108,7 +108,7 @@ typealias Cell = SparkGridCore.Cell
       results.append(MainActor.assumeIsolated { textDisplayToolbarLabel() })
       results.append(MainActor.assumeIsolated { unsavedPromptOnce() })
       results.append(largeWorkbookOpenBaseline())
-      results.append(MainActor.assumeIsolated { bdcKpiYtdLayoutOpen() })
+      results.append(MainActor.assumeIsolated { wideFreezeMergeLayoutOpen() })
       results.append(MainActor.assumeIsolated { bdcKpiWorkbookOpenPath() })
       results.append(MainActor.assumeIsolated { largeSyntheticWorkbookColdViewportScroll() })
       results.append(MainActor.assumeIsolated { largeSheetScrollRegionBudgets() })
@@ -127,7 +127,6 @@ typealias Cell = SparkGridCore.Cell
       case conditionalFormat = "conditional_format"
       case enterpriseThemed = "enterprise_themed"
       case enterpriseImages = "enterprise_images"
-      case bdcKpiYtdLayout = "bdc_kpi_ytd_layout"
 
       var envKey: String {
         switch self {
@@ -135,7 +134,6 @@ typealias Cell = SparkGridCore.Cell
         case .conditionalFormat: return "SPARK_GRID_FIXTURE_CF"
         case .enterpriseThemed: return "SPARK_GRID_FIXTURE_ENTERPRISE"
         case .enterpriseImages: return "SPARK_GRID_FIXTURE_ENTERPRISE_IMAGES"
-        case .bdcKpiYtdLayout: return "SPARK_GRID_FIXTURE_BDC_YTD"
         }
       }
 
@@ -6894,10 +6892,10 @@ typealias Cell = SparkGridCore.Cell
         )
     }
 
-    /// Bundled sample under `web/samples/` (repo checkout).
+    /// Generated sample under `Fixtures/` (repo checkout).
     private static func bundledFixturePath(_ fileName: String) -> String? {
       let env = ProcessInfo.processInfo.environment
-      let relative = "web/samples/\(fileName)"
+      let relative = "Fixtures/\(fileName)"
       if let root = env["SPARK_GRID_REPO_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
         !root.isEmpty
       {
@@ -6908,7 +6906,7 @@ typealias Cell = SparkGridCore.Cell
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appendingPathComponent("web/samples/\(fileName)")
+        .appendingPathComponent("Fixtures/\(fileName)")
         .path
       if FileManager.default.fileExists(atPath: fromSource) { return fromSource }
       let cwd = (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(
@@ -6993,17 +6991,27 @@ typealias Cell = SparkGridCore.Cell
       }
     }
 
-    /// Minimal committed slice of BDC KPI YTD layout (frozen 3×4, wide merges, cross-sheet formula).
+    /// Freeze, a wide merge, and a cross-sheet formula. Built in the test so no customer workbook is committed.
     @MainActor
-    private static func bdcKpiYtdLayoutOpen() -> Result {
-      let name = "BDC KPI YTD layout open"
+    private static func wideFreezeMergeLayoutOpen() -> Result {
+      let name = "wide freeze and merge layout open"
+      let summary = Sheet(
+        name: "Summary",
+        cells: [CellAddress(row: 4, col: 0): Cell(raw: "=Data!A1")],
+        frozenRows: 4,
+        frozenColumns: 3,
+        mergedRanges: [
+          CellRange(start: .origin, end: CellAddress(row: 0, col: 24))
+        ]
+      )
+      let data = Sheet(name: "Data", cells: [.origin: Cell(raw: "1")])
+      let built = Workbook(sheets: [summary, data])
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "spark-grid-layout-\(UUID().uuidString).xlsx"
+      )
+      defer { try? FileManager.default.removeItem(at: url) }
       do {
-        let url = try sandboxReadableWorkbookURL(
-          cacheFileName: "bdc_kpi_ytd_layout.xlsx",
-          envKeys: [Fixture.bdcKpiYtdLayout.envKey],
-          fixturesFileName: "bdc_kpi_ytd_layout.xlsx",
-          bundleResourceName: "bdc_kpi_ytd_layout"
-        )
+        try XLSXCodec.exportWorkbook(built).write(to: url)
         let workbook = try XLSXCodec.importWorkbook(from: url)
         let sheet = workbook.activeSheet
         guard sheet.frozenRows == 4, sheet.frozenColumns == 3 else {

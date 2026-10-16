@@ -531,8 +531,8 @@ enum PerformanceBenchmark {
     if FileManager.default.fileExists(atPath: ledger) {
       files.append(ledger)
     }
-    let fixtures = (root as NSString).appendingPathComponent("Spark Grid/BugBashFixtures")
-    for name in ["bdc_kpi_ytd_layout.xlsx", "shared_formula_many_cells.xlsx"] {
+    let fixtures = (root as NSString).appendingPathComponent("Fixtures")
+    for name in ["shared_formula_many_cells.xlsx", "Q3-Enterprise-Pipeline.xlsx"] {
       let path = (fixtures as NSString).appendingPathComponent(name)
       if FileManager.default.fileExists(atPath: path) {
         files.append(path)

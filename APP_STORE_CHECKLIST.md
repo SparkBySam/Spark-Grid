@@ -116,7 +116,7 @@ Privacy: https://sparkgridapp.com/privacy
 ## 6. Review notes (optional but useful)
 
 - [ ] Note: offline spreadsheet; opens user-selected Excel/CSV only; no account/login
-- [ ] Point reviewers at sample: `web/samples/Q3-Enterprise-Pipeline.xlsx` if you attach or describe it
+- [ ] Point reviewers at sample: `Fixtures/Q3-Enterprise-Pipeline.xlsx` if you attach or describe it
 
 
 
@@ -155,6 +155,6 @@ Privacy: https://sparkgridapp.com/privacy
 | Support         | [https://sparkgridapp.com/support](https://sparkgridapp.com/support) |
 | Support email   | `help@sparkgridapp.com`                                              |
 | Marketing       | [https://sparkgridapp.com](https://sparkgridapp.com)                 |
-| Sample workbook | `web/samples/Q3-Enterprise-Pipeline.xlsx`                            |
+| Sample workbook | `Fixtures/Q3-Enterprise-Pipeline.xlsx`                               |
 
 
