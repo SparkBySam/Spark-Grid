@@ -95,6 +95,10 @@ The answer check compares saved formula results on four paths, after the importe
 
 The latest Release numbers are in `docs/STATUS.md`.
 
+## How long a fix may take
+
+Once the cause of a wrong answer is known, change the engine and run the one test that covers it. Do not parse the customer workbook formula by formula. Do not run the full answer check or a Release rebuild until that test passes. If a full check is still running after that one pass, kill it and report the count already in hand.
+
 ## Running and looking at the app
 
 Requirements: macOS 14 or later, Xcode 27 or later recommended. Marketing version and build number are in the Xcode project. The app bundle id is `com.sparkbysam.SparkGrid`. Quick Look is `com.sparkbysam.SparkGrid.QuickLook`.
