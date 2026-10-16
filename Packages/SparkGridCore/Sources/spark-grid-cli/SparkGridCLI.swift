@@ -141,16 +141,24 @@ enum SparkGridCommandLine {
     guard let workbook = loadWorkbook(at: path) else { return 1 }
     let fileName = URL(fileURLWithPath: path).lastPathComponent
     let exempt = exemptions(for: fileName)
-    let result = AnswerComparison.compareSavedResults(in: workbook, exempt: exempt)
-    print(
-      "checked \(result.checked) mismatches \(result.mismatches.count) exempt \(exempt.count)"
+    let paths = AnswerComparison.comparePaths(
+      in: workbook,
+      editSheetNames: ["June", "January"],
+      exempt: exempt
     )
-    if !result.mismatches.isEmpty {
-      let sample = result.mismatches.prefix(15).map(\.key).joined(separator: ", ")
-      print("mismatch cells \(sample)")
-      return 1
+    var failed = false
+    for path in paths {
+      let seedNote = path.name == "shuffled" ? " seed \(AnswerComparison.displayShuffleSeed)" : ""
+      print(
+        "\(path.name)\(seedNote) checked \(path.checked) mismatches \(path.mismatches.count) exempt \(exempt.count)"
+      )
+      if !path.mismatches.isEmpty {
+        let sample = path.mismatches.prefix(15).map(\.key).joined(separator: ", ")
+        print("\(path.name) mismatch cells \(sample)")
+        failed = true
+      }
     }
-    return 0
+    return failed ? 1 : 0
   }
 
   private static func bench(_ args: [String]) -> Int32 {

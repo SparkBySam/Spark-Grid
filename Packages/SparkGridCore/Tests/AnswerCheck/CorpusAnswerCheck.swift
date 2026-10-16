@@ -39,16 +39,28 @@ final class CorpusAnswerCheck: XCTestCase {
       }
       let workbook = try XLSXCodec.importWorkbook(from: data)
       let exempt = exemptions(in: differences, fileName: entry.name)
-      let result = AnswerComparison.compareSavedResults(in: workbook, exempt: exempt)
+      let editSheets = ["June", "January"]
+      let paths = AnswerComparison.comparePaths(
+        in: workbook, editSheetNames: editSheets, exempt: exempt)
       let exempted = exempt.count
-      print(
-        "corpus answer check: file \(entry.name) checked \(result.checked) mismatches \(result.mismatches.count) exempt \(exempted)"
-      )
-      if !result.mismatches.isEmpty {
-        let sample = result.mismatches.prefix(15).map(\.key).joined(separator: ", ")
-        XCTFail(
-          "corpus answer check: \(entry.name) checked \(result.checked) mismatches \(result.mismatches.count) exempt \(exempted). cells \(sample)"
+      var failures: [String] = []
+      for path in paths {
+        let seedNote = path.name == "shuffled" ? " seed \(AnswerComparison.displayShuffleSeed)" : ""
+        print(
+          "corpus answer check: file \(entry.name) \(path.name)\(seedNote) checked \(path.checked) mismatches \(path.mismatches.count) exempt \(exempted)"
         )
+        if !path.mismatches.isEmpty {
+          let sample = path.mismatches.prefix(15).map(\.key).joined(separator: ", ")
+          failures.append(
+            "\(path.name) checked \(path.checked) mismatches \(path.mismatches.count). cells \(sample)"
+          )
+        }
+      }
+      if let edits = paths.first(where: { $0.name == "edits" }), edits.editedSheets == 0 {
+        failures.append("edits did not run on \(editSheets.joined(separator: ", "))")
+      }
+      if !failures.isEmpty {
+        XCTFail("corpus answer check: \(entry.name) \(failures.joined(separator: " | "))")
       }
     }
   }

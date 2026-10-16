@@ -91,7 +91,7 @@ Launch the existing harness with `SPARK_GRID_BENCHMARK=1`. The reference file is
 
 `BugBashRunner` is a debug harness. Nothing the shipping app needs may live only there. `recalculateEntireWorkbook` is not an app path. Do not report it as a user-facing win.
 
-The answer check compares saved formula results, cleared and recalculated, and the ledger's Python results. The scalar evaluator comparing itself is not that check. The malformed KPI formula named in `corpus/known-differences.md` is a parse error. Do not special-case that cell in engine code.
+The answer check compares saved formula results on four paths, after the imported caches are cleared. Paint order and a fixed shuffle (seed 1) call `sheetDisplayValue`. A third path does that again after scripted edits and the cross-sheet catch-up. Full recalculation is the fourth path, and it is not the path the grid paints. The required result on every path is 0 mismatches except the cell named in `corpus/known-differences.md`. The ledger check compares Python results with full recalculation. The scalar evaluator comparing itself is not that check. Do not special-case the exempt cell in engine code.
 
 The latest Release numbers are in `docs/STATUS.md`.
 

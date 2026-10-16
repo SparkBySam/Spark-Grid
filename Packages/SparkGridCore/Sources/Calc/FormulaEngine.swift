@@ -96,7 +96,7 @@ public final class FormulaEngine {
   /// The formula source is not: that text belongs in the formula bar.
   /// A reference can also surface another cell's formula source when that
   /// precedent has not been calculated yet. The sheet calculates it.
-  /// `displayValue` is left as the answer-check path.
+  /// The answer check walks this function. `recalculateEntireWorkbook` does not.
   public func sheetDisplayValue(at address: CellAddress, sheet: Sheet, cell: Cell? = nil)
     -> CellValue
   {
@@ -118,7 +118,7 @@ public final class FormulaEngine {
       return .blank
     }
     // Labels and blanks stay put. Another cell's formula source (`=SUM(...)`)
-    // is calculated here; `displayValue` itself stays the answer-check path.
+    // is calculated here, on the same path the answer check walks.
     guard shown.hasPrefix("=") else { return value }
     guard precedentFormulasNeedIngest(at: address, sheet: sheet) else { return value }
     return valueAfterIngestingPrecedents(at: address, sheet: sheet, cell: resolved)
@@ -420,6 +420,34 @@ public final class FormulaEngine {
     valueCache = valuesBySheet[sheetKey(sheet.name)] ?? [:]
     // A later paint reads imported results for the cells on screen.
     finishCrossSheetIfNeeded(for: sheet)
+  }
+
+  /// Points cross-sheet reads at `workbook` without dropping calculated values.
+  /// Cell edits update the caller's workbook first; the engine keeps that copy.
+  public func adoptWorkbook(_ workbook: Workbook) {
+    self.workbook = workbook
+  }
+
+  /// Builds the dependency graph on the caller.
+  /// Open schedules the same build off the main thread.
+  public func prepareDependencyGraph() {
+    dependencyGraphToken &+= 1
+    dependencyGraph = WorkbookDependencyGraph.build(CrossSheetBackground.graphInput(for: workbook))
+  }
+
+  /// Runs a pending cross-sheet update on the caller and publishes it.
+  /// The edit path normally does this on a background queue. The answer check
+  /// waits here so the comparison sees those values.
+  public func finishPendingCrossSheet() {
+    guard let request = pendingCrossSheet, request.token == crossSheetToken else { return }
+    let outcome = CrossSheetBackground.compute(request)
+    applyCrossSheetOutcome(outcome)
+    crossSheetToken &+= 1
+    crossSheetPublishedToken = crossSheetToken
+    crossSheetHasResults = true
+    pendingCrossSheet = nil
+    crossSheetReadySheets.removeAll(keepingCapacity: true)
+    crossSheetSheetFinishToken.removeAll(keepingCapacity: true)
   }
 
   /// Update after one or more cells change on the active sheet.

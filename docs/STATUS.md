@@ -4,17 +4,26 @@ Updated: 2026-10-16. Commit this file in the same commit as the work it describe
 
 ## Phase
 
-Workflow gates, W8. Privacy and asset checks pass. `ATTRIBUTION.md` lists the app icon and the package licenses. Phase A (correct answers) is not started.
+Workflow gates, W8, are in. The answer check now walks four paths. Phase A (correct answers) is not started.
 
 ## Next task
 
-Correct answers. Range reads must use calculated precedents. Not started.
+Correct answers. Every answer-check path must reach 0 mismatches except `YTD Summary!R5`. Not started.
 
 ## Last gate result
 
-2026-10-16, after W8. `scripts/ci.sh` printed `PASS (215.3s)`. Lint, format, package, xcodebuild, layers, privacy-assets, ledger, and fuzz passed. KPI skipped because `SPARK_GRID_CORPUS` was unset. With the corpus set, the KPI check fails and stays failed: 48191 formulas, 367 mismatches, 1 exempt. Do not weaken that check. Ledger ground truth the same day: 1646 formulas, 0 mismatches. Fuzz smoke: seed 1, 20 steps, pass.
+2026-10-16, after W8. `scripts/ci.sh` printed `PASS (215.3s)`. Lint, format, package, xcodebuild, layers, privacy-assets, ledger, and fuzz passed. KPI skipped because `SPARK_GRID_CORPUS` was unset. Ledger ground truth the same day: 1646 formulas, 0 mismatches. Fuzz smoke: seed 1, 20 steps, pass.
 
-Answer check on 2026-10-16, saved results cleared and recalculated, KPI workbook: 48191 formulas, 367 mismatches, 1 exempt. Ledger ground truth the same day: 1646 formulas, 0 mismatches. The older scalar check on `2958120` was 48191 formulas and 11894 mismatches. That scalar check is not ground truth.
+The real KPI baseline is the display path, not full recalculation. On 2026-10-16, against the original saved results with caches cleared, 48,191 formulas:
+
+| Path | Mismatches | Exempt |
+|---|---|---|
+| `sheetDisplayValue`, paint order | 9,915 | 1 |
+| `sheetDisplayValue`, shuffled, seed 1 | 32,833 | 1 |
+| `sheetDisplayValue` after edits and cross-sheet catch-up | 9,915 | 1 |
+| Full recalculation | 367 | 1 |
+
+Paint order differs in 9,916 formulas. That count is the 9,915 mismatches plus the one exempt cell, `YTD Summary!R5`. Record 9,916 as the baseline. The check still fails until every path is 0 mismatches except that cell. Do not weaken it. An earlier unseeded random walk differed in 32,571; the gate uses seed 1. Full recalculation differed in 368, which is 367 plus the exempt cell. The scalar check on `2958120` was 11,894 mismatches and is not ground truth.
 
 ## Latest Release numbers
 
