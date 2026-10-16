@@ -50,6 +50,9 @@ public final class FormulaEngine {
   private var activeSheetName = "Sheet1"
   private var foreignCache: [ForeignKey: CellValue] = [:]
   private var foreignVisiting: Set<ForeignKey> = []
+  /// Range snapshots already being built. A nested read of the same range
+  /// uses per-cell lookup instead of starting another snapshot.
+  private var bulkRangeKeys: Set<AggregateRangeKey> = []
 
   private struct ForeignKey: Hashable {
     public var sheet: String
@@ -763,12 +766,13 @@ public final class FormulaEngine {
     CellValue.fromLiteralRaw(raw)
   }
 
-  /// Imported cache when a formula has one. Otherwise the same literal the
-  /// formula source used to become, so cells with no cache still calculate
-  /// the way they did.
+  /// Imported cache when a formula still has one. The formula source is not a value.
   private func unresolvedValue(_ cell: Cell) -> CellValue {
-    if FormulaSyntax.isFormula(cell.raw), let imported = cell.cachedFormulaValue {
-      return imported
+    if FormulaSyntax.isFormula(cell.raw) {
+      if let imported = cell.cachedFormulaValue, !Self.isFormulaText(imported) {
+        return imported
+      }
+      return .blank
     }
     return literalOrEmpty(cell.raw)
   }
@@ -787,23 +791,88 @@ public final class FormulaEngine {
     else {
       return []
     }
-    let recalculated = recalculatedSheetValues[sheetKey(sheet.name)]
-    var values: [CellValue] = []
     let rowSpan = InputBounds.span(from: key.minRow, through: key.maxRow)
     let colSpan = InputBounds.span(from: key.minCol, through: key.maxCol)
     guard let count = InputBounds.materializedCount(rows: rowSpan, cols: colSpan) else {
       return [.error(.value)]
     }
     guard count > 0 else { return [] }
+    if bulkRangeKeys.contains(key) {
+      return assembledRangeValues(sheet: sheet, key: key, count: count)
+    }
+    bulkRangeKeys.insert(key)
+    defer { bulkRangeKeys.remove(key) }
+    precalculateFormulas(in: key, sheet: sheet)
+    return assembledRangeValues(sheet: sheet, key: key, count: count)
+  }
+
+  /// Calculates formula cells in `key` before a range snapshot reads them.
+  private func precalculateFormulas(in key: AggregateRangeKey, sheet: Sheet) {
+    let onActiveSheet = sheet.name.caseInsensitiveCompare(activeSheetName) == .orderedSame
+    var pending: [CellAddress] = []
+    for (address, cell) in sheet.cells where key.contains(address: address) {
+      guard FormulaSyntax.isFormula(cell.raw) else { continue }
+      guard rangeCellNeedsCalculation(sheet: sheet, address: address, cell: cell) else { continue }
+      pending.append(address)
+    }
+    guard !pending.isEmpty else { return }
+    if onActiveSheet {
+      for address in pending {
+        let raw = sheet.cell(at: address).raw
+        ensureIngested(address: address, raw: raw, sheet: sheet)
+      }
+      let order = topologicalOrder(of: Set(pending))
+      for address in order {
+        let cell = sheet.cell(at: address)
+        guard rangeCellNeedsCalculation(sheet: sheet, address: address, cell: cell) else {
+          continue
+        }
+        _ = calculateWithPrecedents(at: address, sheet: sheet)
+      }
+      return
+    }
+    for address in pending.sorted() {
+      let cell = sheet.cell(at: address)
+      guard rangeCellNeedsCalculation(sheet: sheet, address: address, cell: cell) else {
+        continue
+      }
+      _ = resolveForeign(sheetName: sheet.name, address: address)
+    }
+  }
+
+  private func rangeCellNeedsCalculation(sheet: Sheet, address: CellAddress, cell: Cell) -> Bool {
+    guard FormulaSyntax.isFormula(cell.raw) else { return false }
+    if let stored = storedRecalculatedValue(sheetName: sheet.name, at: address),
+      !Self.isFormulaText(stored)
+    {
+      return false
+    }
+    if sheet.name.caseInsensitiveCompare(activeSheetName) == .orderedSame {
+      if let cached = valueCache[address], !Self.isFormulaText(cached) {
+        return false
+      }
+    } else if let cached = foreignCache[ForeignKey(sheet: sheet.name, address: address)],
+      !Self.isFormulaText(cached)
+    {
+      return false
+    }
+    if let imported = cell.cachedFormulaValue, !Self.isFormulaText(imported) {
+      return false
+    }
+    return true
+  }
+
+  private func assembledRangeValues(sheet: Sheet, key: AggregateRangeKey, count: Int) -> [CellValue]
+  {
+    var values: [CellValue] = []
     values.reserveCapacity(count)
+    let onActiveSheet = sheet.name.caseInsensitiveCompare(activeSheetName) == .orderedSame
     for row in key.minRow...key.maxRow {
       for col in key.minCol...key.maxCol {
         let address = CellAddress(row: row, col: col)
-        if let stored = recalculated?[address] {
-          values.append(stored)
-          continue
-        }
-        if let stored = storedRecalculatedValue(sheetName: sheet.name, at: address) {
+        if let stored = storedRecalculatedValue(sheetName: sheet.name, at: address),
+          !Self.isFormulaText(stored)
+        {
           values.append(stored)
           continue
         }
@@ -812,8 +881,22 @@ public final class FormulaEngine {
           values.append(literal)
           continue
         }
-        if let imported = cell.cachedFormulaValue {
+        if onActiveSheet, let cached = valueCache[address], !Self.isFormulaText(cached) {
+          values.append(cached)
+          continue
+        }
+        if let cached = foreignCache[ForeignKey(sheet: sheet.name, address: address)],
+          !Self.isFormulaText(cached)
+        {
+          values.append(cached)
+          continue
+        }
+        if let imported = cell.cachedFormulaValue, !Self.isFormulaText(imported) {
           values.append(imported)
+          continue
+        }
+        if FormulaSyntax.isFormula(cell.raw) {
+          values.append(.blank)
           continue
         }
         values.append(literalOrEmpty(cell.raw))
@@ -1314,8 +1397,14 @@ public final class FormulaEngine {
       for dep in deps {
         if formulaAST[dep] != nil {
           eval(dep)
-        } else if valueCache[dep] == nil {
-          valueCache[dep] = unresolvedValue(sheet.cell(at: dep))
+        } else if valueCache[dep] == nil || Self.isFormulaText(valueCache[dep] ?? .blank) {
+          let cell = sheet.cell(at: dep)
+          if FormulaSyntax.isFormula(cell.raw) {
+            ensureIngested(address: dep, raw: cell.raw, sheet: sheet)
+            eval(dep)
+          } else {
+            valueCache[dep] = literalOrEmpty(cell.raw)
+          }
         }
       }
     }
@@ -1450,9 +1539,17 @@ public final class FormulaEngine {
         visited.insert(address)
       }
 
+      if formulaAST[address] == nil {
+        let cell = sheet.cell(at: address)
+        if FormulaSyntax.isFormula(cell.raw) {
+          ensureIngested(address: address, raw: cell.raw, sheet: sheet)
+        }
+      }
       guard let expr = formulaAST[address] else {
-        if valueCache[address] == nil {
-          valueCache[address] = unresolvedValue(sheet.cell(at: address))
+        if valueCache[address] == nil || Self.isFormulaText(valueCache[address] ?? .blank) {
+          let cell = sheet.cell(at: address)
+          valueCache[address] =
+            FormulaSyntax.isFormula(cell.raw) ? CellValue.error(.error) : literalOrEmpty(cell.raw)
         }
         return
       }
@@ -1515,13 +1612,25 @@ public final class FormulaEngine {
       if let literal = literalOnSheet(at: address, sheet: activeSheet) {
         return literal
       }
-      if formulaAST[address] != nil {
+      let raw = activeSheet.cell(at: address).raw
+      if FormulaSyntax.isFormula(raw) {
+        if formulaAST[address] == nil {
+          ensureIngested(address: address, raw: raw, sheet: activeSheet)
+        }
+        if let cached = valueCache[address], !Self.isFormulaText(cached) {
+          return cached
+        }
+        valueCache.removeValue(forKey: address)
         localEval(address)
+        if let cached = valueCache[address], !Self.isFormulaText(cached) {
+          return cached
+        }
+        return .blank
       }
       if let cached = valueCache[address] {
         return cached
       }
-      let value = unresolvedValue(activeSheet.cell(at: address))
+      let value = literalOrEmpty(raw)
       valueCache[address] = value
       return value
     }
@@ -1587,10 +1696,14 @@ public final class FormulaEngine {
         let targetSheet = ref.sheet ?? sheet.name
         if targetSheet.caseInsensitiveCompare(self.activeSheetName) == .orderedSame {
           let addr = ref.address
-          if let cached = self.valueCache[addr] {
+          if let cached = self.valueCache[addr], !Self.isFormulaText(cached) {
             return cached
           }
-          return self.literalOrEmpty(self.workbook.activeSheet.cell(at: addr).raw)
+          let raw = self.workbook.activeSheet.cell(at: addr).raw
+          if FormulaSyntax.isFormula(raw) {
+            return self.calculateWithPrecedents(at: addr, sheet: self.workbook.activeSheet)
+          }
+          return self.literalOrEmpty(raw)
         }
         if targetSheet.caseInsensitiveCompare(sheet.name) == .orderedSame {
           return self.resolveForeign(sheetName: sheet.name, address: ref.address)

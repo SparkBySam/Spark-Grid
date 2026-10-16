@@ -240,6 +240,10 @@ private nonisolated final class EvaluationContext {
     } else if FormulaSyntax.isFormula(raw), let parsed = try? FormulaParser.parse(raw) {
       expressions[coord] = parsed
       expr = parsed
+    } else if FormulaSyntax.isFormula(raw) {
+      let value = CellValue.error(.error)
+      memo[coord] = value
+      return value
     } else {
       let unresolved = cell.cachedFormulaValue ?? CellValue.fromLiteralRaw(cell.raw)
       memo[coord] = unresolved
@@ -276,7 +280,13 @@ private nonisolated final class EvaluationContext {
     guard let sheet = sheetsByID[sheetID] else { return .blank }
     let cell = sheet.cell(at: CellAddress(row: row, col: col))
     if FormulaSyntax.isFormula(cell.raw) {
-      return cell.cachedFormulaValue ?? CellValue.fromLiteralRaw(cell.raw)
+      if let imported = cell.cachedFormulaValue {
+        if case .string(let text) = imported, FormulaSyntax.isFormula(text) {
+          return evaluateFormula(at: FormulaCoord(sheetID: sheetID, row: row, col: col))
+        }
+        return imported
+      }
+      return evaluateFormula(at: FormulaCoord(sheetID: sheetID, row: row, col: col))
     }
     return CellValue.fromLiteralRaw(cell.raw)
   }
